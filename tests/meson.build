@@ -76,3 +76,20 @@ test('nvmm_appsrc', test_appsrc, protocol : 'exitcode',
 test('gstcheck_elements', test_gstcheck, protocol : 'exitcode',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
+
+test_integration = executable('test_integration',
+  'test_integration.cpp',
+  include_directories : [
+    config_inc,
+    common_inc,
+    include_directories('../gst/nvmmalloc'),
+    include_directories('../gst/nvmmsink'),
+    include_directories('../gst/nvmmappsrc'),
+  ],
+  dependencies : [gstnvmmsink_dep, gstnvmmappsrc_dep, gst_dep, gst_video_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+test('integration', test_integration, protocol : 'exitcode',
+  is_parallel : false,
+  env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
