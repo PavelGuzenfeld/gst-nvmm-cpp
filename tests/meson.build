@@ -57,7 +57,22 @@ plugin_path = meson.current_build_dir() / '..' / 'gst' / 'nvmmsink' + ':' + \
               meson.current_build_dir() / '..' / 'gst' / 'nvmmappsrc' + ':' + \
               meson.current_build_dir() / '..' / 'gst' / 'nvmmalloc'
 
+test_gstcheck = executable('test_gstcheck_elements',
+  'test_gstcheck_elements.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [gst_dep, gst_video_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+plugin_path_with_convert = plugin_path + ':' + \
+    meson.current_build_dir() / '..' / 'gst' / 'nvmmconvert'
+
 test('nvmm_sink', test_sink, protocol : 'exitcode',
+  is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path])
 test('nvmm_appsrc', test_appsrc, protocol : 'exitcode',
+  is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path])
+test('gstcheck_elements', test_gstcheck, protocol : 'exitcode',
+  is_parallel : false,
+  env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
