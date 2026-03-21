@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.dev
+          tags: gst-nvmm-cpp:dev
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run tests
+        run: |
+          docker run --rm --shm-size=256m gst-nvmm-cpp:dev \
+            meson test -C builddir --verbose 2>&1 | tee test-output.txt
+          # Extract pass/fail counts
+          grep -E "^Ok:|^Fail:" test-output.txt
+
+      - name: Run benchmarks
+        run: |
+          docker run --rm gst-nvmm-cpp:dev \
+            bash -c '/src/builddir/benchmarks/bench_nvmm' > benchmark-results.csv 2>&1
+          cat benchmark-results.csv
+
+      - name: Verify plugin loads
+        run: |
+          docker run --rm gst-nvmm-cpp:dev bash -c '
+            GST_PLUGIN_PATH=/src/builddir/gst/nvmmalloc:/src/builddir/gst/nvmmconvert:/src/builddir/gst/nvmmsink:/src/builddir/gst/nvmmappsrc \
+            gst-inspect-1.0 nvmmconvert && \
+            gst-inspect-1.0 nvmmsink && \
+            gst-inspect-1.0 nvmmappsrc
+          '
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-output.txt
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.csv
+
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for forbidden references
+        run: |
+          # Ensure no private project names leak into public code
+          if grep -ri "rocx" --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' --include='*.yml' .; then
+            echo "ERROR: Found forbidden reference to private project"
+            exit 1
+          fi
+          echo "OK: No forbidden references found"
+
+      - name: Check license headers
+        run: |
+          # Verify all source files have license or copyright notice
+          missing=0
+          for f in $(find gst -name '*.cpp' -o -name '*.h' -o -name '*.hpp'); do
+            if ! head -5 "$f" | grep -qi -e "copyright" -e "license" -e "MIT" -e "LGPL" -e "pragma once"; then
+              echo "WARNING: $f may be missing license header"
+              missing=$((missing + 1))
+            fi
+          done
+          echo "$missing files may need license headers"

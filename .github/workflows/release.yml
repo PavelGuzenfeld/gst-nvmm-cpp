@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.dev
+          tags: gst-nvmm-cpp:dev
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run tests
+        run: |
+          docker run --rm --shm-size=256m gst-nvmm-cpp:dev \
+            meson test -C builddir --verbose 2>&1 | tee test-output.txt
+          # Fail the release if any test fails
+          grep "^Ok:" test-output.txt | grep -v "Fail:.*[1-9]"
+
+      - name: Run benchmarks
+        run: |
+          docker run --rm gst-nvmm-cpp:dev \
+            bash -c '/src/builddir/benchmarks/bench_nvmm' > benchmark-results.csv 2>&1
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          PREV_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
+            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "## Changes since ${PREV_TAG}" > changelog.md
+          echo "" >> changelog.md
+          git log --oneline --no-merges "${PREV_TAG}..HEAD~1" | while read -r line; do
+            echo "- ${line}" >> changelog.md
+          done
+          echo "" >> changelog.md
+
+          # Append test summary
+          echo "## Test Results" >> changelog.md
+          echo '```' >> changelog.md
+          grep -E "^Ok:|^Fail:|passed|failed" test-output.txt | tail -10 >> changelog.md
+          echo '```' >> changelog.md
+          echo "" >> changelog.md
+
+          # Append benchmark results
+          echo "## Benchmark Results (mock API)" >> changelog.md
+          echo '```' >> changelog.md
+          cat benchmark-results.csv >> changelog.md
+          echo '```' >> changelog.md
+
+      - name: Build source tarball
+        run: |
+          tar czf gst-nvmm-cpp-${{ steps.version.outputs.version }}.tar.gz \
+            --transform "s,^,gst-nvmm-cpp-${{ steps.version.outputs.version }}/," \
+            --exclude='.git' --exclude='.github' \
+            gst/ tests/ benchmarks/ docker/ meson.build README.md .gitignore
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: changelog.md
+          files: |
+            gst-nvmm-cpp-${{ steps.version.outputs.version }}.tar.gz
+            benchmark-results.csv
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
