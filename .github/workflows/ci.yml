@@ -81,7 +81,8 @@ jobs:
       - name: Check for forbidden references
         run: |
           # Ensure no private project names leak into public code
-          if grep -ri "rocx" --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' --include='*.yml' .; then
+          # Exclude this workflow file itself (contains the search term)
+          if grep -ri "rocx" --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' . --exclude-dir=.github; then
             echo "ERROR: Found forbidden reference to private project"
             exit 1
           fi
