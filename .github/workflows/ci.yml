@@ -47,12 +47,14 @@ jobs:
 
       - name: Verify plugin loads
         run: |
-          docker run --rm gst-nvmm-cpp:dev bash -c '
-            GST_PLUGIN_PATH=/src/builddir/gst/nvmmalloc:/src/builddir/gst/nvmmconvert:/src/builddir/gst/nvmmsink:/src/builddir/gst/nvmmappsrc \
-            gst-inspect-1.0 nvmmconvert && \
-            gst-inspect-1.0 nvmmsink && \
-            gst-inspect-1.0 nvmmappsrc
-          '
+          docker run --rm \
+            -e GST_PLUGIN_PATH=/src/builddir/gst/nvmmalloc:/src/builddir/gst/nvmmconvert:/src/builddir/gst/nvmmsink:/src/builddir/gst/nvmmappsrc \
+            -e LD_LIBRARY_PATH=/src/builddir/gst/nvmmalloc:/src/builddir/gst/nvmmsink:/src/builddir/gst/nvmmappsrc \
+            gst-nvmm-cpp:dev bash -c '
+              gst-inspect-1.0 nvmmconvert &&
+              gst-inspect-1.0 nvmmsink &&
+              gst-inspect-1.0 nvmmappsrc
+            '
 
       - name: Upload test results
         if: always()
