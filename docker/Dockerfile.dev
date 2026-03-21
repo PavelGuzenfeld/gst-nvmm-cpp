@@ -1,0 +1,53 @@
+# Development Dockerfile for building and testing gst-nvmm-cpp.
+# Supports two modes:
+#   1. Host (x86_64): builds with mock NvBufSurface API for unit testing
+#   2. Jetson (aarch64): builds with real NVIDIA Multimedia API
+#
+# Build:
+#   docker build -f docker/Dockerfile.dev -t gst-nvmm-cpp:dev .
+#
+# Run tests:
+#   docker run --rm gst-nvmm-cpp:dev meson test -C builddir
+#
+# Interactive:
+#   docker run --rm -it -v $(pwd):/src gst-nvmm-cpp:dev bash
+
+FROM ubuntu:22.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    pkg-config \
+    ninja-build \
+    python3 \
+    python3-pip \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-tools \
+    libglib2.0-dev \
+    cmake \
+    git \
+    && pip3 install meson \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy source
+COPY . /src/
+
+# Configure with mock API (host-side, no Jetson libs)
+RUN meson setup builddir \
+    -Dcpp_std=c++17 \
+    -Dbuildtype=debug \
+    -Dwerror=false
+
+# Build
+RUN ninja -C builddir
+
+# Default: run tests
+CMD ["meson", "test", "-C", "builddir", "--verbose"]

@@ -1,0 +1,39 @@
+# Dockerfile for Jetson JetPack 5 (L4T 35.x) — Xavier & Orin
+# Requires NVIDIA runtime: docker run --runtime nvidia ...
+#
+# Build on Jetson:
+#   docker build -f docker/Dockerfile.jetson-jp5 -t gst-nvmm-cpp:jp5 .
+
+FROM nvcr.io/nvidia/l4t-base:r35.4.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    pkg-config \
+    python3 \
+    python3-pip \
+    ninja-build \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-tools \
+    libglib2.0-dev \
+    cmake \
+    git \
+    && pip3 install meson \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src/
+
+# Configure — real NVMM libraries should be available via L4T
+RUN meson setup builddir \
+    -Dcpp_std=c++17 \
+    -Dbuildtype=debugoptimized
+
+RUN ninja -C builddir
+
+CMD ["meson", "test", "-C", "builddir", "--verbose"]

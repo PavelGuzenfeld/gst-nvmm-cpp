@@ -1,0 +1,46 @@
+/// GstNvmmAllocator — GStreamer allocator for NVMM (NvBufSurface) memory.
+/// C header for GObject type registration. Implementation is C++17.
+#pragma once
+
+#include <gst/gst.h>
+#include <gst/allocators/allocators.h>
+
+G_BEGIN_DECLS
+
+#define GST_TYPE_NVMM_ALLOCATOR (gst_nvmm_allocator_get_type())
+#define GST_NVMM_ALLOCATOR(obj) \
+    (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_NVMM_ALLOCATOR, GstNvmmAllocator))
+#define GST_IS_NVMM_ALLOCATOR(obj) \
+    (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_NVMM_ALLOCATOR))
+
+#define GST_NVMM_MEMORY_TYPE "nvmm"
+
+typedef struct _GstNvmmAllocator GstNvmmAllocator;
+typedef struct _GstNvmmAllocatorClass GstNvmmAllocatorClass;
+
+/// Opaque C++ impl pointer
+typedef struct _GstNvmmAllocatorPrivate GstNvmmAllocatorPrivate;
+
+struct _GstNvmmAllocator {
+    GstAllocator parent;
+    GstNvmmAllocatorPrivate* priv;
+};
+
+struct _GstNvmmAllocatorClass {
+    GstAllocatorClass parent_class;
+};
+
+GType gst_nvmm_allocator_get_type(void);
+
+/// Create a new NVMM allocator with the specified memory type.
+/// mem_type: 0=default, 4=surface_array (Jetson), 6=system (mock/test)
+GstAllocator* gst_nvmm_allocator_new(int mem_type);
+
+/// Check if a GstMemory was allocated by the NVMM allocator.
+gboolean gst_is_nvmm_memory(GstMemory* mem);
+
+/// Get the NvBufSurface* from a GstMemory allocated by GstNvmmAllocator.
+/// Returns NULL if the memory is not NVMM.
+void* gst_nvmm_memory_get_surface(GstMemory* mem);
+
+G_END_DECLS
