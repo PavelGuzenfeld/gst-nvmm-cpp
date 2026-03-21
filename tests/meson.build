@@ -40,7 +40,24 @@ test_sink = executable('test_nvmm_sink',
 test('nvmm_buffer', test_buffer, protocol : 'exitcode')
 test('nvmm_transform', test_transform, protocol : 'exitcode')
 test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
-plugin_path = meson.current_build_dir() / '..' / 'gst' / 'nvmmsink'
+test_appsrc = executable('test_nvmm_appsrc',
+  'test_nvmm_appsrc.cpp',
+  include_directories : [
+    config_inc,
+    common_inc,
+    include_directories('../gst/nvmmalloc'),
+    include_directories('../gst/nvmmsink'),
+    include_directories('../gst/nvmmappsrc'),
+  ],
+  dependencies : [gstnvmmsink_dep, gstnvmmappsrc_dep, gst_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+plugin_path = meson.current_build_dir() / '..' / 'gst' / 'nvmmsink' + ':' + \
+              meson.current_build_dir() / '..' / 'gst' / 'nvmmappsrc' + ':' + \
+              meson.current_build_dir() / '..' / 'gst' / 'nvmmalloc'
+
 test('nvmm_sink', test_sink, protocol : 'exitcode',
-  env : ['GST_PLUGIN_PATH=' + plugin_path + ':' +
-         meson.current_build_dir() / '..' / 'gst' / 'nvmmalloc'])
+  env : ['GST_PLUGIN_PATH=' + plugin_path])
+test('nvmm_appsrc', test_appsrc, protocol : 'exitcode',
+  env : ['GST_PLUGIN_PATH=' + plugin_path])
