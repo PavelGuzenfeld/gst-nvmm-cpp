@@ -283,19 +283,23 @@ Verified inter-process video sharing via POSIX shared memory:
 # Producer (background): write SMPTE frames to shm
 gst-launch-1.0 videotestsrc num-buffers=50 pattern=smpte ! \
   'video/x-raw,width=640,height=480,format=I420,framerate=10/1' ! \
-  nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
   nvmmsink shm-name=/ipc_test sync=true &
 
 # Consumer: read from shm, save JPEG
 gst-launch-1.0 -e nvmmappsrc shm-name=/ipc_test is-live=true ! \
-  nvvidconv ! 'video/x-raw,format=I420' ! \
-  nvjpegenc ! filesink location=ipc_consumer.jpg
+  videoconvert ! jpegenc ! filesink location=ipc_480p.jpg
 ```
+
+IPC consumer output at 480p and 1080p (H264 decode → NVMM → CPU → shm → consumer):
+
+![IPC 480p](test_output/ipc_480p.jpg)
+![IPC 1080p](test_output/ipc_1080p.jpg)
 
 Also verified the SHM protocol with a standalone C consumer (ROS2-style):
 - Header fields (magic, resolution, format, frame number, timestamp) read correctly
 - Pixel data integrity verified via write/read roundtrip
-- See `test_output/shm_consumer_frame.jpg` -- gradient pattern written and read back via shm
+
+![SHM consumer gradient](test_output/shm_consumer_frame.jpg)
 
 ### Known Limitations
 
@@ -311,14 +315,18 @@ and format conversion operations pass on real hardware via the unit tests.
 
 ### Test Outputs
 
-Sample outputs in `test_output/`:
-- `smpte_1080p.jpg` -- 1920x1080 SMPTE color bars (133 KB)
-- `gpu2cpu_1080p.jpg` -- 1920x1080 decoded via NVMM, written to CPU (134 KB)
-- `4k_roundtrip.jpg` -- 3840x2160 CPU->NVMM->CPU roundtrip (491 KB)
-- `4k_to_fhd.jpg` -- 3840x2160 scaled to 1920x1080 via NVMM (34 KB)
-- `decoded_frame.jpg` -- 640x480 H264 decoded via NVMM (254 KB)
-- `ipc_consumer.jpg` -- 640x480 read by nvmmappsrc from nvmmsink shm (2.4 MB)
-- `shm_consumer_frame.jpg` -- 320x240 gradient from standalone C shm reader (6 KB)
+All images generated on Jetson Xavier NX with real NVMM hardware:
+
+| Image | Description |
+|-------|-------------|
+| ![smpte](test_output/smpte_1080p.jpg) | **smpte_1080p.jpg** -- 1920x1080 SMPTE test pattern |
+| ![gpu2cpu](test_output/gpu2cpu_1080p.jpg) | **gpu2cpu_1080p.jpg** -- 1080p GPU->CPU transfer |
+| ![4k](test_output/4k_roundtrip.jpg) | **4k_roundtrip.jpg** -- 3840x2160 CPU->NVMM->CPU |
+| ![4k_fhd](test_output/4k_to_fhd.jpg) | **4k_to_fhd.jpg** -- 4K scaled to 1080p via NVMM |
+| ![decoded](test_output/decoded_frame.jpg) | **decoded_frame.jpg** -- 640x480 H264 decoded via NVMM |
+| ![ipc480](test_output/ipc_480p.jpg) | **ipc_480p.jpg** -- IPC consumer via nvmmsink->shm->nvmmappsrc |
+| ![ipc1080](test_output/ipc_1080p.jpg) | **ipc_1080p.jpg** -- IPC consumer 1080p (decode->NVMM->CPU->shm) |
+| ![shm](test_output/shm_consumer_frame.jpg) | **shm_consumer_frame.jpg** -- Standalone C shm reader (ROS2-style) |
 
 ### Setup for Reproducing on Jetson
 
