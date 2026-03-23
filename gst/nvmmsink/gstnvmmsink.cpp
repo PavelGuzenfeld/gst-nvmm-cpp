@@ -240,28 +240,45 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
         }
     }
 
-    /* Map buffer and copy frame data to shared memory */
-    if (gst_buffer_map(buffer, &map_info, GST_MAP_READ)) {
-        gsize copy_size = map_info.size;
-        gsize available = self->priv->shm_size - sizeof(ShmHeader);
-
-        if (copy_size > available)
-            copy_size = available;
-
-        header->data_size = static_cast<uint32_t>(copy_size);
-        header->num_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
-
-        for (guint i = 0; i < header->num_planes && i < 4; i++) {
-            header->pitches[i] = GST_VIDEO_INFO_PLANE_STRIDE(&self->priv->video_info, i);
-            header->offsets[i] = GST_VIDEO_INFO_PLANE_OFFSET(&self->priv->video_info, i);
-        }
-
-        memcpy(frame_data, map_info.data, copy_size);
-        gst_buffer_unmap(buffer, &map_info);
-    } else {
-        GST_WARNING_OBJECT(self, "Failed to map buffer");
-        header->data_size = 0;
+    header->num_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
+    for (guint i = 0; i < header->num_planes && i < 4; i++) {
+        header->pitches[i] = GST_VIDEO_INFO_PLANE_STRIDE(&self->priv->video_info, i);
+        header->offsets[i] = GST_VIDEO_INFO_PLANE_OFFSET(&self->priv->video_info, i);
     }
+
+    /* Copy frame data to shared memory.
+       Try per-plane NVMM map first, fall back to gst_buffer_map for CPU buffers. */
+    gsize available = self->priv->shm_size - sizeof(ShmHeader);
+    gsize total_copied = 0;
+
+    if (gst_is_nvmm_memory(mem)) {
+        /* NVMM: map each plane individually (planes aren't contiguous) */
+        for (guint p = 0; p < header->num_planes && p < 4; p++) {
+            guint8 *plane_data = nullptr;
+            gsize plane_size = 0;
+            if (gst_nvmm_memory_map_plane(mem, p, GST_MAP_READ,
+                                           &plane_data, &plane_size)) {
+                gsize copy_size = plane_size;
+                if (total_copied + copy_size > available)
+                    copy_size = available - total_copied;
+                memcpy(frame_data + total_copied, plane_data, copy_size);
+                total_copied += copy_size;
+            }
+        }
+        gst_nvmm_memory_unmap_plane(mem);
+    } else {
+        /* CPU memory: standard flat map */
+        if (gst_buffer_map(buffer, &map_info, GST_MAP_READ)) {
+            gsize copy_size = map_info.size;
+            if (copy_size > available) copy_size = available;
+            memcpy(frame_data, map_info.data, copy_size);
+            total_copied = copy_size;
+            gst_buffer_unmap(buffer, &map_info);
+        } else {
+            GST_WARNING_OBJECT(self, "Failed to map buffer");
+        }
+    }
+    header->data_size = static_cast<uint32_t>(total_copied);
 
     /* Signal frame is ready */
     __sync_synchronize();

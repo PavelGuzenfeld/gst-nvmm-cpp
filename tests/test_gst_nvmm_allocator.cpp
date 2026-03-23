@@ -49,41 +49,58 @@ static void test_allocator_alloc_free() {
     PASS();
 }
 
-static void test_allocator_map_unmap() {
+static void test_direct_map_rejected() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
-    GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 4, NULL);
+    GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 3 / 2, NULL);
     ASSERT_NOT_NULL(mem);
 
+    /* Direct gst_memory_map should fail — NVMM is not directly mappable */
     GstMapInfo map_info;
     gboolean ok = gst_memory_map(mem, &map_info, GST_MAP_READ);
-    ASSERT_TRUE(ok);
-    ASSERT_NOT_NULL(map_info.data);
-    ASSERT_TRUE(map_info.size > 0);
+    ASSERT_TRUE(!ok);
 
-    gst_memory_unmap(mem, &map_info);
     gst_memory_unref(mem);
     gst_object_unref(alloc);
     PASS();
 }
 
-static void test_allocator_write_read_round_trip() {
+static void test_per_plane_map() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 3 / 2, NULL);
+    ASSERT_NOT_NULL(mem);
+
+    /* Per-plane map should work */
+    guint8* data = NULL;
+    gsize size = 0;
+    gboolean ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_READ, &data, &size);
+    ASSERT_TRUE(ok);
+    ASSERT_NOT_NULL(data);
+    ASSERT_TRUE(size > 0);
+
+    gst_nvmm_memory_unmap_plane(mem);
+    gst_memory_unref(mem);
+    gst_object_unref(alloc);
+    PASS();
+}
+
+static void test_per_plane_write_read_roundtrip() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     GstMemory* mem = gst_allocator_alloc(alloc, 64 * 64 * 4, NULL);
     ASSERT_NOT_NULL(mem);
 
-    // Write
-    GstMapInfo write_info;
-    gboolean ok = gst_memory_map(mem, &write_info, GST_MAP_WRITE);
+    /* Write pattern via per-plane map */
+    guint8* data = NULL;
+    gsize size = 0;
+    gboolean ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_WRITE, &data, &size);
     ASSERT_TRUE(ok);
-    memset(write_info.data, 0xCD, write_info.size);
-    gst_memory_unmap(mem, &write_info);
+    memset(data, 0xCD, size);
+    gst_nvmm_memory_unmap_plane(mem);
 
-    // Read back
-    GstMapInfo read_info;
-    ok = gst_memory_map(mem, &read_info, GST_MAP_READ);
+    /* Read back and verify */
+    ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_READ, &data, &size);
     ASSERT_TRUE(ok);
-    ASSERT_TRUE(((uint8_t*)read_info.data)[0] == 0xCD);
-    gst_memory_unmap(mem, &read_info);
+    ASSERT_TRUE(data[0] == 0xCD);
+    gst_nvmm_memory_unmap_plane(mem);
 
     gst_memory_unref(mem);
     gst_object_unref(alloc);
@@ -95,6 +112,11 @@ static void test_non_nvmm_memory_rejected() {
     GstMemory* mem = gst_allocator_alloc(sys_alloc, 1024, NULL);
     ASSERT_TRUE(!gst_is_nvmm_memory(mem));
     ASSERT_TRUE(gst_nvmm_memory_get_surface(mem) == NULL);
+
+    guint8* data = NULL;
+    gsize size = 0;
+    ASSERT_TRUE(!gst_nvmm_memory_map_plane(mem, 0, GST_MAP_READ, &data, &size));
+
     gst_memory_unref(mem);
     PASS();
 }
@@ -105,8 +127,9 @@ int main(int argc, char* argv[]) {
 
     RUN_TEST(allocator_creates);
     RUN_TEST(allocator_alloc_free);
-    RUN_TEST(allocator_map_unmap);
-    RUN_TEST(allocator_write_read_round_trip);
+    RUN_TEST(direct_map_rejected);
+    RUN_TEST(per_plane_map);
+    RUN_TEST(per_plane_write_read_roundtrip);
     RUN_TEST(non_nvmm_memory_rejected);
 
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

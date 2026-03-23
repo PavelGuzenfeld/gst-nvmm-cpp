@@ -36,7 +36,7 @@ static GstMemory* gst_nvmm_allocator_alloc(GstAllocator* allocator,
     if (size > 0) {
         /* Heuristic: assume NV12 (1.5 bytes/pixel) */
         uint64_t pixels = (size * 2) / 3;
-        /* Find reasonable 16:9 dimensions */
+        /* Find reasonable dimensions */
         width = 1;
         height = 1;
         for (uint32_t w = 320; w <= 3840; w += 2) {
@@ -66,7 +66,13 @@ static GstMemory* gst_nvmm_allocator_alloc(GstAllocator* allocator,
     auto* mem = new GstNvmmMemory{};
     auto actual_size = static_cast<gsize>((*result).data_size());
 
-    gst_memory_init(GST_MEMORY_CAST(mem), GST_MEMORY_FLAG_NO_SHARE,
+    /* NVMM memory is NOT directly mappable via gst_memory_map() because
+       planes are not contiguous on Jetson SURFACE_ARRAY. Use
+       gst_nvmm_memory_map_plane() for CPU access, or access the
+       NvBufSurface directly via gst_nvmm_memory_get_surface(). */
+    gst_memory_init(GST_MEMORY_CAST(mem),
+                    static_cast<GstMemoryFlags>(
+                        GST_MEMORY_FLAG_NO_SHARE | GST_MEMORY_FLAG_NOT_MAPPABLE),
                     allocator, nullptr, actual_size, 0, 0, actual_size);
 
     mem->buffer = std::make_unique<nvmm::NvmmBuffer>(std::move(*result));
@@ -82,27 +88,18 @@ static void gst_nvmm_allocator_free(GstAllocator* allocator, GstMemory* memory) 
 
 static gpointer gst_nvmm_allocator_mem_map(GstMemory* memory, gsize maxsize,
                                              GstMapFlags flags) {
+    (void)memory;
     (void)maxsize;
-    auto* mem = reinterpret_cast<GstNvmmMemory*>(memory);
-    if (!mem->buffer) return nullptr;
-
-    nvmm::Result<nvmm::ByteSpan> result =
-        (flags & GST_MAP_WRITE)
-            ? mem->buffer->map_write(0)
-            : mem->buffer->map_read(0);
-
-    if (!result) {
-        GST_ERROR("NVMM map failed: %s", result.error().detail.c_str());
-        return nullptr;
-    }
-    return result.value().data();
+    (void)flags;
+    /* NVMM memory should not be mapped via GstMemory. Use
+       gst_nvmm_memory_map_plane() or gst_nvmm_memory_get_surface(). */
+    GST_WARNING("Direct map of NVMM memory not supported. "
+                "Use gst_nvmm_memory_map_plane() for per-plane CPU access.");
+    return nullptr;
 }
 
 static void gst_nvmm_allocator_mem_unmap(GstMemory* memory) {
-    auto* mem = reinterpret_cast<GstNvmmMemory*>(memory);
-    if (mem->buffer) {
-        mem->buffer->unmap();
-    }
+    (void)memory;
 }
 
 static void gst_nvmm_allocator_class_init(GstNvmmAllocatorClass* klass) {
@@ -141,4 +138,38 @@ void* gst_nvmm_memory_get_surface(GstMemory* mem) {
     if (!gst_is_nvmm_memory(mem)) return nullptr;
     auto* nvmm_mem = reinterpret_cast<GstNvmmMemory*>(mem);
     return nvmm_mem->buffer ? nvmm_mem->buffer->raw() : nullptr;
+}
+
+gboolean gst_nvmm_memory_map_plane(GstMemory* mem, guint plane,
+                                    GstMapFlags flags,
+                                    guint8** data, gsize* size) {
+    if (!gst_is_nvmm_memory(mem) || !data || !size) return FALSE;
+
+    auto* nvmm_mem = reinterpret_cast<GstNvmmMemory*>(mem);
+    if (!nvmm_mem->buffer) return FALSE;
+
+    nvmm::Result<nvmm::ByteSpan> result =
+        (flags & GST_MAP_WRITE)
+            ? nvmm_mem->buffer->map_write(plane)
+            : nvmm_mem->buffer->map_read(plane);
+
+    if (!result) {
+        GST_ERROR("NVMM plane %u map failed: %s", plane,
+                  result.error().detail.c_str());
+        *data = nullptr;
+        *size = 0;
+        return FALSE;
+    }
+
+    *data = result.value().data();
+    *size = result.value().size();
+    return TRUE;
+}
+
+void gst_nvmm_memory_unmap_plane(GstMemory* mem) {
+    if (!gst_is_nvmm_memory(mem)) return;
+    auto* nvmm_mem = reinterpret_cast<GstNvmmMemory*>(mem);
+    if (nvmm_mem->buffer) {
+        nvmm_mem->buffer->unmap();
+    }
 }
