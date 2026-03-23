@@ -181,20 +181,16 @@ Ok: 7   Fail: 0
 
 ### Benchmark Results (Xavier NX)
 
-```
-benchmark,iterations,total_us,avg_us,min_us,max_us
-alloc_free (NV12 1080p),1000,696675,696.68,134.88,3005.51
-alloc_free (RGBA 1080p),1000,1825268,1825.27,586.69,3845.29
-map_unmap (NV12 1080p),1000,252155,252.16,226.11,2185.00
-map_unmap (NV12 480p),1000,106209,106.21,93.25,529.44
-transform_scale (1080p->480p),1000,21392,21.39,18.40,1144.64
-transform_scale (1080p->720p),1000,20707,20.71,18.59,70.21
-```
+| Operation | Resolution | Avg (us) | Min (us) | Max (us) |
+|-----------|-----------|----------|----------|----------|
+| alloc/free | NV12 1080p | 697 | 135 | 3006 |
+| alloc/free | RGBA 1080p | 1825 | 587 | 3845 |
+| map/unmap | NV12 1080p | 252 | 226 | 2185 |
+| map/unmap | NV12 480p | 106 | 93 | 529 |
+| VIC transform | 1080p -> 480p | **21** | 18 | 1145 |
+| VIC transform | 1080p -> 720p | **21** | 19 | 70 |
 
-Key findings:
-- **VIC transform: ~21 us/frame** (1080p -> 480p scale) = ~47,000 FPS throughput
-- **NvBufSurface alloc: ~700 us** (NV12 1080p)
-- **CPU map/unmap: ~250 us** (NV12 1080p, includes cache sync)
+1000 iterations each. VIC transform at ~21 us/frame = ~47,000 FPS throughput.
 
 ### VIC Hardware Accelerator Verification
 
@@ -274,12 +270,50 @@ gst-launch-1.0 videotestsrc num-buffers=1 pattern=ball ! \
   nvjpegenc ! filesink location=4k_to_fhd.jpg
 ```
 
+### IPC Verification (nvmmsink -> nvmmappsrc)
+
+Verified inter-process video sharing via POSIX shared memory:
+
+```bash
+# Producer (background): write SMPTE frames to shm
+gst-launch-1.0 videotestsrc num-buffers=50 pattern=smpte ! \
+  'video/x-raw,width=640,height=480,format=I420,framerate=10/1' ! \
+  nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+  nvmmsink shm-name=/ipc_test sync=true &
+
+# Consumer: read from shm, save JPEG
+gst-launch-1.0 -e nvmmappsrc shm-name=/ipc_test is-live=true ! \
+  nvvidconv ! 'video/x-raw,format=I420' ! \
+  nvjpegenc ! filesink location=ipc_consumer.jpg
+```
+
+Also verified the SHM protocol with a standalone C consumer (ROS2-style):
+- Header fields (magic, resolution, format, frame number, timestamp) read correctly
+- Pixel data integrity verified via write/read roundtrip
+- See `test_output/shm_consumer_frame.jpg` -- gradient pattern written and read back via shm
+
+### Known Limitations
+
+**nvmmconvert caps negotiation:** The current `transform_caps` implementation
+is too simple for automatic pipeline linking in GStreamer. It returns the full
+range of supported caps regardless of input, which prevents downstream elements
+from negotiating properly. The VIC transform itself works (verified by unit
+tests), but wiring nvmmconvert into a pipeline with `gst-launch-1.0` requires
+explicit caps on both sides. This will be fixed before the upstream MR.
+
+The NvmmTransform API works correctly at the C++ level -- all crop, scale, flip,
+and format conversion operations pass on real hardware via the unit tests.
+
+### Test Outputs
+
 Sample outputs in `test_output/`:
 - `smpte_1080p.jpg` -- 1920x1080 SMPTE color bars (133 KB)
 - `gpu2cpu_1080p.jpg` -- 1920x1080 decoded via NVMM, written to CPU (134 KB)
 - `4k_roundtrip.jpg` -- 3840x2160 CPU->NVMM->CPU roundtrip (491 KB)
 - `4k_to_fhd.jpg` -- 3840x2160 scaled to 1920x1080 via NVMM (34 KB)
 - `decoded_frame.jpg` -- 640x480 H264 decoded via NVMM (254 KB)
+- `ipc_consumer.jpg` -- 640x480 read by nvmmappsrc from nvmmsink shm (2.4 MB)
+- `shm_consumer_frame.jpg` -- 320x240 gradient from standalone C shm reader (6 KB)
 
 ### Setup for Reproducing on Jetson
 
