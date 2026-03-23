@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <system_error>
-#include <variant>
+#include <type_traits>
+#include <utility>
 
 namespace nvmm {
 
@@ -25,11 +25,11 @@ enum class ErrorCode : int {
 /// Human-readable error category
 class NvmmErrorCategory : public std::error_category {
 public:
-    [[nodiscard]] const char* name() const noexcept override {
+    const char* name() const noexcept override {
         return "nvmm";
     }
 
-    [[nodiscard]] std::string message(int ev) const override {
+    std::string message(int ev) const override {
         switch (static_cast<ErrorCode>(ev)) {
             case ErrorCode::kSuccess:             return "success";
             case ErrorCode::kInvalidParam:        return "invalid parameter";
@@ -60,68 +60,101 @@ struct NvmmError {
     ErrorCode code;
     std::string detail;
 
+    NvmmError() : code(ErrorCode::kSuccess) {}
     NvmmError(ErrorCode c, std::string d = {})
         : code(c), detail(std::move(d)) {}
 };
 
-/// C++17 Result type using std::variant (value | error).
-/// Inspired by std::expected (C++23) but compatible with C++17.
+/// C++14 Result type using aligned storage (value | error).
+/// Supports move-only types without requiring default construction.
 template <typename T>
 class Result {
 public:
-    Result(T value) : data_(std::move(value)) {}  // NOLINT: implicit
-    Result(NvmmError error) : data_(std::move(error)) {}  // NOLINT: implicit
-
-    [[nodiscard]] bool has_value() const noexcept {
-        return std::holds_alternative<T>(data_);
+    Result(T value) : has_value_(true) {  // NOLINT: implicit
+        new (&storage_) T(std::move(value));
     }
-    explicit operator bool() const noexcept { return has_value(); }
+    Result(NvmmError error) : error_(std::move(error)), has_value_(false) {}  // NOLINT: implicit
 
-    [[nodiscard]] T& value() & { return std::get<T>(data_); }
-    [[nodiscard]] const T& value() const& { return std::get<T>(data_); }
-    [[nodiscard]] T&& value() && { return std::get<T>(std::move(data_)); }
+    ~Result() {
+        if (has_value_) {
+            reinterpret_cast<T*>(&storage_)->~T();
+        }
+    }
 
-    [[nodiscard]] NvmmError& error() & { return std::get<NvmmError>(data_); }
-    [[nodiscard]] const NvmmError& error() const& { return std::get<NvmmError>(data_); }
+    Result(Result&& other) noexcept
+        : error_(std::move(other.error_)), has_value_(other.has_value_) {
+        if (has_value_) {
+            new (&storage_) T(std::move(*reinterpret_cast<T*>(&other.storage_)));
+        }
+    }
 
-    [[nodiscard]] T& operator*() & { return value(); }
-    [[nodiscard]] const T& operator*() const& { return value(); }
+    Result& operator=(Result&& other) noexcept {
+        if (this != &other) {
+            if (has_value_) {
+                reinterpret_cast<T*>(&storage_)->~T();
+            }
+            has_value_ = other.has_value_;
+            error_ = std::move(other.error_);
+            if (has_value_) {
+                new (&storage_) T(std::move(*reinterpret_cast<T*>(&other.storage_)));
+            }
+        }
+        return *this;
+    }
+
+    Result(const Result&) = delete;
+    Result& operator=(const Result&) = delete;
+
+    bool has_value() const noexcept { return has_value_; }
+    explicit operator bool() const noexcept { return has_value_; }
+
+    T& value() & { return *reinterpret_cast<T*>(&storage_); }
+    const T& value() const& { return *reinterpret_cast<const T*>(&storage_); }
+
+    NvmmError& error() & { return error_; }
+    const NvmmError& error() const& { return error_; }
+
+    T& operator*() & { return value(); }
+    const T& operator*() const& { return value(); }
 
 private:
-    std::variant<T, NvmmError> data_;
+    typename std::aligned_storage<sizeof(T), alignof(T)>::type storage_;
+    NvmmError error_;
+    bool has_value_ = false;
 };
 
 /// Specialization for void Result
 template <>
 class Result<void> {
 public:
-    Result() = default;
-    Result(NvmmError error) : error_(std::move(error)) {}  // NOLINT: implicit
+    Result() : has_value_(true) {}
+    Result(NvmmError error) : error_(std::move(error)), has_value_(false) {}  // NOLINT: implicit
 
-    [[nodiscard]] bool has_value() const noexcept { return !error_.has_value(); }
-    explicit operator bool() const noexcept { return has_value(); }
+    bool has_value() const noexcept { return has_value_; }
+    explicit operator bool() const noexcept { return has_value_; }
 
-    [[nodiscard]] const NvmmError& error() const { return error_.value(); }
+    const NvmmError& error() const { return error_; }
 
 private:
-    std::optional<NvmmError> error_;
+    NvmmError error_;
+    bool has_value_ = true;
 };
 
-/// Lightweight non-owning view of contiguous bytes (C++17 replacement for std::span)
+/// Lightweight non-owning view of contiguous bytes
 class ByteSpan {
 public:
     ByteSpan() = default;
     ByteSpan(uint8_t* data, std::size_t size) : data_(data), size_(size) {}
 
-    [[nodiscard]] uint8_t* data() const noexcept { return data_; }
-    [[nodiscard]] std::size_t size() const noexcept { return size_; }
-    [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+    uint8_t* data() const noexcept { return data_; }
+    std::size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
 
     uint8_t& operator[](std::size_t i) { return data_[i]; }
     const uint8_t& operator[](std::size_t i) const { return data_[i]; }
 
-    [[nodiscard]] uint8_t* begin() const noexcept { return data_; }
-    [[nodiscard]] uint8_t* end() const noexcept { return data_ + size_; }
+    uint8_t* begin() const noexcept { return data_; }
+    uint8_t* end() const noexcept { return data_ + size_; }
 
 private:
     uint8_t* data_ = nullptr;
@@ -187,7 +220,7 @@ struct CropRect {
     uint32_t width = 0;
     uint32_t height = 0;
 
-    [[nodiscard]] bool is_valid() const {
+    bool is_valid() const {
         return width > 0 && height > 0;
     }
 };

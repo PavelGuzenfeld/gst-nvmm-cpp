@@ -6,7 +6,8 @@
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-static gboolean plugin_init([[maybe_unused]] GstPlugin* plugin) {
+static gboolean plugin_init(GstPlugin* plugin) {
+    (void)plugin;
     /* Register the allocator type — this makes it discoverable */
     GstAllocator* alloc = gst_nvmm_allocator_new(0);
     gst_allocator_register(GST_NVMM_MEMORY_TYPE, alloc);
@@ -20,7 +21,7 @@ GST_PLUGIN_DEFINE(
     "NVMM memory allocator for Jetson NvBufSurface",
     plugin_init,
     "0.1.0",
-    "MIT",
+    "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"
 )

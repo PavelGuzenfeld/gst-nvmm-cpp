@@ -18,7 +18,7 @@ GST_PLUGIN_DEFINE(
     "NVMM video crop/scale/convert using Tegra VIC",
     plugin_init,
     "0.1.0",
-    "MIT",
+    "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"
 )

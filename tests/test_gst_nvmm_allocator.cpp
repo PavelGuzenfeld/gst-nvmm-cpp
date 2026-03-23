@@ -26,7 +26,7 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
 static void test_allocator_creates() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(6 /* system heap for mock */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     ASSERT_NOT_NULL(alloc);
     ASSERT_TRUE(GST_IS_NVMM_ALLOCATOR(alloc));
     gst_object_unref(alloc);
@@ -34,7 +34,7 @@ static void test_allocator_creates() {
 }
 
 static void test_allocator_alloc_free() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(6);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     ASSERT_NOT_NULL(alloc);
 
     GstMemory* mem = gst_allocator_alloc(alloc, 1920 * 1080 * 3 / 2, NULL);
@@ -50,7 +50,7 @@ static void test_allocator_alloc_free() {
 }
 
 static void test_allocator_map_unmap() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(6);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 4, NULL);
     ASSERT_NOT_NULL(mem);
 
@@ -67,7 +67,7 @@ static void test_allocator_map_unmap() {
 }
 
 static void test_allocator_write_read_round_trip() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(6);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     GstMemory* mem = gst_allocator_alloc(alloc, 64 * 64 * 4, NULL);
     ASSERT_NOT_NULL(mem);
 

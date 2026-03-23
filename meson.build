@@ -2,7 +2,7 @@ project('gst-nvmm-cpp', ['c', 'cpp'],
   version : '0.1.0',
   meson_version : '>= 0.62.0',
   default_options : [
-    'cpp_std=c++17',
+    'cpp_std=c++14',
     'c_std=c11',
     'warning_level=2',
     'werror=true',
@@ -10,10 +10,10 @@ project('gst-nvmm-cpp', ['c', 'cpp'],
   ],
 )
 
-gst_dep = dependency('gstreamer-1.0', version : '>= 1.20.0')
-gst_base_dep = dependency('gstreamer-base-1.0', version : '>= 1.20.0')
-gst_video_dep = dependency('gstreamer-video-1.0', version : '>= 1.20.0')
-gst_allocators_dep = dependency('gstreamer-allocators-1.0', version : '>= 1.20.0')
+gst_dep = dependency('gstreamer-1.0', version : '>= 1.16.0')
+gst_base_dep = dependency('gstreamer-base-1.0', version : '>= 1.16.0')
+gst_video_dep = dependency('gstreamer-video-1.0', version : '>= 1.16.0')
+gst_allocators_dep = dependency('gstreamer-allocators-1.0', version : '>= 1.16.0')
 
 # NVIDIA Jetson libraries — found via pkg-config or manual paths
 # NvBufSurface is part of the NVIDIA Multimedia API
@@ -28,15 +28,25 @@ if not nvbufsurface_dep.found()
     required : false,
   )
   if nvbufsurface_lib.found()
-    nvbufsurface_inc = include_directories(
+    fsmod = import('fs')
+    nvmm_inc_candidates = [
       '/usr/src/jetson_multimedia_api/include',
       '/usr/include/nvbufsurface',
-      is_system : true,
-    )
-    nvbufsurface_dep = declare_dependency(
-      dependencies : nvbufsurface_lib,
-      include_directories : nvbufsurface_inc,
-    )
+      '/opt/nvidia/deepstream/deepstream/sources/includes',
+    ]
+    nvmm_inc_dirs = []
+    foreach d : nvmm_inc_candidates
+      if fsmod.is_dir(d)
+        nvmm_inc_dirs += d
+      endif
+    endforeach
+    if nvmm_inc_dirs.length() > 0
+      nvbufsurface_inc = include_directories(nvmm_inc_dirs, is_system : true)
+      nvbufsurface_dep = declare_dependency(
+        dependencies : nvbufsurface_lib,
+        include_directories : nvbufsurface_inc,
+      )
+    endif
   endif
 endif
 

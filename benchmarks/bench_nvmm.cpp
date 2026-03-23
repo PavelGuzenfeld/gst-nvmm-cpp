@@ -48,7 +48,7 @@ static BenchResult bench_alloc_free(int iterations, uint32_t w, uint32_t h,
     params.width = w;
     params.height = h;
     params.color_format = fmt;
-    params.mem_type = nvmm::MemoryType::kSystemHeap;
+    params.mem_type = nvmm::MemoryType::kDefault;
 
     auto start = Clock::now();
     for (int i = 0; i < iterations; i++) {
@@ -77,7 +77,7 @@ static BenchResult bench_map_unmap(int iterations, uint32_t w, uint32_t h) {
     params.width = w;
     params.height = h;
     params.color_format = nvmm::ColorFormat::kNV12;
-    params.mem_type = nvmm::MemoryType::kSystemHeap;
+    params.mem_type = nvmm::MemoryType::kDefault;
 
     auto buf_result = nvmm::NvmmBuffer::create(params);
     if (!buf_result) {
@@ -161,15 +161,15 @@ int main() {
 
     /* Allocation benchmarks */
     print_csv_row(bench_alloc_free(N, 1920, 1080, nvmm::ColorFormat::kNV12));
-    print_csv_row(bench_alloc_free(N, 3840, 2160, nvmm::ColorFormat::kRGBA));
+    print_csv_row(bench_alloc_free(N, 1920, 1080, nvmm::ColorFormat::kRGBA));
 
     /* Map/unmap benchmarks */
     print_csv_row(bench_map_unmap(N, 1920, 1080));
-    print_csv_row(bench_map_unmap(N, 3840, 2160));
+    print_csv_row(bench_map_unmap(N, 640, 480));
 
-    /* Transform benchmarks */
+    /* Transform benchmarks (VIC hardware) */
     print_csv_row(bench_transform(N, 1920, 1080, 640, 480));
-    print_csv_row(bench_transform(N, 3840, 2160, 1920, 1080));
+    print_csv_row(bench_transform(N, 1920, 1080, 1280, 720));
 
     return 0;
 }

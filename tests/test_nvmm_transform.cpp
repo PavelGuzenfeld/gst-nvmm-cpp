@@ -33,7 +33,7 @@ nvmm::Result<nvmm::NvmmBuffer> make_buffer(uint32_t w, uint32_t h,
     params.width = w;
     params.height = h;
     params.color_format = fmt;
-    params.mem_type = nvmm::MemoryType::kSystemHeap;
+    params.mem_type = nvmm::MemoryType::kDefault;
     return nvmm::NvmmBuffer::create(params);
 }
 
