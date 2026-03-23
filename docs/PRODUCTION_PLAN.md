@@ -2,6 +2,26 @@
 
 Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
 
+## Status
+
+| Phase | Item | Status |
+|-------|------|--------|
+| 1.1 | Fix double-free in nvmmconvert | Done |
+| 1.2 | Fix allocator map for SURFACE_ARRAY | Done |
+| 1.3 | Fix caps negotiation | Done |
+| 1.4 | Implement GstNvmmBufferPool | Done |
+| 1.5 | Extract ShmHeader | Done |
+| 1.6 | Unify mock/real headers | Done |
+| 3.1 | Queue/tee validation | Done (queue, tee x2, tee x3, queue2) |
+| 3.2 | Multi-consumer IPC | Done (mid-join, producer-stop) |
+| 3.3 | Stress tests | Done (state x100, 300f longevity, 500f pool) |
+| 3.4 | ThreadSanitizer | Done (22 tests, no races) |
+| 3.5 | AddressSanitizer | Done (22 tests, no errors) |
+| 2.1 | DMA-buf export in nvmmsink | Pending |
+| 2.2 | Fix nvmmappsrc polling | Pending |
+| 2.3 | Dynamic shm sizing | Pending |
+| 2.4 | Upstream code style | Pending |
+
 ## Phase 1 — Make it actually work
 
 ### 1.1 Fix double-free in nvmmconvert
