@@ -487,4 +487,4 @@ These issues document the upstream gaps this project addresses:
 
 ## License
 
-LGPL
+LGPL-2.1-or-later. See [COPYING](COPYING).
