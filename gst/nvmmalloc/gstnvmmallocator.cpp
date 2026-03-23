@@ -24,63 +24,10 @@ struct _GstNvmmAllocatorPrivate {
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmAllocator, gst_nvmm_allocator, GST_TYPE_ALLOCATOR)
 
-static GstMemory* gst_nvmm_allocator_alloc(GstAllocator* allocator,
-                                             gsize size,
-                                             GstAllocationParams* params) {
-    (void)params;
-    auto* self = GST_NVMM_ALLOCATOR(allocator);
-
-    /* Decode width/height from size — callers should prefer
-       gst_nvmm_allocator_alloc_video() or the buffer pool instead. */
-    GST_WARNING_OBJECT(allocator,
-        "Allocating NVMM by size (%" G_GSIZE_FORMAT ") — use "
-        "gst_nvmm_allocator_alloc_video() for exact format/dimensions", size);
-    uint32_t height = 1080;
-    uint32_t width = 1920;
-    if (size > 0) {
-        /* Heuristic: assume NV12 (1.5 bytes/pixel) */
-        uint64_t pixels = (size * 2) / 3;
-        /* Find reasonable dimensions */
-        width = 1;
-        height = 1;
-        for (uint32_t w = 320; w <= 3840; w += 2) {
-            uint32_t h = static_cast<uint32_t>((pixels + w - 1) / w);
-            if (static_cast<uint64_t>(w) * h * 3 / 2 >= size) {
-                width = w;
-                height = h;
-                break;
-            }
-        }
-    }
-
-    nvmm::SurfaceParams surface_params;
-    surface_params.width = width;
-    surface_params.height = height;
-    surface_params.color_format = nvmm::ColorFormat::kNV12;
-    surface_params.mem_type = self->priv->mem_type;
-    surface_params.num_surfaces = 1;
-
-    auto result = nvmm::NvmmBuffer::create(surface_params);
-    if (!result) {
-        GST_ERROR_OBJECT(allocator, "Failed to create NVMM buffer: %s",
-                         result.error().detail.c_str());
-        return nullptr;
-    }
-
-    auto* mem = new GstNvmmMemory{};
-    auto actual_size = static_cast<gsize>((*result).data_size());
-
-    /* NVMM convention: gst_memory_map returns the NvBufSurface* pointer.
-       This is what NVIDIA's nvvidconv/nvv4l2 elements expect.
-       For actual CPU pixel access, use gst_nvmm_memory_map_plane(). */
-    gst_memory_init(GST_MEMORY_CAST(mem),
-                    GST_MEMORY_FLAG_NO_SHARE,
-                    allocator, nullptr, actual_size, 0, 0, actual_size);
-
-    mem->buffer = std::make_unique<nvmm::NvmmBuffer>(std::move(*result));
-
-    return GST_MEMORY_CAST(mem);
-}
+/* No GstAllocator::alloc(size) override — video allocators use a custom
+   alloc function with explicit format/dimensions instead. See GstGLMemory,
+   GstVulkanImageMemory for the upstream pattern. Use
+   gst_nvmm_allocator_alloc_video() or the buffer pool. */
 
 static void gst_nvmm_allocator_free(GstAllocator* allocator, GstMemory* memory) {
     (void)allocator;
@@ -108,7 +55,7 @@ static void gst_nvmm_allocator_mem_unmap(GstMemory* memory) {
 
 static void gst_nvmm_allocator_class_init(GstNvmmAllocatorClass* klass) {
     auto* allocator_class = GST_ALLOCATOR_CLASS(klass);
-    allocator_class->alloc = gst_nvmm_allocator_alloc;
+    allocator_class->alloc = nullptr;  /* use gst_nvmm_allocator_alloc_video() */
     allocator_class->free = gst_nvmm_allocator_free;
 }
 

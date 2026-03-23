@@ -284,11 +284,10 @@ static void test_allocator_no_leak_stress() {
     GstAllocator *alloc = gst_nvmm_allocator_new(0 /* default */);
     ASSERT_NOT_NULL(alloc);
 
-    gsize buf_size = 640 * 480 * 3 / 2;
-
     /* Allocate and free 100 buffers rapidly */
     for (int i = 0; i < 100; i++) {
-        GstMemory *mem = gst_allocator_alloc(alloc, buf_size, NULL);
+        GstMemory *mem = gst_nvmm_allocator_alloc_video(alloc,
+            GST_VIDEO_FORMAT_NV12, 640, 480);
         ASSERT_NOT_NULL(mem);
         gst_memory_unref(mem);
     }

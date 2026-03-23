@@ -1,7 +1,8 @@
-/// Integration test for GstNvmmAllocator — tests the GStreamer allocator
-/// interface backed by NVMM buffers.
+/// Integration test for GstNvmmAllocator — tests the custom video
+/// allocation path (not GstAllocator::alloc).
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
 
 #include "gstnvmmallocator.h"
 
@@ -33,11 +34,12 @@ static void test_allocator_creates() {
     PASS();
 }
 
-static void test_allocator_alloc_free() {
+static void test_alloc_video_nv12() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     ASSERT_NOT_NULL(alloc);
 
-    GstMemory* mem = gst_allocator_alloc(alloc, 1920 * 1080 * 3 / 2, NULL);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 1920, 1080);
     ASSERT_NOT_NULL(mem);
     ASSERT_TRUE(gst_is_nvmm_memory(mem));
 
@@ -51,16 +53,14 @@ static void test_allocator_alloc_free() {
 
 static void test_direct_map_returns_surface() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
-    GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 3 / 2, NULL);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
     ASSERT_NOT_NULL(mem);
 
-    /* NVIDIA convention: gst_memory_map returns NvBufSurface* (not pixels).
-       This is required for interop with nvvidconv, nvv4l2decoder etc. */
     GstMapInfo map_info;
     gboolean ok = gst_memory_map(mem, &map_info, GST_MAP_READ);
     ASSERT_TRUE(ok);
     ASSERT_NOT_NULL(map_info.data);
-    /* map_info.data should equal the NvBufSurface* */
     ASSERT_TRUE(map_info.data == gst_nvmm_memory_get_surface(mem));
     gst_memory_unmap(mem, &map_info);
 
@@ -71,10 +71,10 @@ static void test_direct_map_returns_surface() {
 
 static void test_per_plane_map() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
-    GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 3 / 2, NULL);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
     ASSERT_NOT_NULL(mem);
 
-    /* Per-plane map should work */
     guint8* data = NULL;
     gsize size = 0;
     gboolean ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_READ, &data, &size);
@@ -90,10 +90,10 @@ static void test_per_plane_map() {
 
 static void test_per_plane_write_read_roundtrip() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
-    GstMemory* mem = gst_allocator_alloc(alloc, 64 * 64 * 4, NULL);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_RGBA, 64, 64);
     ASSERT_NOT_NULL(mem);
 
-    /* Write pattern via per-plane map */
     guint8* data = NULL;
     gsize size = 0;
     gboolean ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_WRITE, &data, &size);
@@ -101,7 +101,6 @@ static void test_per_plane_write_read_roundtrip() {
     memset(data, 0xCD, size);
     gst_nvmm_memory_unmap_plane(mem);
 
-    /* Read back and verify */
     ok = gst_nvmm_memory_map_plane(mem, 0, GST_MAP_READ, &data, &size);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(data[0] == 0xCD);
@@ -126,12 +125,39 @@ static void test_non_nvmm_memory_rejected() {
     PASS();
 }
 
+static void test_alloc_video_rgba() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_RGBA, 1280, 720);
+    ASSERT_NOT_NULL(mem);
+    ASSERT_TRUE(gst_is_nvmm_memory(mem));
+    ASSERT_TRUE(mem->size > 0);
+
+    gst_memory_unref(mem);
+    gst_object_unref(alloc);
+    PASS();
+}
+
+static void test_alloc_video_invalid() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+
+    /* Zero dimensions should fail */
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 0, 0);
+    ASSERT_TRUE(mem == NULL);
+
+    gst_object_unref(alloc);
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     gst_init(&argc, &argv);
     printf("=== GstNvmmAllocator Tests ===\n");
 
     RUN_TEST(allocator_creates);
-    RUN_TEST(allocator_alloc_free);
+    RUN_TEST(alloc_video_nv12);
+    RUN_TEST(alloc_video_rgba);
+    RUN_TEST(alloc_video_invalid);
     RUN_TEST(direct_map_returns_surface);
     RUN_TEST(per_plane_map);
     RUN_TEST(per_plane_write_read_roundtrip);
