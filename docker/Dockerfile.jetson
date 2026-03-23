@@ -1,0 +1,45 @@
+# Universal Jetson Dockerfile — works on Xavier (JP5) and Orin (JP6).
+# Uses ubuntu:22.04 base. NVIDIA libs are mounted from host at runtime.
+#
+# Build:
+#   docker build -f docker/Dockerfile.jetson -t gst-nvmm-cpp:jetson .
+#
+# Run (mount host NVIDIA libs + multimedia API headers):
+#   docker run --runtime nvidia --rm \
+#     -v /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro \
+#     -v /usr/src/jetson_multimedia_api:/usr/src/jetson_multimedia_api:ro \
+#     gst-nvmm-cpp:jetson
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    pkg-config \
+    ninja-build \
+    python3 \
+    python3-pip \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-tools \
+    libglib2.0-dev \
+    cmake \
+    && pip3 install meson \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src/
+
+RUN meson setup builddir \
+    -Dcpp_std=c++14 \
+    -Dbuildtype=debugoptimized \
+    -Dwerror=false
+
+RUN ninja -C builddir
+
+CMD ["bash", "-c", "rm -f ~/.cache/gstreamer-1.0/registry.*.bin && meson test -C builddir --verbose"]

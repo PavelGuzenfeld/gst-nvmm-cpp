@@ -31,7 +31,7 @@ COPY . /src/
 
 # Configure — real NVMM libraries should be available via L4T
 RUN meson setup builddir \
-    -Dcpp_std=c++17 \
+    -Dcpp_std=c++14 \
     -Dbuildtype=debugoptimized
 
 RUN ninja -C builddir

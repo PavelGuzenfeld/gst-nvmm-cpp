@@ -31,7 +31,7 @@ COPY . /src/
 
 # Configure — JP6 has NvSciBuf support
 RUN meson setup builddir \
-    -Dcpp_std=c++17 \
+    -Dcpp_std=c++14 \
     -Dbuildtype=debugoptimized
 
 RUN ninja -C builddir
