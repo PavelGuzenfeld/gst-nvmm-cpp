@@ -148,6 +148,24 @@ docker build -f docker/Dockerfile.dev -t gst-nvmm-cpp:dev .
 docker run --rm gst-nvmm-cpp:dev
 ```
 
+### Docker on Jetson (Xavier NX / Orin)
+
+```bash
+# Build (uses ubuntu:22.04, mounts host NVIDIA libs at runtime)
+docker build --network host -f docker/Dockerfile.jetson -t gst-nvmm-cpp:jetson .
+
+# Run tests + pipelines (mount NVIDIA runtime libs and GStreamer plugins)
+docker run --runtime nvidia --rm --network host --privileged \
+  -v /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro \
+  -v /usr/lib/aarch64-linux-gnu/tegra-egl:/usr/lib/aarch64-linux-gnu/tegra-egl:ro \
+  -v /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro \
+  -v /usr/src/jetson_multimedia_api:/usr/src/jetson_multimedia_api:ro \
+  -v /usr/share/glvnd:/usr/share/glvnd:ro \
+  -v /etc/alternatives:/etc/alternatives:ro \
+  -v /etc/ld.so.conf.d:/etc/ld.so.conf.d:ro \
+  gst-nvmm-cpp:jetson
+```
+
 ### Native build (Jetson)
 
 ```bash
@@ -161,7 +179,7 @@ On hosts without Jetson libraries, meson automatically detects the absence of `l
 
 ## Jetson Hardware Validation
 
-Validated on two Jetson platforms:
+Validated on two Jetson platforms (both in Docker and native):
 - **Jetson Xavier NX** — JetPack 5.1 (L4T R35.2.1), GStreamer 1.16.3
 - **Jetson Orin NX** — JetPack 6 (L4T R36.4.3), GStreamer 1.20.3
 
@@ -229,6 +247,8 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | VIC transform | 1080p -> 720p | **95** | 85 | 114 |
 
 Orin allocation is **5x faster** than Xavier NX. VIC transform is **~56x faster** for 1080p->480p.
+
+Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
 
 ### VIC Hardware Accelerator Verification
 
