@@ -183,14 +183,19 @@ Ok: 7   Fail: 0
 
 | Operation | Resolution | Avg (us) | Min (us) | Max (us) |
 |-----------|-----------|----------|----------|----------|
-| alloc/free | NV12 1080p | 697 | 135 | 3006 |
-| alloc/free | RGBA 1080p | 1825 | 587 | 3845 |
-| map/unmap | NV12 1080p | 252 | 226 | 2185 |
-| map/unmap | NV12 480p | 106 | 93 | 529 |
-| VIC transform | 1080p -> 480p | **21** | 18 | 1145 |
-| VIC transform | 1080p -> 720p | **21** | 19 | 70 |
+| alloc/free | NV12 1080p | 395 | 129 | 3147 |
+| alloc/free | RGBA 1080p | 1504 | 164 | 2582 |
+| alloc/free | NV12 4K | 2122 | 183 | 4199 |
+| alloc/free | RGBA 4K | 5420 | 255 | 10388 |
+| map/unmap | NV12 480p | 101 | 91 | 594 |
+| map/unmap | NV12 1080p | 250 | 223 | 1839 |
+| map/unmap | NV12 4K | 760 | 704 | 3473 |
+| VIC transform | 1080p -> 480p | **2226** | 1758 | 7057 |
+| VIC transform | 1080p -> 720p | **1934** | 1764 | 4230 |
+| VIC transform | 4K -> 1080p | **4157** | 3982 | 8718 |
+| VIC transform | 4K -> 480p | **3662** | 3540 | 5047 |
 
-1000 iterations each. VIC transform at ~21 us/frame = ~47,000 FPS throughput.
+500 iterations each. VIC transform includes hardware sync overhead.
 
 ### VIC Hardware Accelerator Verification
 
