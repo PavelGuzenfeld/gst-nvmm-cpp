@@ -3,6 +3,12 @@
 #include "nvmm_buffer.hpp"
 #include "nvmm_types.hpp"
 
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
+
 struct _GstNvmmBufferPoolPrivate {
     GstVideoInfo video_info;
     GstAllocator* allocator;
@@ -124,12 +130,30 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
     *buffer = gst_buffer_new();
     gst_buffer_append_memory(*buffer, mem);
 
-    /* Add video meta with correct plane info */
+    /* Read actual strides/offsets from the NVMM surface — these may
+       differ from GstVideoInfo due to hardware alignment requirements */
+    guint n_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
+    gsize offsets[GST_VIDEO_MAX_PLANES] = {};
+    gint strides[GST_VIDEO_MAX_PLANES] = {};
+
+    void *surface = gst_nvmm_memory_get_surface(mem);
+    if (surface) {
+        auto *nvsurf = static_cast<NvBufSurface *>(surface);
+        auto& pp = nvsurf->surfaceList[0].planeParams;
+        for (guint i = 0; i < n_planes && i < pp.num_planes; i++) {
+            offsets[i] = pp.offset[i];
+            strides[i] = static_cast<gint>(pp.pitch[i]);
+        }
+    } else {
+        /* Fallback to GstVideoInfo values */
+        for (guint i = 0; i < n_planes; i++) {
+            offsets[i] = self->priv->video_info.offset[i];
+            strides[i] = self->priv->video_info.stride[i];
+        }
+    }
+
     gst_buffer_add_video_meta_full(*buffer, GST_VIDEO_FRAME_FLAG_NONE,
-        fmt, w, h,
-        GST_VIDEO_INFO_N_PLANES(&self->priv->video_info),
-        self->priv->video_info.offset,
-        self->priv->video_info.stride);
+        fmt, w, h, n_planes, offsets, strides);
 
     return GST_FLOW_OK;
 }
