@@ -1,6 +1,7 @@
 #include "gstnvmmconvert.h"
 
 #include "gstnvmmallocator.h"
+#include "gstnvmmbufferpool.h"
 #include "nvmm_buffer.hpp"
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
@@ -30,9 +31,14 @@ struct _GstNvmmConvertPrivate {
     nvmm::FlipMethod flip;
     GstVideoInfo sink_info;
     GstVideoInfo src_info;
+    GstBufferPool* pool;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmConvert, gst_nvmm_convert, GST_TYPE_BASE_TRANSFORM)
+
+/* Forward declarations */
+static gboolean gst_nvmm_convert_stop(GstBaseTransform* trans);
+static void gst_nvmm_convert_finalize(GObject* object);
 
 static void gst_nvmm_convert_set_property(GObject* object, guint prop_id,
                                             const GValue* value, GParamSpec* pspec) {
@@ -203,6 +209,27 @@ static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
                             self->priv->flip == nvmm::FlipMethod::kNone;
     gst_base_transform_set_passthrough(trans, same && no_transform);
 
+    /* Set up output buffer pool when not passthrough */
+    if (!(same && no_transform)) {
+        if (self->priv->pool) {
+            gst_buffer_pool_set_active(self->priv->pool, FALSE);
+            gst_object_unref(self->priv->pool);
+            self->priv->pool = NULL;
+        }
+
+        self->priv->pool = gst_nvmm_buffer_pool_new();
+        GstStructure* config = gst_buffer_pool_get_config(self->priv->pool);
+        gst_buffer_pool_config_set_params(config, outcaps,
+            GST_VIDEO_INFO_SIZE(&self->priv->src_info), 2, 8);
+        if (!gst_buffer_pool_set_config(self->priv->pool, config)) {
+            GST_ERROR_OBJECT(self, "Failed to configure output buffer pool");
+            gst_object_unref(self->priv->pool);
+            self->priv->pool = NULL;
+            return FALSE;
+        }
+        gst_buffer_pool_set_active(self->priv->pool, TRUE);
+    }
+
     return TRUE;
 }
 
@@ -219,49 +246,18 @@ gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
         return GST_FLOW_OK;
     }
 
-    /* Allocate NVMM output buffer matching src caps */
-    gint out_w = GST_VIDEO_INFO_WIDTH(&self->priv->src_info);
-    gint out_h = GST_VIDEO_INFO_HEIGHT(&self->priv->src_info);
-    GstVideoFormat out_fmt = GST_VIDEO_INFO_FORMAT(&self->priv->src_info);
-
-    nvmm::SurfaceParams params;
-    params.width = static_cast<uint32_t>(out_w);
-    params.height = static_cast<uint32_t>(out_h);
-    params.mem_type = nvmm::MemoryType::kDefault;
-
-    switch (out_fmt) {
-        case GST_VIDEO_FORMAT_RGBA: params.color_format = nvmm::ColorFormat::kRGBA; break;
-        case GST_VIDEO_FORMAT_BGRA: params.color_format = nvmm::ColorFormat::kBGRA; break;
-        case GST_VIDEO_FORMAT_I420: params.color_format = nvmm::ColorFormat::kI420; break;
-        default:                    params.color_format = nvmm::ColorFormat::kNV12; break;
-    }
-
-    auto result = nvmm::NvmmBuffer::create(params);
-    if (!result) {
-        GST_ERROR_OBJECT(self, "Failed to allocate NVMM output buffer");
+    /* Acquire buffer from the NVMM pool */
+    if (!self->priv->pool) {
+        GST_ERROR_OBJECT(self, "No output buffer pool");
         return GST_FLOW_ERROR;
     }
 
-    /* Wrap in GstMemory via our allocator */
-    GstAllocator* alloc = gst_nvmm_allocator_new(0);
-    gsize buf_size = static_cast<gsize>(result.value().data_size());
-    GstMemory* mem = gst_allocator_alloc(alloc, buf_size, NULL);
-    gst_object_unref(alloc);
-
-    if (!mem) {
-        GST_ERROR_OBJECT(self, "Failed to wrap NVMM buffer in GstMemory");
-        return GST_FLOW_ERROR;
+    GstFlowReturn ret = gst_buffer_pool_acquire_buffer(self->priv->pool,
+                                                        outbuf, NULL);
+    if (ret != GST_FLOW_OK || !*outbuf) {
+        GST_ERROR_OBJECT(self, "Failed to acquire buffer from pool");
+        return ret;
     }
-
-    /* Replace the surface in the allocated memory with our specific one.
-       The allocator created a generic surface; we need the one with
-       our exact format/dimensions. Swap them by getting the internal
-       memory and replacing its buffer. */
-    /* Actually, the alloc call above already created a surface with the
-       right dimensions (from the heuristic). Just use it directly. */
-
-    *outbuf = gst_buffer_new();
-    gst_buffer_append_memory(*outbuf, mem);
 
     /* Copy timestamps */
     gst_buffer_copy_into(*outbuf, inbuf,
@@ -337,6 +333,7 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
 
     gobject_class->set_property = gst_nvmm_convert_set_property;
     gobject_class->get_property = gst_nvmm_convert_get_property;
+    gobject_class->finalize = gst_nvmm_convert_finalize;
 
     g_object_class_install_property(gobject_class, PROP_CROP_X,
         g_param_spec_uint("crop-x", "Crop X", "Source crop X offset",
@@ -372,10 +369,35 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
     transform_class->fixate_caps = gst_nvmm_convert_fixate_caps;
     transform_class->get_unit_size = gst_nvmm_convert_get_unit_size;
     transform_class->set_caps = gst_nvmm_convert_set_caps;
+    transform_class->stop = gst_nvmm_convert_stop;
     transform_class->prepare_output_buffer = gst_nvmm_convert_prepare_output_buffer;
     transform_class->transform = gst_nvmm_convert_transform;
 
     transform_class->passthrough_on_same_caps = TRUE;
+}
+
+static gboolean
+gst_nvmm_convert_stop(GstBaseTransform* trans)
+{
+    auto* self = GST_NVMM_CONVERT(trans);
+    if (self->priv->pool) {
+        gst_buffer_pool_set_active(self->priv->pool, FALSE);
+        gst_object_unref(self->priv->pool);
+        self->priv->pool = NULL;
+    }
+    return TRUE;
+}
+
+static void
+gst_nvmm_convert_finalize(GObject* object)
+{
+    auto* self = GST_NVMM_CONVERT(object);
+    if (self->priv->pool) {
+        gst_buffer_pool_set_active(self->priv->pool, FALSE);
+        gst_object_unref(self->priv->pool);
+        self->priv->pool = NULL;
+    }
+    G_OBJECT_CLASS(gst_nvmm_convert_parent_class)->finalize(object);
 }
 
 static void gst_nvmm_convert_init(GstNvmmConvert* self) {
@@ -383,4 +405,5 @@ static void gst_nvmm_convert_init(GstNvmmConvert* self) {
         gst_nvmm_convert_get_instance_private(self));
     self->priv->crop = {};
     self->priv->flip = nvmm::FlipMethod::kNone;
+    self->priv->pool = NULL;
 }
