@@ -165,37 +165,56 @@ Validated on **Jetson Xavier NX** (JetPack 5.1, L4T R35.2.1, GStreamer 1.16.3).
 
 ### Test Results
 
-All 7 test suites pass with real NVMM hardware:
+All 7 test suites pass on Jetson Xavier NX (JetPack 5.1, L4T R35.2.1):
 
 ```
-$ meson test -C builddir --verbose
- 1/7 gst-nvmm-cpp:nvmm_buffer        OK   9 passed, 0 failed
- 2/7 gst-nvmm-cpp:nvmm_transform     OK   6 passed, 0 failed
- 3/7 gst-nvmm-cpp:gst_nvmm_allocator OK   5 passed, 0 failed
- 4/7 gst-nvmm-cpp:nvmm_sink          OK   4 passed, 0 failed
- 5/7 gst-nvmm-cpp:nvmm_appsrc        OK   3 passed, 0 failed
- 6/7 gst-nvmm-cpp:gstcheck_elements  OK   8 passed, 0 failed
- 7/7 gst-nvmm-cpp:integration        OK   7 passed, 0 failed
+ 1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
+ 2/7 nvmm_transform     OK    6 passed   (scale, crop, convert, flip, null safety)
+ 3/7 gst_nvmm_allocator OK    6 passed   (create, alloc, surface map, per-plane, roundtrip)
+ 4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
+ 5/7 nvmm_appsrc        OK    3 passed   (create, properties, sink-to-source IPC)
+ 6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 7/7 integration        OK    7 passed   (shm roundtrip, multi-shm, dynamic props, stress)
 Ok: 7   Fail: 0
 ```
 
+8 pipeline tests also pass via `scripts/jetson-test.sh`:
+passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throughput.
+
+### Stress Tests
+
+| Test | Result |
+|------|--------|
+| State changes x100 (NULL→READY→NULL) | PASS |
+| 500f pool stress (1080p→720p, flip) | PASS (21s) |
+| 50 rapid pool recreate cycles | PASS |
+| tee x3 with different transforms | PASS |
+| Caps renegotiation (4 resolution changes) | PASS |
+
+### Sanitizer Results
+
+| Sanitizer | Tests | Result |
+|-----------|-------|--------|
+| AddressSanitizer | 22 (buffer + transform + allocator) | Clean |
+| ThreadSanitizer | 22 (buffer + transform + allocator) | Clean |
+
 ### Benchmark Results (Xavier NX)
+
+500 iterations each. VIC transform includes hardware sync.
 
 | Operation | Resolution | Avg (us) | Min (us) | Max (us) |
 |-----------|-----------|----------|----------|----------|
-| alloc/free | NV12 1080p | 395 | 129 | 3147 |
-| alloc/free | RGBA 1080p | 1504 | 164 | 2582 |
-| alloc/free | NV12 4K | 2122 | 183 | 4199 |
-| alloc/free | RGBA 4K | 5420 | 255 | 10388 |
-| map/unmap | NV12 480p | 101 | 91 | 594 |
-| map/unmap | NV12 1080p | 250 | 223 | 1839 |
-| map/unmap | NV12 4K | 760 | 704 | 3473 |
-| VIC transform | 1080p -> 480p | **2226** | 1758 | 7057 |
-| VIC transform | 1080p -> 720p | **1934** | 1764 | 4230 |
-| VIC transform | 4K -> 1080p | **4157** | 3982 | 8718 |
-| VIC transform | 4K -> 480p | **3662** | 3540 | 5047 |
-
-500 iterations each. VIC transform includes hardware sync overhead.
+| alloc/free | NV12 1080p | 591 | 128 | 2291 |
+| alloc/free | RGBA 1080p | 2095 | 1072 | 2129 |
+| alloc/free | NV12 4K | 3245 | 2091 | 2701 |
+| alloc/free | RGBA 4K | 10104 | 7110 | 9164 |
+| map/unmap | NV12 480p | 97 | 90 | 571 |
+| map/unmap | NV12 1080p | 231 | 222 | 493 |
+| map/unmap | NV12 4K | 750 | 705 | 3440 |
+| VIC transform | 1080p -> 480p | **1947** | 1577 | 4752 |
+| VIC transform | 1080p -> 720p | **1655** | 1594 | 1826 |
+| VIC transform | 4K -> 1080p | **4002** | 3938 | 4913 |
+| VIC transform | 4K -> 480p | **3548** | 3497 | 3700 |
 
 ### VIC Hardware Accelerator Verification
 
