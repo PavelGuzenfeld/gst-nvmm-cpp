@@ -17,10 +17,17 @@ Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
 | 3.3 | Stress tests | Done (state x100, 300f longevity, 500f pool) |
 | 3.4 | ThreadSanitizer | Done (22 tests, no races) |
 | 3.5 | AddressSanitizer | Done (22 tests, no errors) |
-| 2.1 | DMA-buf export in nvmmsink | Pending |
-| 2.2 | Fix nvmmappsrc polling | Pending |
-| 2.3 | Dynamic shm sizing | Pending |
-| 2.4 | Upstream code style | Pending |
+| 2.1 | Dynamic shm sizing | Done |
+| 2.2 | Fix nvmmappsrc polling | Done |
+| 2.3 | Upstream code style (GEnum, atomics, debug category) | Done |
+| 4.1 | DMA-buf fd export in nvmmsink | Pending |
+| 4.2 | BLOCK_LINEAR layout support | Pending |
+| 4.3 | GstVideoMeta with real NVMM strides | Pending |
+| 4.4 | Caps renegotiation (mid-stream resolution change) | Pending |
+| 4.5 | LGPL-2.1 COPYING file | Pending |
+| 4.6 | Jetson CI script | Pending |
+| 4.7 | Fix allocator dimension heuristic | Pending |
+| 4.8 | Format conversion pipeline test (NV12→RGBA) | Pending |
 
 ## Phase 1 — Make it actually work
 
@@ -263,25 +270,121 @@ Build with `-fsanitize=address` and run:
 
 ---
 
+## Phase 4 — Production hardening
+
+### 4.1 DMA-buf fd export in nvmmsink
+
+**Problem:** `export-dmabuf` property is stubbed — always writes -1. The "zero-copy
+IPC" claim requires fd sharing so consumers can import the DMA-buf without memcpy.
+
+**Fix:** When `export-dmabuf=true` and buffer is NVMM, write `bufferDesc` (the
+DMA-buf fd) into ShmHeader. Consumer uses the fd to mmap or import directly.
+For non-NVMM buffers, fall back to memcpy as currently.
+
+**Test:** Producer exports fd, standalone C consumer opens fd, verifies non-negative
+and readable. Pipeline test: producer with `export-dmabuf=true`, consumer verifies
+`header->dmabuf_fd >= 0`.
+
+---
+
+### 4.2 BLOCK_LINEAR layout support
+
+**Problem:** `NvBufSurfaceCreate` hardcodes `NVBUF_LAYOUT_PITCH`. NVIDIA decoders
+(`nvv4l2decoder`) output `NVBUF_LAYOUT_BLOCK_LINEAR` surfaces. Passing block-linear
+surfaces into `NvBufSurfTransform` where the output is pitch-linear should work
+(VIC handles layout conversion), but we never tested it.
+
+**Fix:** Accept block-linear input surfaces in nvmmconvert. When we allocate output
+via the pool, use PITCH layout (VIC can convert). Test with real decoder output.
+
+**Test:** `filesrc ! h264parse ! nvv4l2decoder ! nvmmconvert flip-method=2 ! nvmmsink`
+produces correct output with no garbling. Compare with `nvvidconv` baseline.
+
+---
+
+### 4.3 GstVideoMeta with real NVMM strides
+
+**Problem:** Buffer pool attaches `GstVideoMeta` using `GstVideoInfo` strides, but
+NVMM surfaces may have different actual strides (alignment, padding). Downstream
+elements that use the meta get wrong plane offsets.
+
+**Fix:** After `NvBufSurfaceCreate`, read actual strides from `planeParams.pitch[]`
+and `planeParams.offset[]`, use those in `gst_buffer_add_video_meta_full()`.
+
+**Test:** Verify `GstVideoMeta` strides match `NvBufSurface` planeParams on Jetson
+for NV12 1080p and RGBA 720p.
+
+---
+
+### 4.4 Caps renegotiation (mid-stream resolution change)
+
+**Problem:** If upstream changes resolution, `set_caps` recreates the buffer pool
+but doesn't drain outstanding buffers. Can crash or leak.
+
+**Fix:** In `set_caps`, deactivate old pool (which blocks until all buffers return),
+then create new pool. Handle the case where `set_caps` is called from the streaming
+thread while buffers are in-flight.
+
+**Test:** Pipeline that changes resolution every 30 frames
+(1080p → 720p → 480p → 1080p), verify no crash or leak over 200 frames.
+
+---
+
+### 4.5 LGPL-2.1 COPYING file
+
+Add `COPYING` with LGPL-2.1-or-later text. Update `meson.build` license field.
+
+---
+
+### 4.6 Jetson CI script
+
+Create `scripts/jetson-test.sh` that:
+1. Builds on Jetson
+2. Runs all unit tests
+3. Runs pipeline tests (passthrough, flip, scale, crop, combined)
+4. Runs benchmarks
+5. Reports results in CI-parseable format
+
+Document SSH-based invocation from GitHub Actions or local.
+
+---
+
+### 4.7 Fix allocator dimension heuristic
+
+**Problem:** `gst_allocator_alloc(alloc, size, NULL)` guesses dimensions from byte
+count assuming NV12. Wrong for RGBA. Wrong for non-standard resolutions.
+
+**Fix:** Add `gst_nvmm_allocator_alloc_video(alloc, video_info)` that takes explicit
+`GstVideoInfo`. The byte-size heuristic stays as fallback but logs a warning.
+
+---
+
+### 4.8 Format conversion pipeline test (NV12→RGBA)
+
+Test `nvmmconvert` doing color space conversion in a real pipeline:
+```
+videotestsrc ! nvvidconv ! NVMM NV12 ! nvmmconvert ! NVMM RGBA ! nvvidconv ! jpegenc ! file
+```
+Verify output is valid RGBA JPEG with correct colors.
+
+---
+
 ## Execution order
 
 ```
-1.1  Fix double-free          → test → ASAN
-1.2  Fix allocator map        → test → ASAN → Jetson
-1.3  Fix caps negotiation     → test → pipeline tests on Jetson
-1.5  Extract ShmHeader        → test (trivial)
-1.6  Unify mock/real headers  → test → Docker + Jetson
-1.4  Buffer pool              → test → benchmark comparison → Jetson
-2.1  DMA-buf export           → test → Jetson
-2.2  Fix appsrc polling       → test → longevity test
-2.3  Dynamic shm sizing       → test
-2.4  Style fixes              → test
-3.1  Queue/tee validation     → Jetson
-3.2  Multi-consumer IPC       → TSAN + Jetson
-3.3  Stress tests             → Jetson (10min longevity)
-3.4  TSAN full sweep          → Docker + Jetson
-3.5  ASAN full sweep          → Docker + Jetson
+Phase 1 (done): 1.1-1.6
+Phase 2 (done): 2.1-2.3
+Phase 3 (done): 3.1-3.5
+Phase 4:
+  4.5  COPYING file             → trivial
+  4.8  Format conversion test   → pipeline test on Jetson
+  4.2  BLOCK_LINEAR layout      → test with real decoder on Jetson
+  4.3  GstVideoMeta strides     → test on Jetson
+  4.1  DMA-buf fd export        → test → Jetson
+  4.7  Allocator video_info API → test → Docker + Jetson
+  4.4  Caps renegotiation       → test → stress on Jetson
+  4.6  Jetson CI script         → test
 ```
 
-Each item: implement → unit test → integration test → sanitizer → Jetson validation.
-No item is complete until all four pass.
+Each item: implement → unit test → integration test → Jetson validation.
+No item is complete until all pass.
