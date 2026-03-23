@@ -71,6 +71,7 @@ public:
 private:
     NvBufSurface* surface_ = nullptr;
     bool mapped_ = false;
+    int mapped_plane_ = -1;  // which plane is mapped (-1 = none)
 };
 
 }  // namespace nvmm

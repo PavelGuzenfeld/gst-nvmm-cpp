@@ -138,8 +138,9 @@ Result<ByteSpan> NvmmBuffer::map_read(uint32_t plane) {
         return NvmmError{ErrorCode::kMapFailed, "NvBufSurfaceMap read failed"};
     }
     mapped_ = true;
+    mapped_plane_ = static_cast<int>(plane);
 
-    NvBufSurfaceSyncForCpu(surface_, 0, static_cast<int>(plane));
+    NvBufSurfaceSyncForCpu(surface_, 0, mapped_plane_);
 
     auto& pp = surface_->surfaceList[0].planeParams;
     if (plane < pp.num_planes) {
@@ -161,6 +162,7 @@ Result<ByteSpan> NvmmBuffer::map_write(uint32_t plane) {
         return NvmmError{ErrorCode::kMapFailed, "NvBufSurfaceMap write failed"};
     }
     mapped_ = true;
+    mapped_plane_ = static_cast<int>(plane);
 
     auto& pp = surface_->surfaceList[0].planeParams;
     if (plane < pp.num_planes) {
@@ -176,15 +178,13 @@ Result<void> NvmmBuffer::unmap() {
         return Result<void>{};
     }
 
-    auto& pp = surface_->surfaceList[0].planeParams;
-    for (uint32_t p = 0; p < pp.num_planes; p++) {
-        NvBufSurfaceSyncForDevice(surface_, 0, static_cast<int>(p));
-    }
-    int ret = NvBufSurfaceUnMap(surface_, 0, -1);
+    NvBufSurfaceSyncForDevice(surface_, 0, mapped_plane_);
+    int ret = NvBufSurfaceUnMap(surface_, 0, mapped_plane_);
     if (ret != 0) {
         return NvmmError{ErrorCode::kUnmapFailed, "NvBufSurfaceUnMap failed"};
     }
     mapped_ = false;
+    mapped_plane_ = -1;
     return Result<void>{};
 }
 
