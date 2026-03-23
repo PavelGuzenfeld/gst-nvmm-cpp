@@ -104,23 +104,11 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
     gint h = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
     GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&self->priv->video_info);
 
-    /* Create NvBufSurface with exact format/dimensions */
-    nvmm::SurfaceParams sp;
-    sp.width = static_cast<uint32_t>(w);
-    sp.height = static_cast<uint32_t>(h);
-    sp.color_format = gst_format_to_nvmm(fmt);
-    sp.mem_type = nvmm::MemoryType::kDefault;
-
-    auto result = nvmm::NvmmBuffer::create(sp);
-    if (!result) {
-        GST_ERROR_OBJECT(pool, "NvBufSurfaceCreate failed");
-        return GST_FLOW_ERROR;
-    }
-
-    gsize buf_size = static_cast<gsize>(result.value().data_size());
-
-    /* Allocate GstMemory via our allocator (wraps the surface) */
-    GstMemory* mem = gst_allocator_alloc(self->priv->allocator, buf_size, NULL);
+    /* Allocate with exact format/dimensions — NOT the byte-size heuristic */
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(self->priv->allocator,
+                                                      static_cast<int>(fmt),
+                                                      static_cast<guint>(w),
+                                                      static_cast<guint>(h));
     if (!mem) {
         GST_ERROR_OBJECT(pool, "Failed to allocate NVMM GstMemory");
         return GST_FLOW_ERROR;
