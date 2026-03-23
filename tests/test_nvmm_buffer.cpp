@@ -4,6 +4,12 @@
 #include "nvmm_buffer.hpp"
 #include "nvmm_types.hpp"
 
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
+
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -85,6 +91,30 @@ TEST(move_semantics) {
     nvmm::NvmmBuffer moved = std::move(result.value());
     ASSERT_TRUE(moved.valid());
     ASSERT_EQ(moved.width(), 320u);
+}
+
+TEST(release_prevents_destroy) {
+    nvmm::SurfaceParams params;
+    params.width = 64;
+    params.height = 64;
+    params.color_format = nvmm::ColorFormat::kNV12;
+    params.mem_type = nvmm::MemoryType::kDefault;
+
+    NvBufSurface* raw_ptr = nullptr;
+    {
+        auto result = nvmm::NvmmBuffer::create(params);
+        ASSERT_TRUE(result.has_value());
+        raw_ptr = result.value().release();
+        ASSERT_TRUE(raw_ptr != nullptr);
+        ASSERT_TRUE(!result.value().valid());
+        /* Destructor runs here — must NOT call NvBufSurfaceDestroy */
+    }
+    /* Surface should still be valid after NvmmBuffer is destroyed */
+    ASSERT_TRUE(raw_ptr->surfaceList != nullptr);
+    ASSERT_EQ(raw_ptr->surfaceList[0].width, 64u);
+
+    /* Clean up manually */
+    NvBufSurfaceDestroy(raw_ptr);
 }
 
 TEST(map_read) {

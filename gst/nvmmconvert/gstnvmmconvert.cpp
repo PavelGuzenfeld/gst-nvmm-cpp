@@ -143,7 +143,7 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
         return GST_FLOW_ERROR;
     }
 
-    /* Wrap raw surfaces (non-owning, so we use a temporary) */
+    /* Wrap raw surfaces — we don't own these, so release() after use */
     nvmm::NvmmBuffer src_buf{src_surface};
     nvmm::NvmmBuffer dst_buf{dst_surface};
 
@@ -153,10 +153,9 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
 
     auto result = nvmm::NvmmTransform::transform(src_buf, dst_buf, params);
 
-    /* Release without destroying — we don't own these surfaces */
-    /* This is a design limitation of wrapping raw pointers; in production,
-       we'd use a separate non-owning view type. For now, we leak the raw
-       pointer out to prevent double-free. */
+    /* Release ownership — these surfaces belong to the pipeline allocator */
+    src_buf.release();
+    dst_buf.release();
 
     if (!result) {
         GST_ERROR_OBJECT(self, "Transform failed: %s", result.error().detail.c_str());

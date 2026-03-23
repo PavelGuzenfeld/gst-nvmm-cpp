@@ -44,6 +44,17 @@ public:
     /// Get the raw NvBufSurface pointer (non-owning).
     NvBufSurface* raw() const noexcept { return surface_; }
 
+    /// Release ownership of the surface. Returns the raw pointer
+    /// and nullifies internal state. The caller is now responsible
+    /// for calling NvBufSurfaceDestroy. Use this when wrapping a
+    /// borrowed surface that must not be destroyed by this object.
+    NvBufSurface* release() noexcept {
+        NvBufSurface* s = surface_;
+        surface_ = nullptr;
+        mapped_ = false;
+        return s;
+    }
+
     /// Get surface info
     uint32_t width() const noexcept;
     uint32_t height() const noexcept;
