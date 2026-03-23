@@ -245,8 +245,10 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | map/unmap | NV12 480p | 49 | 39 | 61 |
 | VIC transform | 1080p -> 480p | **35** | 27 | 49 |
 | VIC transform | 1080p -> 720p | **95** | 85 | 114 |
+| VIC transform | 4K -> 1080p | **285** | 217 | 459 |
+| VIC transform | 4K -> 480p | **31** | 26 | 67 |
 
-Orin allocation is **5x faster** than Xavier NX. VIC transform is **~56x faster** for 1080p->480p.
+Orin allocation is **5x faster** than Xavier NX. VIC transform **14-114x faster** depending on resolution.
 
 Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
 
