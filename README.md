@@ -71,9 +71,11 @@ Auto-detects video format, resolution, and plane layout from the `ShmHeader` on 
 A `GstAllocator` subclass that wraps `NvBufSurfaceCreate` / `NvBufSurfaceDestroy` with proper `GstMemory` semantics.
 
 ```cpp
-// Allocate an NVMM buffer
+// Allocate an NVMM buffer with explicit video format/dimensions
+// (follows the GstGLMemory/GstVulkanImageMemory pattern)
 GstAllocator *alloc = gst_nvmm_allocator_new(0 /* NVBUF_MEM_DEFAULT */);
-GstMemory *mem = gst_allocator_alloc(alloc, 1920 * 1080 * 3 / 2, NULL);
+GstMemory *mem = gst_nvmm_allocator_alloc_video(alloc,
+    GST_VIDEO_FORMAT_NV12, 1920, 1080);
 
 // Check if memory is NVMM
 if (gst_is_nvmm_memory(mem)) {
