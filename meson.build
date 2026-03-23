@@ -1,5 +1,5 @@
 project('gst-nvmm-cpp', ['c', 'cpp'],
-  version : '0.1.0',
+  version : '1.0.0',
   meson_version : '>= 0.62.0',
   license : 'LGPL-2.1-or-later',
   default_options : [

@@ -311,7 +311,7 @@ GST_PLUGIN_DEFINE(
     nvmmappsrc,
     "NVMM shared memory source for zero-copy IPC",
     plugin_init,
-    "0.1.0",
+    "1.0.0",
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"
