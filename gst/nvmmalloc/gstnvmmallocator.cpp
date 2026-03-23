@@ -66,13 +66,11 @@ static GstMemory* gst_nvmm_allocator_alloc(GstAllocator* allocator,
     auto* mem = new GstNvmmMemory{};
     auto actual_size = static_cast<gsize>((*result).data_size());
 
-    /* NVMM memory is NOT directly mappable via gst_memory_map() because
-       planes are not contiguous on Jetson SURFACE_ARRAY. Use
-       gst_nvmm_memory_map_plane() for CPU access, or access the
-       NvBufSurface directly via gst_nvmm_memory_get_surface(). */
+    /* NVMM convention: gst_memory_map returns the NvBufSurface* pointer.
+       This is what NVIDIA's nvvidconv/nvv4l2 elements expect.
+       For actual CPU pixel access, use gst_nvmm_memory_map_plane(). */
     gst_memory_init(GST_MEMORY_CAST(mem),
-                    static_cast<GstMemoryFlags>(
-                        GST_MEMORY_FLAG_NO_SHARE | GST_MEMORY_FLAG_NOT_MAPPABLE),
+                    GST_MEMORY_FLAG_NO_SHARE,
                     allocator, nullptr, actual_size, 0, 0, actual_size);
 
     mem->buffer = std::make_unique<nvmm::NvmmBuffer>(std::move(*result));
@@ -88,14 +86,16 @@ static void gst_nvmm_allocator_free(GstAllocator* allocator, GstMemory* memory) 
 
 static gpointer gst_nvmm_allocator_mem_map(GstMemory* memory, gsize maxsize,
                                              GstMapFlags flags) {
-    (void)memory;
     (void)maxsize;
     (void)flags;
-    /* NVMM memory should not be mapped via GstMemory. Use
-       gst_nvmm_memory_map_plane() or gst_nvmm_memory_get_surface(). */
-    GST_WARNING("Direct map of NVMM memory not supported. "
-                "Use gst_nvmm_memory_map_plane() for per-plane CPU access.");
-    return nullptr;
+    /* NVIDIA convention: mapped data = NvBufSurface*.
+       This is NOT a CPU-accessible pixel pointer. NVIDIA elements
+       (nvvidconv, nvv4l2decoder etc.) cast this back to NvBufSurface*
+       to access the hardware buffer.
+       For actual CPU pixel access, use gst_nvmm_memory_map_plane(). */
+    auto* mem = reinterpret_cast<GstNvmmMemory*>(memory);
+    if (!mem->buffer) return nullptr;
+    return mem->buffer->raw();
 }
 
 static void gst_nvmm_allocator_mem_unmap(GstMemory* memory) {

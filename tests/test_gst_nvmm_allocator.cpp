@@ -49,15 +49,20 @@ static void test_allocator_alloc_free() {
     PASS();
 }
 
-static void test_direct_map_rejected() {
+static void test_direct_map_returns_surface() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
     GstMemory* mem = gst_allocator_alloc(alloc, 640 * 480 * 3 / 2, NULL);
     ASSERT_NOT_NULL(mem);
 
-    /* Direct gst_memory_map should fail — NVMM is not directly mappable */
+    /* NVIDIA convention: gst_memory_map returns NvBufSurface* (not pixels).
+       This is required for interop with nvvidconv, nvv4l2decoder etc. */
     GstMapInfo map_info;
     gboolean ok = gst_memory_map(mem, &map_info, GST_MAP_READ);
-    ASSERT_TRUE(!ok);
+    ASSERT_TRUE(ok);
+    ASSERT_NOT_NULL(map_info.data);
+    /* map_info.data should equal the NvBufSurface* */
+    ASSERT_TRUE(map_info.data == gst_nvmm_memory_get_surface(mem));
+    gst_memory_unmap(mem, &map_info);
 
     gst_memory_unref(mem);
     gst_object_unref(alloc);
@@ -127,7 +132,7 @@ int main(int argc, char* argv[]) {
 
     RUN_TEST(allocator_creates);
     RUN_TEST(allocator_alloc_free);
-    RUN_TEST(direct_map_rejected);
+    RUN_TEST(direct_map_returns_surface);
     RUN_TEST(per_plane_map);
     RUN_TEST(per_plane_write_read_roundtrip);
     RUN_TEST(non_nvmm_memory_rejected);

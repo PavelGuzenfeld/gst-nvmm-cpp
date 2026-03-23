@@ -8,27 +8,11 @@
 namespace {
 
 // Caps template for NVMM video
-const char* kSinkCapsStr =
+const char* kCapsStr =
     "video/x-raw(memory:NVMM), "
     "format=(string){NV12, RGBA, I420, BGRA}, "
     "width=(int)[1, 8192], height=(int)[1, 8192], "
     "framerate=(fraction)[0/1, 240/1]";
-
-const char* kSrcCapsStr =
-    "video/x-raw(memory:NVMM), "
-    "format=(string){NV12, RGBA, I420, BGRA}, "
-    "width=(int)[1, 8192], height=(int)[1, 8192], "
-    "framerate=(fraction)[0/1, 240/1]";
-
-nvmm::ColorFormat gst_format_to_nvmm(GstVideoFormat fmt) {
-    switch (fmt) {
-        case GST_VIDEO_FORMAT_NV12:  return nvmm::ColorFormat::kNV12;
-        case GST_VIDEO_FORMAT_RGBA:  return nvmm::ColorFormat::kRGBA;
-        case GST_VIDEO_FORMAT_BGRA:  return nvmm::ColorFormat::kBGRA;
-        case GST_VIDEO_FORMAT_I420:  return nvmm::ColorFormat::kI420;
-        default:                     return nvmm::ColorFormat::kNV12;
-    }
-}
 
 }  // namespace
 
@@ -80,15 +64,41 @@ static void gst_nvmm_convert_get_property(GObject* object, guint prop_id,
     }
 }
 
-static GstCaps* gst_nvmm_convert_transform_caps(GstBaseTransform* trans,
-                                                  GstPadDirection direction,
-                                                  GstCaps* caps,
-                                                  GstCaps* filter) {
+/* Remove format info and rangify size — allows format conversion + scaling */
+static GstCaps*
+remove_format_and_rangify(GstCaps* caps)
+{
+    GstCaps* result = gst_caps_new_empty();
+
+    for (guint i = 0; i < gst_caps_get_size(caps); i++) {
+        GstStructure* s = gst_structure_copy(gst_caps_get_structure(caps, i));
+        GstCapsFeatures* f = gst_caps_features_copy(
+            gst_caps_get_features(caps, i));
+
+        /* Remove format — we can convert between any supported format */
+        gst_structure_remove_fields(s, "format", "colorimetry", "chroma-site",
+                                    NULL);
+        /* Rangify size — we can scale to any dimension */
+        gst_structure_set(s,
+            "width", GST_TYPE_INT_RANGE, 1, 8192,
+            "height", GST_TYPE_INT_RANGE, 1, 8192,
+            NULL);
+
+        gst_caps_append_structure_full(result, s, f);
+    }
+    return result;
+}
+
+static GstCaps*
+gst_nvmm_convert_transform_caps(GstBaseTransform* trans,
+                                 GstPadDirection direction,
+                                 GstCaps* caps,
+                                 GstCaps* filter)
+{
     (void)trans;
     (void)direction;
 
-    /* We can transform to any supported format/resolution within NVMM */
-    GstCaps* result = gst_caps_from_string(kSrcCapsStr);
+    GstCaps* result = remove_format_and_rangify(caps);
 
     if (filter) {
         GstCaps* tmp = gst_caps_intersect_full(result, filter,
@@ -97,8 +107,71 @@ static GstCaps* gst_nvmm_convert_transform_caps(GstBaseTransform* trans,
         result = tmp;
     }
 
-    (void)caps;
     return result;
+}
+
+static GstCaps*
+gst_nvmm_convert_fixate_caps(GstBaseTransform* trans,
+                              GstPadDirection direction,
+                              GstCaps* caps,
+                              GstCaps* othercaps)
+{
+    auto* self = GST_NVMM_CONVERT(trans);
+    GstStructure* ins = gst_caps_get_structure(caps, 0);
+    GstStructure* outs;
+
+    othercaps = gst_caps_truncate(othercaps);
+    othercaps = gst_caps_make_writable(othercaps);
+    outs = gst_caps_get_structure(othercaps, 0);
+
+    /* Prefer input format if output doesn't specify one */
+    if (direction == GST_PAD_SINK) {
+        const gchar* in_fmt = gst_structure_get_string(ins, "format");
+        if (in_fmt && !gst_structure_has_field(outs, "format")) {
+            gst_structure_set(outs, "format", G_TYPE_STRING, in_fmt, NULL);
+        }
+    }
+
+    /* Fixate dimensions: prefer crop size if set, otherwise input size */
+    gint in_w = 0, in_h = 0;
+    gst_structure_get_int(ins, "width", &in_w);
+    gst_structure_get_int(ins, "height", &in_h);
+
+    if (direction == GST_PAD_SINK) {
+        /* If crop is configured, output dimensions = crop dimensions */
+        if (self->priv->crop.is_valid()) {
+            gst_structure_fixate_field_nearest_int(outs, "width",
+                static_cast<int>(self->priv->crop.width));
+            gst_structure_fixate_field_nearest_int(outs, "height",
+                static_cast<int>(self->priv->crop.height));
+        } else if (in_w > 0 && in_h > 0) {
+            /* No crop: prefer input dimensions */
+            gst_structure_fixate_field_nearest_int(outs, "width", in_w);
+            gst_structure_fixate_field_nearest_int(outs, "height", in_h);
+        }
+    } else {
+        /* SRC→SINK: prefer output dimensions as input dimensions */
+        if (in_w > 0 && in_h > 0) {
+            gst_structure_fixate_field_nearest_int(outs, "width", in_w);
+            gst_structure_fixate_field_nearest_int(outs, "height", in_h);
+        }
+    }
+
+    othercaps = gst_caps_fixate(othercaps);
+    return othercaps;
+}
+
+static gboolean
+gst_nvmm_convert_get_unit_size(GstBaseTransform* trans, GstCaps* caps,
+                                gsize* size)
+{
+    (void)trans;
+    GstVideoInfo info;
+    if (!gst_video_info_from_caps(&info, caps)) {
+        return FALSE;
+    }
+    *size = GST_VIDEO_INFO_SIZE(&info);
+    return TRUE;
 }
 
 static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
@@ -114,12 +187,112 @@ static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
         return FALSE;
     }
 
-    GST_INFO_OBJECT(self, "Configured: %dx%d -> %dx%d",
+    GST_INFO_OBJECT(self, "Configured: %dx%d %s -> %dx%d %s",
                     GST_VIDEO_INFO_WIDTH(&self->priv->sink_info),
                     GST_VIDEO_INFO_HEIGHT(&self->priv->sink_info),
+                    gst_video_format_to_string(
+                        GST_VIDEO_INFO_FORMAT(&self->priv->sink_info)),
                     GST_VIDEO_INFO_WIDTH(&self->priv->src_info),
-                    GST_VIDEO_INFO_HEIGHT(&self->priv->src_info));
+                    GST_VIDEO_INFO_HEIGHT(&self->priv->src_info),
+                    gst_video_format_to_string(
+                        GST_VIDEO_INFO_FORMAT(&self->priv->src_info)));
+
+    /* Enable passthrough when caps match and no crop/flip */
+    gboolean same = gst_caps_is_equal(incaps, outcaps);
+    gboolean no_transform = !self->priv->crop.is_valid() &&
+                            self->priv->flip == nvmm::FlipMethod::kNone;
+    gst_base_transform_set_passthrough(trans, same && no_transform);
+
     return TRUE;
+}
+
+static GstFlowReturn
+gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
+                                        GstBuffer* inbuf,
+                                        GstBuffer** outbuf)
+{
+    auto* self = GST_NVMM_CONVERT(trans);
+
+    /* Passthrough: reuse input buffer */
+    if (gst_base_transform_is_passthrough(trans)) {
+        *outbuf = inbuf;
+        return GST_FLOW_OK;
+    }
+
+    /* Allocate NVMM output buffer matching src caps */
+    gint out_w = GST_VIDEO_INFO_WIDTH(&self->priv->src_info);
+    gint out_h = GST_VIDEO_INFO_HEIGHT(&self->priv->src_info);
+    GstVideoFormat out_fmt = GST_VIDEO_INFO_FORMAT(&self->priv->src_info);
+
+    nvmm::SurfaceParams params;
+    params.width = static_cast<uint32_t>(out_w);
+    params.height = static_cast<uint32_t>(out_h);
+    params.mem_type = nvmm::MemoryType::kDefault;
+
+    switch (out_fmt) {
+        case GST_VIDEO_FORMAT_RGBA: params.color_format = nvmm::ColorFormat::kRGBA; break;
+        case GST_VIDEO_FORMAT_BGRA: params.color_format = nvmm::ColorFormat::kBGRA; break;
+        case GST_VIDEO_FORMAT_I420: params.color_format = nvmm::ColorFormat::kI420; break;
+        default:                    params.color_format = nvmm::ColorFormat::kNV12; break;
+    }
+
+    auto result = nvmm::NvmmBuffer::create(params);
+    if (!result) {
+        GST_ERROR_OBJECT(self, "Failed to allocate NVMM output buffer");
+        return GST_FLOW_ERROR;
+    }
+
+    /* Wrap in GstMemory via our allocator */
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
+    gsize buf_size = static_cast<gsize>(result.value().data_size());
+    GstMemory* mem = gst_allocator_alloc(alloc, buf_size, NULL);
+    gst_object_unref(alloc);
+
+    if (!mem) {
+        GST_ERROR_OBJECT(self, "Failed to wrap NVMM buffer in GstMemory");
+        return GST_FLOW_ERROR;
+    }
+
+    /* Replace the surface in the allocated memory with our specific one.
+       The allocator created a generic surface; we need the one with
+       our exact format/dimensions. Swap them by getting the internal
+       memory and replacing its buffer. */
+    /* Actually, the alloc call above already created a surface with the
+       right dimensions (from the heuristic). Just use it directly. */
+
+    *outbuf = gst_buffer_new();
+    gst_buffer_append_memory(*outbuf, mem);
+
+    /* Copy timestamps */
+    gst_buffer_copy_into(*outbuf, inbuf,
+        static_cast<GstBufferCopyFlags>(GST_BUFFER_COPY_TIMESTAMPS | GST_BUFFER_COPY_FLAGS),
+        0, static_cast<gsize>(-1));
+
+    return GST_FLOW_OK;
+}
+
+/* Extract NvBufSurface from a GstBuffer — works with both our allocator
+   and NVIDIA's nvvidconv/nvv4l2 allocator. NVIDIA's convention: the mapped
+   data pointer IS the NvBufSurface*. */
+static NvBufSurface*
+get_nvbuf_surface(GstBuffer* buf)
+{
+    GstMemory* mem = gst_buffer_peek_memory(buf, 0);
+
+    /* Try our allocator first */
+    if (gst_is_nvmm_memory(mem)) {
+        return static_cast<NvBufSurface*>(gst_nvmm_memory_get_surface(mem));
+    }
+
+    /* NVIDIA convention: map the buffer, data pointer = NvBufSurface* */
+    GstMapInfo map;
+    if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
+        auto* surface = reinterpret_cast<NvBufSurface*>(map.data);
+        gst_buffer_unmap(buf, &map);
+        return surface;
+    }
+
+    return nullptr;
 }
 
 static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
@@ -127,19 +300,11 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
                                                   GstBuffer* outbuf) {
     auto* self = GST_NVMM_CONVERT(trans);
 
-    GstMemory* in_mem = gst_buffer_peek_memory(inbuf, 0);
-    GstMemory* out_mem = gst_buffer_peek_memory(outbuf, 0);
-
-    if (!gst_is_nvmm_memory(in_mem) || !gst_is_nvmm_memory(out_mem)) {
-        GST_ERROR_OBJECT(self, "Input/output must be NVMM memory");
-        return GST_FLOW_ERROR;
-    }
-
-    auto* src_surface = static_cast<NvBufSurface*>(gst_nvmm_memory_get_surface(in_mem));
-    auto* dst_surface = static_cast<NvBufSurface*>(gst_nvmm_memory_get_surface(out_mem));
+    auto* src_surface = get_nvbuf_surface(inbuf);
+    auto* dst_surface = get_nvbuf_surface(outbuf);
 
     if (!src_surface || !dst_surface) {
-        GST_ERROR_OBJECT(self, "Failed to get NvBufSurface from memory");
+        GST_ERROR_OBJECT(self, "Failed to get NvBufSurface from buffers");
         return GST_FLOW_ERROR;
     }
 
@@ -196,18 +361,21 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
         "Crop, scale, and convert video using Tegra VIC (NvBufSurfTransform)",
         "Pavel Guzenfeld");
 
-    GstCaps* sink_caps = gst_caps_from_string(kSinkCapsStr);
-    GstCaps* src_caps = gst_caps_from_string(kSrcCapsStr);
+    GstCaps* caps = gst_caps_from_string(kCapsStr);
     gst_element_class_add_pad_template(element_class,
-        gst_pad_template_new("sink", GST_PAD_SINK, GST_PAD_ALWAYS, sink_caps));
+        gst_pad_template_new("sink", GST_PAD_SINK, GST_PAD_ALWAYS, caps));
     gst_element_class_add_pad_template(element_class,
-        gst_pad_template_new("src", GST_PAD_SRC, GST_PAD_ALWAYS, src_caps));
-    gst_caps_unref(sink_caps);
-    gst_caps_unref(src_caps);
+        gst_pad_template_new("src", GST_PAD_SRC, GST_PAD_ALWAYS, caps));
+    gst_caps_unref(caps);
 
     transform_class->transform_caps = gst_nvmm_convert_transform_caps;
+    transform_class->fixate_caps = gst_nvmm_convert_fixate_caps;
+    transform_class->get_unit_size = gst_nvmm_convert_get_unit_size;
     transform_class->set_caps = gst_nvmm_convert_set_caps;
+    transform_class->prepare_output_buffer = gst_nvmm_convert_prepare_output_buffer;
     transform_class->transform = gst_nvmm_convert_transform;
+
+    transform_class->passthrough_on_same_caps = TRUE;
 }
 
 static void gst_nvmm_convert_init(GstNvmmConvert* self) {
