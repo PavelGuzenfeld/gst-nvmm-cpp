@@ -1,7 +1,65 @@
+/// NvmmBuffer implementation using mock NvBufSurface API.
+/// Struct layout matches real API — same code works for both.
 #include "nvmm_buffer.hpp"
 #include "nvbufsurface_mock.h"
 
+#include <string>
+
 namespace nvmm {
+
+namespace {
+
+NvBufSurfaceColorFormat to_nv_format(ColorFormat fmt) {
+    switch (fmt) {
+        case ColorFormat::kNV12:  return NVBUF_COLOR_FORMAT_NV12;
+        case ColorFormat::kRGBA:  return NVBUF_COLOR_FORMAT_RGBA;
+        case ColorFormat::kBGRA:  return NVBUF_COLOR_FORMAT_BGRA;
+        case ColorFormat::kI420:  return NVBUF_COLOR_FORMAT_YUV420;
+        case ColorFormat::kNV21:  return NVBUF_COLOR_FORMAT_NV21;
+        case ColorFormat::kGRAY8: return NVBUF_COLOR_FORMAT_GRAY8;
+    }
+    return NVBUF_COLOR_FORMAT_NV12;
+}
+
+ColorFormat from_nv_format(NvBufSurfaceColorFormat fmt) {
+    switch (fmt) {
+        case NVBUF_COLOR_FORMAT_NV12:    return ColorFormat::kNV12;
+        case NVBUF_COLOR_FORMAT_RGBA:    return ColorFormat::kRGBA;
+        case NVBUF_COLOR_FORMAT_BGRA:    return ColorFormat::kBGRA;
+        case NVBUF_COLOR_FORMAT_YUV420:  return ColorFormat::kI420;
+        case NVBUF_COLOR_FORMAT_NV21:    return ColorFormat::kNV21;
+        case NVBUF_COLOR_FORMAT_GRAY8:   return ColorFormat::kGRAY8;
+        default:                         return ColorFormat::kNV12;
+    }
+}
+
+NvBufSurfaceMemType to_nv_memtype(MemoryType mt) {
+    switch (mt) {
+        case MemoryType::kDefault:      return NVBUF_MEM_DEFAULT;
+        case MemoryType::kCudaDevice:   return NVBUF_MEM_CUDA_DEVICE;
+        case MemoryType::kCudaPinned:   return NVBUF_MEM_CUDA_PINNED;
+        case MemoryType::kCudaUnified:  return NVBUF_MEM_CUDA_UNIFIED;
+        case MemoryType::kSurfaceArray: return NVBUF_MEM_SURFACE_ARRAY;
+        case MemoryType::kHandle:       return NVBUF_MEM_HANDLE;
+        case MemoryType::kSystemHeap:   return NVBUF_MEM_SYSTEM;
+    }
+    return NVBUF_MEM_DEFAULT;
+}
+
+MemoryType from_nv_memtype(NvBufSurfaceMemType mt) {
+    switch (mt) {
+        case NVBUF_MEM_DEFAULT:       return MemoryType::kDefault;
+        case NVBUF_MEM_CUDA_DEVICE:   return MemoryType::kCudaDevice;
+        case NVBUF_MEM_CUDA_PINNED:   return MemoryType::kCudaPinned;
+        case NVBUF_MEM_CUDA_UNIFIED:  return MemoryType::kCudaUnified;
+        case NVBUF_MEM_SURFACE_ARRAY: return MemoryType::kSurfaceArray;
+        case NVBUF_MEM_HANDLE:        return MemoryType::kHandle;
+        case NVBUF_MEM_SYSTEM:        return MemoryType::kSystemHeap;
+    }
+    return MemoryType::kDefault;
+}
+
+}  // namespace
 
 NvmmBuffer::NvmmBuffer(NvBufSurface* surface) noexcept : surface_(surface) {}
 
@@ -43,10 +101,10 @@ Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
     NvBufSurfaceCreateParams create_params{};
     create_params.width = params.width;
     create_params.height = params.height;
-    create_params.colorFormat = static_cast<NvBufSurfaceColorFormat>(params.color_format);
-    create_params.memType = static_cast<NvBufSurfaceMemType>(params.mem_type);
+    create_params.colorFormat = to_nv_format(params.color_format);
+    create_params.memType = to_nv_memtype(params.mem_type);
     create_params.size = 0;
-    create_params.layout = 0;
+    create_params.layout = NVBUF_LAYOUT_PITCH;
     create_params.isContiguous = 1;
 
     NvBufSurface* surface = nullptr;
@@ -56,6 +114,7 @@ Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
                          "NvBufSurfaceCreate returned " + std::to_string(ret)};
     }
 
+    surface->numFilled = surface->batchSize;
     return NvmmBuffer{surface};
 }
 
@@ -74,18 +133,21 @@ Result<ByteSpan> NvmmBuffer::map_read(uint32_t plane) {
     }
 
     int ret = NvBufSurfaceMap(surface_, 0, static_cast<int>(plane),
-                              0 /* NVBUF_MAP_READ */);
+                              NVBUF_MAP_READ);
     if (ret != 0) {
         return NvmmError{ErrorCode::kMapFailed, "NvBufSurfaceMap read failed"};
     }
     mapped_ = true;
 
-    auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr);
-    if (plane < surface_->surfaceList[0].planeParams.num_planes) {
-        auto& pp = surface_->surfaceList[0].planeParams.planeParams[plane];
-        return ByteSpan{addr + pp.offset, pp.psize};
+    NvBufSurfaceSyncForCpu(surface_, 0, static_cast<int>(plane));
+
+    auto& pp = surface_->surfaceList[0].planeParams;
+    if (plane < pp.num_planes) {
+        auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr.addr[plane]);
+        return ByteSpan(addr, pp.psize[plane]);
     }
-    return ByteSpan{addr, surface_->surfaceList[0].dataSize};
+    auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr.addr[0]);
+    return ByteSpan(addr, surface_->surfaceList[0].dataSize);
 }
 
 Result<ByteSpan> NvmmBuffer::map_write(uint32_t plane) {
@@ -94,18 +156,19 @@ Result<ByteSpan> NvmmBuffer::map_write(uint32_t plane) {
     }
 
     int ret = NvBufSurfaceMap(surface_, 0, static_cast<int>(plane),
-                              1 /* NVBUF_MAP_READ_WRITE */);
+                              NVBUF_MAP_READ_WRITE);
     if (ret != 0) {
         return NvmmError{ErrorCode::kMapFailed, "NvBufSurfaceMap write failed"};
     }
     mapped_ = true;
 
-    auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr);
-    if (plane < surface_->surfaceList[0].planeParams.num_planes) {
-        auto& pp = surface_->surfaceList[0].planeParams.planeParams[plane];
-        return ByteSpan{addr + pp.offset, pp.psize};
+    auto& pp = surface_->surfaceList[0].planeParams;
+    if (plane < pp.num_planes) {
+        auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr.addr[plane]);
+        return ByteSpan(addr, pp.psize[plane]);
     }
-    return ByteSpan{addr, surface_->surfaceList[0].dataSize};
+    auto* addr = static_cast<uint8_t*>(surface_->surfaceList[0].mappedAddr.addr[0]);
+    return ByteSpan(addr, surface_->surfaceList[0].dataSize);
 }
 
 Result<void> NvmmBuffer::unmap() {
@@ -113,6 +176,10 @@ Result<void> NvmmBuffer::unmap() {
         return Result<void>{};
     }
 
+    auto& pp = surface_->surfaceList[0].planeParams;
+    for (uint32_t p = 0; p < pp.num_planes; p++) {
+        NvBufSurfaceSyncForDevice(surface_, 0, static_cast<int>(p));
+    }
     int ret = NvBufSurfaceUnMap(surface_, 0, -1);
     if (ret != 0) {
         return NvmmError{ErrorCode::kUnmapFailed, "NvBufSurfaceUnMap failed"};
@@ -126,10 +193,9 @@ Result<int> NvmmBuffer::export_fd() const {
         return NvmmError{ErrorCode::kInvalidParam, "null surface"};
     }
 
-    int fd = -1;
-    int ret = NvBufSurfaceGetFd(surface_, 0, &fd);
-    if (ret != 0) {
-        return NvmmError{ErrorCode::kDmaBufFailed, "NvBufSurfaceGetFd failed"};
+    int fd = static_cast<int>(surface_->surfaceList[0].bufferDesc);
+    if (fd < 0) {
+        return NvmmError{ErrorCode::kDmaBufFailed, "no DMA-buf fd available"};
     }
     return fd;
 }
@@ -143,12 +209,12 @@ uint32_t NvmmBuffer::height() const noexcept {
 }
 
 ColorFormat NvmmBuffer::format() const noexcept {
-    return surface_ ? static_cast<ColorFormat>(surface_->surfaceList[0].colorFormat)
+    return surface_ ? from_nv_format(surface_->surfaceList[0].colorFormat)
                     : ColorFormat::kNV12;
 }
 
 MemoryType NvmmBuffer::mem_type() const noexcept {
-    return surface_ ? static_cast<MemoryType>(surface_->memType)
+    return surface_ ? from_nv_memtype(surface_->memType)
                     : MemoryType::kDefault;
 }
 
@@ -160,8 +226,15 @@ PlaneInfo NvmmBuffer::plane_info(uint32_t plane) const noexcept {
     if (!surface_ || plane >= surface_->surfaceList[0].planeParams.num_planes) {
         return {};
     }
-    auto& pp = surface_->surfaceList[0].planeParams.planeParams[plane];
-    return PlaneInfo{pp.width, pp.height, pp.pitch, pp.offset, pp.psize, pp.bytesPerPix};
+    auto& pp = surface_->surfaceList[0].planeParams;
+    PlaneInfo info;
+    info.width = pp.width[plane];
+    info.height = pp.height[plane];
+    info.pitch = pp.pitch[plane];
+    info.offset = pp.offset[plane];
+    info.size = pp.psize[plane];
+    info.bytes_per_pixel = pp.bytesPerPix[plane];
+    return info;
 }
 
 uint32_t NvmmBuffer::data_size() const noexcept {

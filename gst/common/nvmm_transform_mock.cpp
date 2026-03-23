@@ -1,7 +1,29 @@
+/// NvmmTransform implementation using mock NvBufSurface API.
+/// Same logic as the real implementation — struct layouts match.
 #include "nvmm_transform.hpp"
 #include "nvbufsurface_mock.h"
 
+#include <string>
+
 namespace nvmm {
+
+namespace {
+
+NvBufSurfTransform_Flip to_nv_flip(FlipMethod flip) {
+    switch (flip) {
+        case FlipMethod::kNone:                       return NvBufSurfTransform_None;
+        case FlipMethod::kRotate90CW:                 return NvBufSurfTransform_Rotate90;
+        case FlipMethod::kRotate180:                  return NvBufSurfTransform_Rotate180;
+        case FlipMethod::kRotate90CCW:                return NvBufSurfTransform_Rotate270;
+        case FlipMethod::kFlipHorizontal:             return NvBufSurfTransform_FlipX;
+        case FlipMethod::kFlipUpperRightToLowerLeft:  return NvBufSurfTransform_Transpose;
+        case FlipMethod::kFlipVertical:               return NvBufSurfTransform_FlipY;
+        case FlipMethod::kFlipUpperLeftToLowerRight:  return NvBufSurfTransform_InvTranspose;
+    }
+    return NvBufSurfTransform_None;
+}
+
+}  // namespace
 
 Result<void> NvmmTransform::transform(
     const NvmmBuffer& src, NvmmBuffer& dst, const TransformParams& params) {
@@ -10,7 +32,7 @@ Result<void> NvmmTransform::transform(
     }
 
     NvBufSurfTransformParams xform{};
-    xform.flip = static_cast<NvBufSurfTransform_Flip>(params.flip);
+    xform.transform_flip = to_nv_flip(params.flip);
 
     NvBufSurfTransformRect src_rect{};
     NvBufSurfTransformRect dst_rect{};
@@ -21,7 +43,7 @@ Result<void> NvmmTransform::transform(
         src_rect.width = params.src_crop.width;
         src_rect.height = params.src_crop.height;
         xform.src_rect = &src_rect;
-        xform.transform_flag |= 1; // NVBUFSURF_TRANSFORM_CROP_SRC
+        xform.transform_flag |= NVBUFSURF_TRANSFORM_CROP_SRC;
     }
 
     if (params.dst_crop.is_valid()) {
@@ -30,17 +52,17 @@ Result<void> NvmmTransform::transform(
         dst_rect.width = params.dst_crop.width;
         dst_rect.height = params.dst_crop.height;
         xform.dst_rect = &dst_rect;
-        xform.transform_flag |= 2; // NVBUFSURF_TRANSFORM_CROP_DST
+        xform.transform_flag |= NVBUFSURF_TRANSFORM_CROP_DST;
     }
 
     if (params.flip != FlipMethod::kNone) {
-        xform.transform_flag |= 4; // NVBUFSURF_TRANSFORM_FLIP
+        xform.transform_flag |= NVBUFSURF_TRANSFORM_FLIP;
     }
 
-    int ret = NvBufSurfTransform(src.raw(), dst.raw(), &xform);
-    if (ret != 0) {
+    NvBufSurfTransform_Error ret = NvBufSurfTransform(src.raw(), dst.raw(), &xform);
+    if (ret != NvBufSurfTransformError_Success) {
         return NvmmError{ErrorCode::kTransformFailed,
-                         "NvBufSurfTransform returned " + std::to_string(ret)};
+                         "NvBufSurfTransform returned " + std::to_string(static_cast<int>(ret))};
     }
     return Result<void>{};
 }
