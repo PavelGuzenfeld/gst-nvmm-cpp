@@ -14,29 +14,9 @@
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-/// Must match the ShmHeader from gstnvmmsink.cpp
-namespace {
+#include "shm_protocol.h"
 
-struct ShmHeader {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;
-    uint32_t data_size;
-    uint32_t num_planes;
-    uint32_t pitches[4];
-    uint32_t offsets[4];
-    int32_t  dmabuf_fd;
-    uint64_t frame_number;
-    uint64_t timestamp_ns;
-    uint32_t ready;
-    uint32_t _reserved[8];
-};
-
-static constexpr uint32_t kShmMagic = 0x4E564D4D;
-
-}  // namespace
+typedef NvmmShmHeader ShmHeader;
 
 enum {
     PROP_0,
@@ -195,7 +175,7 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     __sync_synchronize();
 
     /* Validate header */
-    if (header->magic != kShmMagic) {
+    if (header->magic != NVMM_SHM_MAGIC) {
         GST_ERROR_OBJECT(self, "Invalid shm magic: 0x%08x", header->magic);
         return GST_FLOW_ERROR;
     }

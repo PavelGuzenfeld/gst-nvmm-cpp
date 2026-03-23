@@ -16,33 +16,9 @@
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-/// Shared memory layout:
-///   [ ShmHeader ][ frame data (dataSize bytes) ]
-///
-/// ShmHeader contains metadata for the consumer to interpret the frame.
-namespace {
+#include "shm_protocol.h"
 
-struct ShmHeader {
-    uint32_t magic;           // 0x4E564D4D ("NVMM")
-    uint32_t version;         // protocol version
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;          // NvBufSurfaceColorFormat
-    uint32_t data_size;       // size of frame data following this header
-    uint32_t num_planes;
-    uint32_t pitches[4];      // per-plane pitch
-    uint32_t offsets[4];      // per-plane offset
-    int32_t  dmabuf_fd;       // DMA-buf fd (-1 if not exported)
-    uint64_t frame_number;    // monotonic frame counter
-    uint64_t timestamp_ns;    // PTS in nanoseconds
-    uint32_t ready;           // set to 1 when frame is written
-    uint32_t _reserved[8];
-};
-
-static constexpr uint32_t kShmMagic = 0x4E564D4D;
-static constexpr uint32_t kShmVersion = 1;
-
-}  // namespace
+typedef NvmmShmHeader ShmHeader;
 
 enum {
     PROP_0,
@@ -209,8 +185,8 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     __sync_synchronize();
 
     /* Fill header */
-    header->magic = kShmMagic;
-    header->version = kShmVersion;
+    header->magic = NVMM_SHM_MAGIC;
+    header->version = NVMM_SHM_VERSION;
     header->width = GST_VIDEO_INFO_WIDTH(&self->priv->video_info);
     header->height = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
     header->format = static_cast<uint32_t>(

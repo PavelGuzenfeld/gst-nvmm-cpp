@@ -59,22 +59,8 @@ static void test_appsrc_properties() {
 }
 
 /// Integration test: sink writes a frame to shm, source reads it back.
-struct ShmHeader {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;
-    uint32_t data_size;
-    uint32_t num_planes;
-    uint32_t pitches[4];
-    uint32_t offsets[4];
-    int32_t  dmabuf_fd;
-    uint64_t frame_number;
-    uint64_t timestamp_ns;
-    uint32_t ready;
-    uint32_t _reserved[8];
-};
+#include "shm_protocol.h"
+typedef NvmmShmHeader ShmHeader;
 
 static void test_sink_to_source_integration() {
     const char *shm_name = "/test_nvmm_integration";
