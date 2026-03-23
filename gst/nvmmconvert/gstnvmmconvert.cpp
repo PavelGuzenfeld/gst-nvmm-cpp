@@ -242,26 +242,7 @@ static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
                             self->priv->flip.load() == 0;
     gst_base_transform_set_passthrough(trans, same && no_transform);
 
-    /* Set up output buffer pool when not passthrough */
-    if (!(same && no_transform)) {
-        if (self->priv->pool) {
-            gst_buffer_pool_set_active(self->priv->pool, FALSE);
-            gst_object_unref(self->priv->pool);
-            self->priv->pool = NULL;
-        }
-
-        self->priv->pool = gst_nvmm_buffer_pool_new();
-        GstStructure* config = gst_buffer_pool_get_config(self->priv->pool);
-        gst_buffer_pool_config_set_params(config, outcaps,
-            GST_VIDEO_INFO_SIZE(&self->priv->src_info), 2, 8);
-        if (!gst_buffer_pool_set_config(self->priv->pool, config)) {
-            GST_ERROR_OBJECT(self, "Failed to configure output buffer pool");
-            gst_object_unref(self->priv->pool);
-            self->priv->pool = NULL;
-            return FALSE;
-        }
-        gst_buffer_pool_set_active(self->priv->pool, TRUE);
-    }
+    /* Pool setup is handled by decide_allocation */
 
     return TRUE;
 }
@@ -362,6 +343,100 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
     return GST_FLOW_OK;
 }
 
+static gboolean
+gst_nvmm_convert_propose_allocation(GstBaseTransform* trans,
+                                     GstQuery* decide_query,
+                                     GstQuery* query)
+{
+    (void)trans;
+    (void)decide_query;
+
+    /* Tell upstream we support video meta (non-standard strides) */
+    gst_query_add_allocation_meta(query, GST_VIDEO_META_API_TYPE, NULL);
+
+    /* Propose an NVMM buffer pool for upstream to use */
+    GstCaps* caps;
+    gst_query_parse_allocation(query, &caps, NULL);
+    if (caps) {
+        GstBufferPool* pool = gst_nvmm_buffer_pool_new();
+        GstStructure* config = gst_buffer_pool_get_config(pool);
+
+        GstVideoInfo info;
+        if (gst_video_info_from_caps(&info, caps)) {
+            gst_buffer_pool_config_set_params(config, caps,
+                GST_VIDEO_INFO_SIZE(&info), 2, 8);
+            if (gst_buffer_pool_set_config(pool, config)) {
+                gst_query_add_allocation_pool(query, pool,
+                    GST_VIDEO_INFO_SIZE(&info), 2, 8);
+            }
+        }
+        gst_object_unref(pool);
+    }
+
+    return TRUE;
+}
+
+static gboolean
+gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
+                                    GstQuery* query)
+{
+    auto* self = GST_NVMM_CONVERT(trans);
+
+    /* If passthrough, no output pool needed */
+    if (gst_base_transform_is_passthrough(trans)) {
+        return GST_BASE_TRANSFORM_CLASS(gst_nvmm_convert_parent_class)
+            ->decide_allocation(trans, query);
+    }
+
+    /* Check if downstream provided a pool we can use */
+    guint n_pools = gst_query_get_n_allocation_pools(query);
+    GstBufferPool* pool = NULL;
+    guint size = 0, min = 2, max = 8;
+
+    if (n_pools > 0) {
+        gst_query_parse_nth_allocation_pool(query, 0, &pool, &size, &min, &max);
+    }
+
+    /* If no pool from downstream, create our NVMM pool */
+    if (!pool) {
+        pool = gst_nvmm_buffer_pool_new();
+
+        GstCaps* outcaps;
+        gst_query_parse_allocation(query, &outcaps, NULL);
+        if (outcaps) {
+            GstVideoInfo info;
+            if (gst_video_info_from_caps(&info, outcaps)) {
+                size = GST_VIDEO_INFO_SIZE(&info);
+            }
+        }
+    }
+
+    /* Configure and activate */
+    GstStructure* config = gst_buffer_pool_get_config(pool);
+    GstCaps* outcaps;
+    gst_query_parse_allocation(query, &outcaps, NULL);
+    gst_buffer_pool_config_set_params(config, outcaps, size,
+                                       min < 2 ? 2 : min, max < 4 ? 8 : max);
+    gst_buffer_pool_set_config(pool, config);
+
+    /* Replace the pool in our private data */
+    if (self->priv->pool) {
+        gst_buffer_pool_set_active(self->priv->pool, FALSE);
+        gst_object_unref(self->priv->pool);
+    }
+    self->priv->pool = pool;
+    gst_buffer_pool_set_active(self->priv->pool, TRUE);
+
+    /* Update the query */
+    if (n_pools > 0) {
+        gst_query_set_nth_allocation_pool(query, 0, pool, size, min, max);
+    } else {
+        gst_query_add_allocation_pool(query, pool, size, min, max);
+    }
+
+    return TRUE;
+}
+
 static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
     auto* gobject_class = G_OBJECT_CLASS(klass);
     auto* element_class = GST_ELEMENT_CLASS(klass);
@@ -411,6 +486,8 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
     transform_class->get_unit_size = gst_nvmm_convert_get_unit_size;
     transform_class->set_caps = gst_nvmm_convert_set_caps;
     transform_class->stop = gst_nvmm_convert_stop;
+    transform_class->propose_allocation = gst_nvmm_convert_propose_allocation;
+    transform_class->decide_allocation = gst_nvmm_convert_decide_allocation;
     transform_class->prepare_output_buffer = gst_nvmm_convert_prepare_output_buffer;
     transform_class->transform = gst_nvmm_convert_transform;
 
