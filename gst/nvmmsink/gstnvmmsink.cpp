@@ -88,11 +88,33 @@ gst_nvmm_sink_set_caps(GstBaseSink *sink, GstCaps *caps)
         return FALSE;
     }
 
-    GST_INFO_OBJECT(self, "Configured: %dx%d format=%s",
+    /* Resize shm to match actual frame size */
+    gsize needed = sizeof(ShmHeader) + GST_VIDEO_INFO_SIZE(&self->priv->video_info);
+    if (self->priv->shm_ptr && needed > self->priv->shm_size) {
+        munmap(self->priv->shm_ptr, self->priv->shm_size);
+        self->priv->shm_ptr = nullptr;
+
+        self->priv->shm_size = needed;
+        if (ftruncate(self->priv->shm_fd, self->priv->shm_size) < 0) {
+            GST_ERROR_OBJECT(self, "ftruncate resize failed");
+            return FALSE;
+        }
+        self->priv->shm_ptr = mmap(NULL, self->priv->shm_size,
+                                    PROT_READ | PROT_WRITE, MAP_SHARED,
+                                    self->priv->shm_fd, 0);
+        if (self->priv->shm_ptr == MAP_FAILED) {
+            GST_ERROR_OBJECT(self, "mmap resize failed");
+            self->priv->shm_ptr = nullptr;
+            return FALSE;
+        }
+    }
+
+    GST_INFO_OBJECT(self, "Configured: %dx%d format=%s shm=%" G_GSIZE_FORMAT,
                     GST_VIDEO_INFO_WIDTH(&self->priv->video_info),
                     GST_VIDEO_INFO_HEIGHT(&self->priv->video_info),
                     gst_video_format_to_string(
-                        GST_VIDEO_INFO_FORMAT(&self->priv->video_info)));
+                        GST_VIDEO_INFO_FORMAT(&self->priv->video_info)),
+                    self->priv->shm_size);
     return TRUE;
 }
 
@@ -105,8 +127,8 @@ gst_nvmm_sink_start(GstBaseSink *sink)
         self->priv->shm_name = "/nvmm_sink_0";
     }
 
-    /* Estimate max shm size: header + generous frame buffer (4K RGBA) */
-    self->priv->shm_size = sizeof(ShmHeader) + (3840 * 2160 * 4);
+    /* Initial size: header only. set_caps will resize to match actual frame. */
+    self->priv->shm_size = sizeof(ShmHeader) + (640 * 480 * 4);
 
     self->priv->shm_fd = shm_open(self->priv->shm_name.c_str(),
                                    O_CREAT | O_RDWR, 0666);

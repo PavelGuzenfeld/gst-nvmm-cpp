@@ -6,9 +6,13 @@
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
 
+#include <atomic>
+
+GST_DEBUG_CATEGORY_STATIC(gst_nvmm_convert_debug);
+#define GST_CAT_DEFAULT gst_nvmm_convert_debug
+
 namespace {
 
-// Caps template for NVMM video
 const char* kCapsStr =
     "video/x-raw(memory:NVMM), "
     "format=(string){NV12, RGBA, I420, BGRA}, "
@@ -16,6 +20,29 @@ const char* kCapsStr =
     "framerate=(fraction)[0/1, 240/1]";
 
 }  // namespace
+
+#define GST_TYPE_NVMM_FLIP_METHOD (gst_nvmm_flip_method_get_type())
+static GType
+gst_nvmm_flip_method_get_type(void)
+{
+    static GType type = 0;
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            {0, "No flip", "none"},
+            {1, "Rotate 90 CW", "rotate-90"},
+            {2, "Rotate 180", "rotate-180"},
+            {3, "Rotate 90 CCW", "rotate-270"},
+            {4, "Flip horizontal", "horizontal-flip"},
+            {5, "Transpose", "upper-right-diagonal"},
+            {6, "Flip vertical", "vertical-flip"},
+            {7, "Inverse transpose", "upper-left-diagonal"},
+            {0, NULL, NULL}
+        };
+        GType tmp = g_enum_register_static("GstNvmmFlipMethod", values);
+        g_once_init_leave(&type, tmp);
+    }
+    return type;
+}
 
 enum {
     PROP_0,
@@ -27,8 +54,11 @@ enum {
 };
 
 struct _GstNvmmConvertPrivate {
-    nvmm::CropRect crop;
-    nvmm::FlipMethod flip;
+    std::atomic<uint32_t> crop_x;
+    std::atomic<uint32_t> crop_y;
+    std::atomic<uint32_t> crop_w;
+    std::atomic<uint32_t> crop_h;
+    std::atomic<int> flip;
     GstVideoInfo sink_info;
     GstVideoInfo src_info;
     GstBufferPool* pool;
@@ -44,12 +74,12 @@ static void gst_nvmm_convert_set_property(GObject* object, guint prop_id,
                                             const GValue* value, GParamSpec* pspec) {
     auto* self = GST_NVMM_CONVERT(object);
     switch (prop_id) {
-        case PROP_CROP_X: self->priv->crop.x = g_value_get_uint(value); break;
-        case PROP_CROP_Y: self->priv->crop.y = g_value_get_uint(value); break;
-        case PROP_CROP_W: self->priv->crop.width = g_value_get_uint(value); break;
-        case PROP_CROP_H: self->priv->crop.height = g_value_get_uint(value); break;
+        case PROP_CROP_X: self->priv->crop_x.store(g_value_get_uint(value)); break;
+        case PROP_CROP_Y: self->priv->crop_y.store(g_value_get_uint(value)); break;
+        case PROP_CROP_W: self->priv->crop_w.store(g_value_get_uint(value)); break;
+        case PROP_CROP_H: self->priv->crop_h.store(g_value_get_uint(value)); break;
         case PROP_FLIP_METHOD:
-            self->priv->flip = static_cast<nvmm::FlipMethod>(g_value_get_int(value));
+            self->priv->flip.store(g_value_get_enum(value));
             break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec); break;
     }
@@ -59,12 +89,12 @@ static void gst_nvmm_convert_get_property(GObject* object, guint prop_id,
                                             GValue* value, GParamSpec* pspec) {
     auto* self = GST_NVMM_CONVERT(object);
     switch (prop_id) {
-        case PROP_CROP_X: g_value_set_uint(value, self->priv->crop.x); break;
-        case PROP_CROP_Y: g_value_set_uint(value, self->priv->crop.y); break;
-        case PROP_CROP_W: g_value_set_uint(value, self->priv->crop.width); break;
-        case PROP_CROP_H: g_value_set_uint(value, self->priv->crop.height); break;
+        case PROP_CROP_X: g_value_set_uint(value, self->priv->crop_x.load()); break;
+        case PROP_CROP_Y: g_value_set_uint(value, self->priv->crop_y.load()); break;
+        case PROP_CROP_W: g_value_set_uint(value, self->priv->crop_w.load()); break;
+        case PROP_CROP_H: g_value_set_uint(value, self->priv->crop_h.load()); break;
         case PROP_FLIP_METHOD:
-            g_value_set_int(value, static_cast<int>(self->priv->flip));
+            g_value_set_enum(value, self->priv->flip.load());
             break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec); break;
     }
@@ -145,11 +175,13 @@ gst_nvmm_convert_fixate_caps(GstBaseTransform* trans,
 
     if (direction == GST_PAD_SINK) {
         /* If crop is configured, output dimensions = crop dimensions */
-        if (self->priv->crop.is_valid()) {
+        uint32_t cw = self->priv->crop_w.load();
+        uint32_t ch = self->priv->crop_h.load();
+        if (cw > 0 && ch > 0) {
             gst_structure_fixate_field_nearest_int(outs, "width",
-                static_cast<int>(self->priv->crop.width));
+                static_cast<int>(cw));
             gst_structure_fixate_field_nearest_int(outs, "height",
-                static_cast<int>(self->priv->crop.height));
+                static_cast<int>(ch));
         } else if (in_w > 0 && in_h > 0) {
             /* No crop: prefer input dimensions */
             gst_structure_fixate_field_nearest_int(outs, "width", in_w);
@@ -205,8 +237,9 @@ static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
 
     /* Enable passthrough when caps match and no crop/flip */
     gboolean same = gst_caps_is_equal(incaps, outcaps);
-    gboolean no_transform = !self->priv->crop.is_valid() &&
-                            self->priv->flip == nvmm::FlipMethod::kNone;
+    gboolean no_transform = (self->priv->crop_w.load() == 0 ||
+                             self->priv->crop_h.load() == 0) &&
+                            self->priv->flip.load() == 0;
     gst_base_transform_set_passthrough(trans, same && no_transform);
 
     /* Set up output buffer pool when not passthrough */
@@ -309,8 +342,11 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
     nvmm::NvmmBuffer dst_buf{dst_surface};
 
     nvmm::TransformParams params;
-    params.src_crop = self->priv->crop;
-    params.flip = self->priv->flip;
+    params.src_crop.x = self->priv->crop_x.load();
+    params.src_crop.y = self->priv->crop_y.load();
+    params.src_crop.width = self->priv->crop_w.load();
+    params.src_crop.height = self->priv->crop_h.load();
+    params.flip = static_cast<nvmm::FlipMethod>(self->priv->flip.load());
 
     auto result = nvmm::NvmmTransform::transform(src_buf, dst_buf, params);
 
@@ -348,9 +384,14 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
         g_param_spec_uint("crop-h", "Crop Height", "Source crop height (0 = full)",
                           0, 8192, 0, G_PARAM_READWRITE));
     g_object_class_install_property(gobject_class, PROP_FLIP_METHOD,
-        g_param_spec_int("flip-method", "Flip Method",
-                         "Video flip method (0=none, 1=90CW, 2=180, 3=90CCW, 4=flipH, 6=flipV)",
-                         0, 7, 0, G_PARAM_READWRITE));
+        g_param_spec_enum("flip-method", "Flip Method",
+                          "Video flip/rotation method",
+                          GST_TYPE_NVMM_FLIP_METHOD, 0,
+                          static_cast<GParamFlags>(G_PARAM_READWRITE |
+                              G_PARAM_STATIC_STRINGS)));
+
+    GST_DEBUG_CATEGORY_INIT(gst_nvmm_convert_debug, "nvmmconvert", 0,
+                            "NVMM video converter");
 
     gst_element_class_set_static_metadata(element_class,
         "NVMM Video Converter",
@@ -403,7 +444,10 @@ gst_nvmm_convert_finalize(GObject* object)
 static void gst_nvmm_convert_init(GstNvmmConvert* self) {
     self->priv = static_cast<GstNvmmConvertPrivate*>(
         gst_nvmm_convert_get_instance_private(self));
-    self->priv->crop = {};
-    self->priv->flip = nvmm::FlipMethod::kNone;
+    self->priv->crop_x = 0;
+    self->priv->crop_y = 0;
+    self->priv->crop_w = 0;
+    self->priv->crop_h = 0;
+    self->priv->flip = 0;
     self->priv->pool = NULL;
 }

@@ -161,12 +161,16 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
         return GST_FLOW_ERROR;
     }
 
-    /* Wait for a new ready frame (busy-poll with short sleep) */
+    /* Wait for a new ready frame. Check flushing state to allow
+       clean shutdown without blocking. */
     int attempts = 0;
     while (!header->ready || header->frame_number == self->priv->last_frame_number) {
-        if (++attempts > 100) {
-            /* Timeout — no new frame after ~100ms */
-            GST_LOG_OBJECT(self, "No new frame available, returning EOS");
+        if (GST_PAD_IS_FLUSHING(GST_BASE_SRC_PAD(push_src))) {
+            return GST_FLOW_FLUSHING;
+        }
+        if (++attempts > 500) {
+            /* 500ms without a new frame — return EOS */
+            GST_INFO_OBJECT(self, "No new frame for 500ms, returning EOS");
             return GST_FLOW_EOS;
         }
         g_usleep(1000);  /* 1ms */
