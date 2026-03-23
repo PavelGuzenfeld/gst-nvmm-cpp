@@ -36,6 +36,17 @@ GType gst_nvmm_allocator_get_type(void);
 /// mem_type: 0=default, 4=surface_array (Jetson), 6=system (mock/test)
 GstAllocator* gst_nvmm_allocator_new(int mem_type);
 
+/// Allocate NVMM memory with explicit video format and dimensions.
+/// Preferred over gst_allocator_alloc() which guesses dimensions from size.
+/// @param allocator  GstNvmmAllocator
+/// @param format     GStreamer video format (e.g. GST_VIDEO_FORMAT_NV12)
+/// @param width      Frame width in pixels
+/// @param height     Frame height in pixels
+/// @return GstMemory or NULL on failure
+GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
+                                           int format,
+                                           guint width, guint height);
+
 /// Check if a GstMemory was allocated by the NVMM allocator.
 gboolean gst_is_nvmm_memory(GstMemory* mem);
 

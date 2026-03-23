@@ -1,6 +1,7 @@
 #include "gstnvmmallocator.h"
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
 
 #include "nvmm_buffer.hpp"
 #include "nvmm_types.hpp"
@@ -29,8 +30,11 @@ static GstMemory* gst_nvmm_allocator_alloc(GstAllocator* allocator,
     (void)params;
     auto* self = GST_NVMM_ALLOCATOR(allocator);
 
-    /* Decode width/height from size — for proper usage, callers should use
-       the buffer pool path. This fallback treats size as width*height NV12. */
+    /* Decode width/height from size — callers should prefer
+       gst_nvmm_allocator_alloc_video() or the buffer pool instead. */
+    GST_WARNING_OBJECT(allocator,
+        "Allocating NVMM by size (%" G_GSIZE_FORMAT ") — use "
+        "gst_nvmm_allocator_alloc_video() for exact format/dimensions", size);
     uint32_t height = 1080;
     uint32_t width = 1920;
     if (size > 0) {
@@ -172,4 +176,44 @@ void gst_nvmm_memory_unmap_plane(GstMemory* mem) {
     if (nvmm_mem->buffer) {
         nvmm_mem->buffer->unmap();
     }
+}
+
+GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
+                                           int format,
+                                           guint width, guint height) {
+    if (!GST_IS_NVMM_ALLOCATOR(allocator) || width == 0 || height == 0) {
+        return nullptr;
+    }
+
+    auto* self = GST_NVMM_ALLOCATOR(allocator);
+
+    nvmm::SurfaceParams sp;
+    sp.width = width;
+    sp.height = height;
+    sp.mem_type = self->priv->mem_type;
+
+    switch (static_cast<GstVideoFormat>(format)) {
+        case GST_VIDEO_FORMAT_RGBA: sp.color_format = nvmm::ColorFormat::kRGBA; break;
+        case GST_VIDEO_FORMAT_BGRA: sp.color_format = nvmm::ColorFormat::kBGRA; break;
+        case GST_VIDEO_FORMAT_I420: sp.color_format = nvmm::ColorFormat::kI420; break;
+        case GST_VIDEO_FORMAT_NV21: sp.color_format = nvmm::ColorFormat::kNV21; break;
+        default:                    sp.color_format = nvmm::ColorFormat::kNV12; break;
+    }
+
+    auto result = nvmm::NvmmBuffer::create(sp);
+    if (!result) {
+        GST_ERROR_OBJECT(allocator, "Failed to create NVMM buffer %ux%u: %s",
+                         width, height, result.error().detail.c_str());
+        return nullptr;
+    }
+
+    auto* mem = new GstNvmmMemory{};
+    auto actual_size = static_cast<gsize>((*result).data_size());
+
+    gst_memory_init(GST_MEMORY_CAST(mem),
+                    GST_MEMORY_FLAG_NO_SHARE,
+                    allocator, nullptr, actual_size, 0, 0, actual_size);
+
+    mem->buffer = std::make_unique<nvmm::NvmmBuffer>(std::move(*result));
+    return GST_MEMORY_CAST(mem);
 }
