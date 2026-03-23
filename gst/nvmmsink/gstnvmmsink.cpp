@@ -3,6 +3,12 @@
 #include "nvmm_buffer.hpp"
 #include "nvmm_types.hpp"
 
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
+
 #include <cstring>
 #include <string>
 #include <atomic>
@@ -217,24 +223,42 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     header->timestamp_ns = GST_BUFFER_PTS(buffer);
     header->dmabuf_fd = -1;
 
-    /* Export DMA-buf fd if requested and memory is NVMM */
-    if (self->priv->export_dmabuf && gst_is_nvmm_memory(mem)) {
-        int fd = -1;
-        gint gfd = -1;
-        void *surface = gst_nvmm_memory_get_surface(mem);
-        if (surface) {
-            /* Try to get fd — on mock this returns a fake fd */
-            GstMemory *nvmem = mem;
-            /* Use the allocator API */
-            gboolean ok = FALSE;
-            /* Direct NvBufSurfaceGetFd via the public API */
-            /* For now, store -1; real implementation will call
-               gst_nvmm_memory_get_fd() once available on the C++ side */
-            header->dmabuf_fd = -1;
-            (void)fd;
-            (void)gfd;
-            (void)nvmem;
-            (void)ok;
+    /* Export DMA-buf fd if requested.
+       On Jetson, bufferDesc contains the DMA-buf fd for SURFACE_ARRAY memory.
+       Only attempt this for NVMM buffers — check both our allocator
+       and the negotiated caps feature. */
+    if (self->priv->export_dmabuf) {
+        gboolean is_nvmm = gst_is_nvmm_memory(mem);
+
+        /* Check caps feature for external NVMM (nvvidconv, nvv4l2) */
+        if (!is_nvmm) {
+            GstCaps *pad_caps = gst_pad_get_current_caps(
+                GST_BASE_SINK_PAD(sink));
+            if (pad_caps) {
+                GstCapsFeatures *feat = gst_caps_get_features(pad_caps, 0);
+                is_nvmm = feat && gst_caps_features_contains(feat, "memory:NVMM");
+                gst_caps_unref(pad_caps);
+            }
+        }
+
+        if (is_nvmm) {
+            NvBufSurface *nvsurf = nullptr;
+            if (gst_is_nvmm_memory(mem)) {
+                nvsurf = static_cast<NvBufSurface *>(
+                    gst_nvmm_memory_get_surface(mem));
+            } else {
+                /* NVIDIA convention: mapped data = NvBufSurface* */
+                GstMapInfo dma_map;
+                if (gst_buffer_map(buffer, &dma_map, GST_MAP_READ)) {
+                    nvsurf = reinterpret_cast<NvBufSurface *>(dma_map.data);
+                    gst_buffer_unmap(buffer, &dma_map);
+                }
+            }
+            if (nvsurf && nvsurf->surfaceList) {
+                int32_t fd = static_cast<int32_t>(
+                    nvsurf->surfaceList[0].bufferDesc);
+                if (fd > 0) header->dmabuf_fd = fd;
+            }
         }
     }
 
