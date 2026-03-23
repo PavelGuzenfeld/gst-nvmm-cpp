@@ -513,8 +513,8 @@ gst-nvmm-cpp/
 │   │   ├── nvmm_types.hpp   # Result<T>, ByteSpan, enums, error codes
 │   │   ├── nvmm_buffer.hpp  # NvmmBuffer -- RAII wrapper for NvBufSurface
 │   │   ├── nvmm_transform.hpp # NvmmTransform -- NvBufSurfTransform wrapper
-│   │   ├── nvmm_buffer.cpp  # Real implementation (Jetson)
-│   │   ├── nvmm_transform.cpp # Real implementation (Jetson)
+│   │   ├── nvmm_buffer.cpp  # Jetson implementation
+│   │   ├── nvmm_transform.cpp # Jetson implementation
 │   │   ├── nvbufsurface_mock.h # Mock API for x86_64 host builds
 │   │   ├── *_mock.cpp       # Mock implementations
 │   │   └── meson.build
