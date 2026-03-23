@@ -161,14 +161,14 @@ gst_nvmm_app_src_stop(GstBaseSrc *src)
 static GstVideoFormat
 shm_format_to_gst(uint32_t fmt)
 {
-    /* Matches GstVideoFormat enum values for the formats we support */
-    switch (fmt) {
-        case 2:  return GST_VIDEO_FORMAT_NV12;   /* GstVideoFormat enum */
-        case 11: return GST_VIDEO_FORMAT_RGBA;
-        case 6:  return GST_VIDEO_FORMAT_I420;
-        case 10: return GST_VIDEO_FORMAT_BGRA;
-        default: return GST_VIDEO_FORMAT_NV12;
+    /* The sink writes the GstVideoFormat enum value directly,
+       so we just cast it back. Validate it maps to a known string. */
+    GstVideoFormat gst_fmt = static_cast<GstVideoFormat>(fmt);
+    if (gst_video_format_to_string(gst_fmt) != nullptr) {
+        return gst_fmt;
     }
+    GST_WARNING("Unknown video format %u in shm header, defaulting to I420", fmt);
+    return GST_VIDEO_FORMAT_I420;
 }
 
 static GstFlowReturn
