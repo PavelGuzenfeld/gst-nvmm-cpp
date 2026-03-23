@@ -475,8 +475,8 @@ while (rclcpp::ok()) {
 
 | JetPack | L4T | Jetson | NvBufSurface | NvSciBuf | Status |
 |---------|-----|--------|-------------|----------|--------|
-| 5.1.x | R35.x | Xavier NX, Orin | Yes | No | Tested |
-| 6.x | R36.x | Orin | Yes | Yes | Supported |
+| 5.1.x | R35.x | Xavier NX | Yes | No | Tested |
+| 6.x | R36.x | Orin NX | Yes | Yes | Tested |
 | N/A | N/A | x86_64 desktop | Mock API | No | Testing only |
 
 The build system auto-detects JetPack version via `/etc/nv_tegra_release` and enables NvSciBuf support on JP6.
