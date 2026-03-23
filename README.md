@@ -301,17 +301,17 @@ Also verified the SHM protocol with a standalone C consumer (ROS2-style):
 
 ![SHM consumer gradient](test_output/shm_consumer_frame.jpg)
 
-### Known Limitations
+### nvmmconvert Pipeline Proof
 
-**nvmmconvert caps negotiation:** The current `transform_caps` implementation
-is too simple for automatic pipeline linking in GStreamer. It returns the full
-range of supported caps regardless of input, which prevents downstream elements
-from negotiating properly. The VIC transform itself works (verified by unit
-tests), but wiring nvmmconvert into a pipeline with `gst-launch-1.0` requires
-explicit caps on both sides. This will be fixed before the upstream MR.
+All operations verified via `gst-launch-1.0` on Jetson Xavier NX:
 
-The NvmmTransform API works correctly at the C++ level -- all crop, scale, flip,
-and format conversion operations pass on real hardware via the unit tests.
+| Operation | Output |
+|-----------|--------|
+| Passthrough | ![passthrough](test_output/convert_passthrough.jpg) |
+| Flip 180° | ![flip180](test_output/convert_flip180.jpg) |
+| Flip horizontal | ![flipH](test_output/convert_flipH.jpg) |
+| Scale 1080p→480p | ![scale](test_output/convert_scale.jpg) |
+| Crop (100,50,800,600) | ![crop](test_output/convert_crop.jpg) |
 
 ### Test Outputs
 
