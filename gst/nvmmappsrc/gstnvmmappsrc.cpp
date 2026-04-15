@@ -1,6 +1,18 @@
+/// nvmmappsrc — Zero-copy NVMM IPC source.
+///
+/// Connects to nvmmsink via unix socket to receive pool buffer DMA-buf fds
+/// and NvBufSurfaceMapParams, imports them with NvBufSurfaceImport, and
+/// pushes NVMM GstBuffers downstream.
+///
+/// Ref counts in shared memory manage buffer lifecycle.
+
 #include "gstnvmmappsrc.h"
-#include "gstnvmmallocator.h"
-#include "nvmm_types.hpp"
+
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
 
 #include <cstring>
 #include <string>
@@ -10,18 +22,105 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <gst/video/video.h>
+
 #ifndef PACKAGE
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
 #include "shm_protocol.h"
+#include "fd_ipc.h"
 
-typedef NvmmShmHeader ShmHeader;
+typedef NvmmShmHeaderZC ShmHeader;
 
 enum {
     PROP_0,
     PROP_SHM_NAME,
     PROP_IS_LIVE,
+};
+
+/* --- Custom GstAllocator for imported NVMM pool buffers --- */
+
+typedef struct {
+    GstAllocator parent;
+} NvmmImportedAllocator;
+
+typedef struct {
+    GstAllocatorClass parent_class;
+} NvmmImportedAllocatorClass;
+
+#define NVMM_TYPE_IMPORTED_ALLOCATOR (nvmm_imported_allocator_get_type())
+
+G_DEFINE_TYPE(NvmmImportedAllocator, nvmm_imported_allocator, GST_TYPE_ALLOCATOR)
+
+struct NvmmImportedMemory {
+    GstMemory parent;
+    NvBufSurface *surface;
+    volatile int32_t *ref_count_ptr;
+};
+
+static gpointer
+nvmm_imported_mem_map(GstMemory *mem, gsize /*maxsize*/, GstMapFlags /*flags*/)
+{
+    auto *m = reinterpret_cast<NvmmImportedMemory *>(mem);
+    return m->surface;  /* NVIDIA convention: mapped data = NvBufSurface* */
+}
+
+static void
+nvmm_imported_mem_unmap(GstMemory * /*mem*/) {}
+
+static void
+nvmm_imported_mem_free(GstAllocator * /*alloc*/, GstMemory *mem)
+{
+    /* Do NOT decrement ref_count here — the hardware encoder may still be
+       reading the DMA buffer after GstBuffer unref. Ref counts are managed
+       by the create() function via a delayed release ring. */
+    auto *m = reinterpret_cast<NvmmImportedMemory *>(mem);
+    (void)m;
+    g_free(m);
+}
+
+static void
+nvmm_imported_allocator_class_init(NvmmImportedAllocatorClass *klass)
+{
+    auto *alloc_class = GST_ALLOCATOR_CLASS(klass);
+    alloc_class->alloc = nullptr;
+    alloc_class->free = nvmm_imported_mem_free;
+}
+
+static void
+nvmm_imported_allocator_init(NvmmImportedAllocator *self)
+{
+    GstAllocator *alloc = GST_ALLOCATOR(self);
+    alloc->mem_type = "NvmmImportedMemory";
+    alloc->mem_map = nvmm_imported_mem_map;
+    alloc->mem_unmap = nvmm_imported_mem_unmap;
+    GST_OBJECT_FLAG_SET(alloc, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
+}
+
+static GstAllocator *imported_allocator_singleton = nullptr;
+
+static GstAllocator *
+get_imported_allocator(void)
+{
+    if (!imported_allocator_singleton) {
+        imported_allocator_singleton = (GstAllocator *)g_object_new(
+            NVMM_TYPE_IMPORTED_ALLOCATOR, nullptr);
+        gst_object_ref_sink(imported_allocator_singleton);
+    }
+    return imported_allocator_singleton;
+}
+
+/* --- Main element --- */
+
+/* Delay ring: hold ref counts for RELEASE_DELAY frames before decrementing.
+   This accounts for hardware encoder pipeline depth — the encoder may still
+   be reading the DMA buffer after unreffing the GstBuffer. */
+#define RELEASE_DELAY 12  /* ~100ms at 120fps, covers encoder pipeline depth */
+
+struct RefSlot {
+    volatile int32_t *ptr;
+    int active;
 };
 
 struct _GstNvmmAppSrcPrivate {
@@ -33,6 +132,15 @@ struct _GstNvmmAppSrcPrivate {
     GstVideoInfo video_info;
     gboolean is_live;
     gboolean caps_set;
+
+    /* Zero-copy pool */
+    int socket_fd;
+    int pool_size;
+    NvBufSurface *imported_surfaces[NVMM_POOL_SIZE];
+
+    /* Delayed ref count release ring */
+    RefSlot release_ring[RELEASE_DELAY];
+    int ring_head;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmAppSrc, gst_nvmm_app_src, GST_TYPE_PUSH_SRC)
@@ -78,43 +186,108 @@ static gboolean
 gst_nvmm_app_src_start(GstBaseSrc *src)
 {
     auto *self = GST_NVMM_APP_SRC(src);
+    auto *priv = self->priv;
 
-    if (self->priv->shm_name.empty()) {
-        self->priv->shm_name = "/nvmm_sink_0";
-    }
+    if (priv->shm_name.empty())
+        priv->shm_name = "/nvmm_sink_0";
 
-    self->priv->shm_fd = shm_open(self->priv->shm_name.c_str(), O_RDONLY, 0);
-    if (self->priv->shm_fd < 0) {
-        GST_ERROR_OBJECT(self, "shm_open(%s) failed: %s",
-                         self->priv->shm_name.c_str(), strerror(errno));
+    /* Open shared memory */
+    priv->shm_fd = shm_open(priv->shm_name.c_str(), O_RDWR, 0);
+    if (priv->shm_fd < 0) {
+        fprintf(stderr, "[nvmmappsrc] shm_open(%s) failed: %s\n",
+                priv->shm_name.c_str(), strerror(errno));
         return FALSE;
     }
 
     struct stat st;
-    if (fstat(self->priv->shm_fd, &st) < 0 || st.st_size == 0) {
-        GST_ERROR_OBJECT(self, "Shared memory is empty or stat failed");
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
+    if (fstat(priv->shm_fd, &st) < 0 || st.st_size == 0) {
+        fprintf(stderr, "[nvmmappsrc] shm empty or stat failed\n");
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
         return FALSE;
     }
-    self->priv->shm_size = st.st_size;
+    priv->shm_size = st.st_size;
 
-    self->priv->shm_ptr = mmap(NULL, self->priv->shm_size,
-                                PROT_READ, MAP_SHARED,
-                                self->priv->shm_fd, 0);
-    if (self->priv->shm_ptr == MAP_FAILED) {
-        GST_ERROR_OBJECT(self, "mmap failed: %s", strerror(errno));
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
-        self->priv->shm_ptr = nullptr;
+    priv->shm_ptr = mmap(NULL, priv->shm_size, PROT_READ | PROT_WRITE,
+                          MAP_SHARED, priv->shm_fd, 0);
+    if (priv->shm_ptr == MAP_FAILED) {
+        fprintf(stderr, "[nvmmappsrc] mmap failed\n");
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
+        priv->shm_ptr = nullptr;
         return FALSE;
     }
 
-    self->priv->last_frame_number = 0;
-    self->priv->caps_set = FALSE;
+    auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
 
-    GST_INFO_OBJECT(self, "Attached to shared memory '%s' (%" G_GSIZE_FORMAT " bytes)",
-                    self->priv->shm_name.c_str(), self->priv->shm_size);
+    /* Wait for producer header */
+    int wait = 0;
+    while (header->magic != NVMM_SHM_MAGIC || header->socket_path[0] == '\0') {
+        if (++wait > 5000) {
+            fprintf(stderr, "[nvmmappsrc] Timeout waiting for producer\n");
+            return FALSE;
+        }
+        g_usleep(1000);
+    }
+    if (header->version != NVMM_SHM_VERSION_ZC) {
+        fprintf(stderr, "[nvmmappsrc] Bad version %u\n", header->version);
+        return FALSE;
+    }
+
+    /* Connect to producer socket */
+    priv->socket_fd = nvmm_client_connect(header->socket_path);
+    if (priv->socket_fd < 0) {
+        fprintf(stderr, "[nvmmappsrc] Connect to %s failed: %s\n",
+                header->socket_path, strerror(errno));
+        return FALSE;
+    }
+    /* Receive pool_size */
+    int ps = 0;
+    if (recv(priv->socket_fd, &ps, sizeof(ps), MSG_WAITALL) != sizeof(ps) ||
+        ps <= 0 || ps > NVMM_POOL_SIZE) {
+        fprintf(stderr, "[nvmmappsrc] Failed to receive pool_size (got %d)\n", ps);
+        close(priv->socket_fd);
+        priv->socket_fd = -1;
+        return FALSE;
+    }
+    priv->pool_size = ps;
+
+    /* Receive NvBufSurfaceMapParams for each buffer */
+    NvBufSurfaceMapParams params[NVMM_POOL_SIZE];
+    for (int i = 0; i < priv->pool_size; i++) {
+        if (recv(priv->socket_fd, &params[i], sizeof(params[i]), MSG_WAITALL)
+            != (ssize_t)sizeof(params[i])) {
+            fprintf(stderr, "[nvmmappsrc] Failed to receive map_params[%d]\n", i);
+            close(priv->socket_fd);
+            priv->socket_fd = -1;
+            return FALSE;
+        }
+    }
+    /* Receive DMA-buf fds via SCM_RIGHTS */
+    int fds[NVMM_POOL_SIZE];
+    if (nvmm_recv_fds(priv->socket_fd, fds, priv->pool_size) < 0) {
+        fprintf(stderr, "[nvmmappsrc] Failed to receive fds: %s\n", strerror(errno));
+        close(priv->socket_fd);
+        priv->socket_fd = -1;
+        return FALSE;
+    }
+    /* Import each fd using NvBufSurfaceImport with the received params */
+    for (int i = 0; i < priv->pool_size; i++) {
+        /* Update the fd in params to the one we received via SCM_RIGHTS */
+        params[i].fd = fds[i];
+
+        NvBufSurface *surf = nullptr;
+        if (NvBufSurfaceImport(&surf, &params[i]) != 0 || !surf) {
+            fprintf(stderr, "[nvmmappsrc] NvBufSurfaceImport failed for buffer %d (fd=%d)\n",
+                    i, fds[i]);
+            return FALSE;
+        }
+        priv->imported_surfaces[i] = surf;
+    }
+
+    priv->last_frame_number = 0;
+    priv->caps_set = FALSE;
+
     return TRUE;
 }
 
@@ -122,108 +295,131 @@ static gboolean
 gst_nvmm_app_src_stop(GstBaseSrc *src)
 {
     auto *self = GST_NVMM_APP_SRC(src);
+    auto *priv = self->priv;
 
-    if (self->priv->shm_ptr && self->priv->shm_ptr != MAP_FAILED) {
-        munmap(self->priv->shm_ptr, self->priv->shm_size);
-        self->priv->shm_ptr = nullptr;
+    /* Flush delayed release ring — decrement all held ref counts */
+    for (int i = 0; i < RELEASE_DELAY; i++) {
+        if (priv->release_ring[i].active && priv->release_ring[i].ptr) {
+            __sync_fetch_and_sub(priv->release_ring[i].ptr, 1);
+            priv->release_ring[i].active = 0;
+            priv->release_ring[i].ptr = nullptr;
+        }
     }
 
-    if (self->priv->shm_fd >= 0) {
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
+    for (int i = 0; i < NVMM_POOL_SIZE; i++) {
+        if (priv->imported_surfaces[i]) {
+            NvBufSurfaceDestroy(priv->imported_surfaces[i]);
+            priv->imported_surfaces[i] = nullptr;
+        }
     }
 
-    GST_INFO_OBJECT(self, "Detached from shared memory '%s'",
-                    self->priv->shm_name.c_str());
+    if (priv->socket_fd >= 0) {
+        close(priv->socket_fd);
+        priv->socket_fd = -1;
+    }
+
+    if (priv->shm_ptr && priv->shm_ptr != MAP_FAILED) {
+        munmap(priv->shm_ptr, priv->shm_size);
+        priv->shm_ptr = nullptr;
+    }
+    if (priv->shm_fd >= 0) {
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
+    }
+
     return TRUE;
-}
-
-static GstVideoFormat
-shm_format_to_gst(uint32_t fmt)
-{
-    /* The sink writes the GstVideoFormat enum value directly,
-       so we just cast it back. Validate it maps to a known string. */
-    GstVideoFormat gst_fmt = static_cast<GstVideoFormat>(fmt);
-    if (gst_video_format_to_string(gst_fmt) != nullptr) {
-        return gst_fmt;
-    }
-    GST_WARNING("Unknown video format %u in shm header, defaulting to I420", fmt);
-    return GST_VIDEO_FORMAT_I420;
 }
 
 static GstFlowReturn
 gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
 {
     auto *self = GST_NVMM_APP_SRC(push_src);
-    auto *header = static_cast<const ShmHeader *>(self->priv->shm_ptr);
+    auto *priv = self->priv;
+    auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
 
-    if (!self->priv->shm_ptr) {
+    if (!priv->shm_ptr)
         return GST_FLOW_ERROR;
-    }
 
-    /* Wait for a new ready frame. Check flushing state to allow
-       clean shutdown without blocking. */
+    /* Wait for a new frame */
     int attempts = 0;
-    while (!header->ready || header->frame_number == self->priv->last_frame_number) {
-        if (GST_PAD_IS_FLUSHING(GST_BASE_SRC_PAD(push_src))) {
+    while (!header->ready || header->frame_number == priv->last_frame_number) {
+        if (GST_PAD_IS_FLUSHING(GST_BASE_SRC_PAD(push_src)))
             return GST_FLOW_FLUSHING;
-        }
-        if (++attempts > 500) {
-            /* 500ms without a new frame — return EOS */
-            GST_INFO_OBJECT(self, "No new frame for 500ms, returning EOS");
+        if (++attempts > 2000) {
+            fprintf(stderr, "[nvmmappsrc] No new frame for 2s\n");
             return GST_FLOW_EOS;
         }
-        g_usleep(1000);  /* 1ms */
+        g_usleep(1000);
     }
 
     __sync_synchronize();
 
-    /* Validate header */
-    if (header->magic != NVMM_SHM_MAGIC) {
-        GST_ERROR_OBJECT(self, "Invalid shm magic: 0x%08x", header->magic);
+    if (header->magic != NVMM_SHM_MAGIC)
         return GST_FLOW_ERROR;
-    }
 
-    /* Set caps on first frame if not already set */
-    if (!self->priv->caps_set && header->width > 0 && header->height > 0) {
-        GstVideoFormat fmt = shm_format_to_gst(header->format);
-        gst_video_info_set_format(&self->priv->video_info, fmt,
+    /* Set NVMM caps on first frame */
+    if (!priv->caps_set && header->width > 0 && header->height > 0) {
+        GstVideoFormat fmt = static_cast<GstVideoFormat>(header->format);
+        gst_video_info_set_format(&priv->video_info, fmt,
                                   header->width, header->height);
 
-        GstCaps *caps = gst_video_info_to_caps(&self->priv->video_info);
+        GstCaps *caps = gst_video_info_to_caps(&priv->video_info);
+        gst_caps_set_features(caps, 0,
+            gst_caps_features_new("memory:NVMM", NULL));
         gst_base_src_set_caps(GST_BASE_SRC(self), caps);
         gst_caps_unref(caps);
-        self->priv->caps_set = TRUE;
+        priv->caps_set = TRUE;
 
-        GST_INFO_OBJECT(self, "Caps from shm: %ux%u format=%s",
-                        header->width, header->height,
-                        gst_video_format_to_string(fmt));
     }
 
-    /* Allocate output buffer and copy frame data */
-    gsize data_size = header->data_size;
-    if (data_size == 0 || data_size > self->priv->shm_size - sizeof(ShmHeader)) {
-        GST_WARNING_OBJECT(self, "Invalid data_size: %u", header->data_size);
+    /* Read current buffer index and safely increment ref count.
+       Use CAS to ensure we don't increment a buffer being written (-1). */
+    uint32_t idx = header->write_idx;
+    if (idx >= (uint32_t)priv->pool_size)
         return GST_FLOW_ERROR;
-    }
 
-    GstBuffer *buffer = gst_buffer_new_allocate(NULL, data_size, NULL);
-    if (!buffer) {
-        return GST_FLOW_ERROR;
+    /* CAS loop: increment ref_count only if >= 0 (not being written) */
+    int attempts_cas = 0;
+    while (true) {
+        int32_t old_val = __sync_add_and_fetch(&header->ref_counts[idx], 0);
+        if (old_val < 0) {
+            /* Buffer being written — re-read write_idx, producer may have moved on */
+            g_usleep(100);
+            idx = header->write_idx;
+            if (++attempts_cas > 1000) return GST_FLOW_ERROR;
+            continue;
+        }
+        if (__sync_bool_compare_and_swap(&header->ref_counts[idx], old_val, old_val + 1))
+            break;
     }
+    __sync_synchronize();
 
-    GstMapInfo map_info;
-    if (gst_buffer_map(buffer, &map_info, GST_MAP_WRITE)) {
-        const auto *frame_data =
-            static_cast<const uint8_t *>(self->priv->shm_ptr) + sizeof(ShmHeader);
-        memcpy(map_info.data, frame_data, data_size);
-        gst_buffer_unmap(buffer, &map_info);
+    /* Delayed release: decrement the ref count of the buffer we acquired
+       RELEASE_DELAY frames ago. This gives the hardware encoder enough time
+       to finish reading the DMA buffer before the producer recycles it. */
+    RefSlot *old_slot = &priv->release_ring[priv->ring_head];
+    if (old_slot->active && old_slot->ptr) {
+        __sync_fetch_and_sub(old_slot->ptr, 1);
     }
+    old_slot->ptr = &header->ref_counts[idx];
+    old_slot->active = 1;
+    priv->ring_head = (priv->ring_head + 1) % RELEASE_DELAY;
+
+    /* Create GstBuffer with custom memory wrapping the imported surface. */
+    NvmmImportedMemory *mem = (NvmmImportedMemory *)g_malloc0(sizeof(NvmmImportedMemory));
+    gst_memory_init(GST_MEMORY_CAST(mem), GST_MEMORY_FLAG_NO_SHARE,
+                    get_imported_allocator(), nullptr,
+                    sizeof(NvBufSurface), 0, 0, sizeof(NvBufSurface));
+    mem->surface = priv->imported_surfaces[idx];
+    mem->ref_count_ptr = nullptr;  /* managed by ring, not by free callback */
+
+    GstBuffer *buffer = gst_buffer_new();
+    gst_buffer_append_memory(buffer, GST_MEMORY_CAST(mem));
 
     GST_BUFFER_PTS(buffer) = header->timestamp_ns;
     GST_BUFFER_DURATION(buffer) = GST_CLOCK_TIME_NONE;
 
-    self->priv->last_frame_number = header->frame_number;
+    priv->last_frame_number = header->frame_number;
 
     *buf = buffer;
     return GST_FLOW_OK;
@@ -260,13 +456,13 @@ gst_nvmm_app_src_class_init(GstNvmmAppSrcClass *klass)
             TRUE, G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
-        "NVMM Shared Memory Source",
+        "NVMM Zero-Copy IPC Source",
         "Source/Video",
-        "Reads NVMM video frames from POSIX shared memory for zero-copy IPC",
-        "Pavel Guzenfeld");
+        "Zero-copy NVMM IPC via imported pool buffer fds",
+        "Pavel Guzenfeld, Stereolabs");
 
     GstCaps *caps = gst_caps_from_string(
-        "video/x-raw, "
+        "video/x-raw(memory:NVMM), "
         "format=(string){NV12, RGBA, I420, BGRA}, "
         "width=(int)[1, 8192], height=(int)[1, 8192], "
         "framerate=(fraction)[0/1, 240/1]");
@@ -292,6 +488,15 @@ gst_nvmm_app_src_init(GstNvmmAppSrc *self)
     self->priv->last_frame_number = 0;
     self->priv->is_live = TRUE;
     self->priv->caps_set = FALSE;
+    self->priv->socket_fd = -1;
+    self->priv->pool_size = 0;
+    for (int i = 0; i < NVMM_POOL_SIZE; i++)
+        self->priv->imported_surfaces[i] = nullptr;
+    for (int i = 0; i < RELEASE_DELAY; i++) {
+        self->priv->release_ring[i].ptr = nullptr;
+        self->priv->release_ring[i].active = 0;
+    }
+    self->priv->ring_head = 0;
 
     gst_base_src_set_live(GST_BASE_SRC(self), TRUE);
     gst_base_src_set_format(GST_BASE_SRC(self), GST_FORMAT_TIME);
@@ -309,9 +514,9 @@ GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     nvmmappsrc,
-    "NVMM shared memory source for zero-copy IPC",
+    "NVMM zero-copy IPC source",
     plugin_init,
-    "1.0.1",
+    "1.1.0",
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"
