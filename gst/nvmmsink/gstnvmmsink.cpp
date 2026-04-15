@@ -273,7 +273,52 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     gsize available = self->priv->shm_size - sizeof(ShmHeader);
     gsize total_copied = 0;
 
-    if (gst_is_nvmm_memory(mem)) {
+    /* Detect external NVMM buffers (from zedsrc, nvvidconv, nvv4l2decoder etc.)
+       via caps features -- they use NVIDIA own allocator, not ours. */
+    gboolean is_external_nvmm = FALSE;
+    if (!gst_is_nvmm_memory(mem)) {
+        GstCaps *pad_caps = gst_pad_get_current_caps(GST_BASE_SINK_PAD(sink));
+        if (pad_caps) {
+            GstCapsFeatures *feat = gst_caps_get_features(pad_caps, 0);
+            is_external_nvmm = feat && gst_caps_features_contains(feat, "memory:NVMM");
+            gst_caps_unref(pad_caps);
+        }
+    }
+
+    if (is_external_nvmm) {
+        /* External NVMM: get NvBufSurface* via NVIDIA map convention,
+           then use NvBufSurfaceMap + SyncForCpu to read actual pixels.
+           Copy row-by-row to strip NVMM pitch padding so shared memory
+           has standard GStreamer-compatible layout (stride == width). */
+        GstMapInfo dma_map;
+        if (gst_buffer_map(buffer, &dma_map, GST_MAP_READ)) {
+            NvBufSurface *nvsurf = reinterpret_cast<NvBufSurface *>(dma_map.data);
+            if (nvsurf && nvsurf->surfaceList &&
+                NvBufSurfaceMap(nvsurf, 0, -1, NVBUF_MAP_READ) == 0) {
+                NvBufSurfaceSyncForCpu(nvsurf, 0, -1);
+                guint dst_width = header->width;
+                for (guint p = 0; p < header->num_planes && p < 4; p++) {
+                    guint8 *plane_ptr = (guint8 *)nvsurf->surfaceList[0].mappedAddr.addr[p];
+                    guint nvmm_pitch = nvsurf->surfaceList[0].planeParams.pitch[p];
+                    guint gst_stride = GST_VIDEO_INFO_PLANE_STRIDE(&self->priv->video_info, p);
+                    guint row_bytes = gst_stride;  /* copy exactly what GStreamer expects */
+                    gsize plane_h = header->height;
+                    if (p > 0 && header->format == (uint32_t)GST_VIDEO_FORMAT_NV12)
+                        plane_h = header->height / 2;
+                    for (gsize row = 0; row < plane_h; row++) {
+                        gsize copy_size = row_bytes;
+                        if (total_copied + copy_size > available) break;
+                        if (plane_ptr)
+                            memcpy(frame_data + total_copied,
+                                   plane_ptr + row * nvmm_pitch, copy_size);
+                        total_copied += copy_size;
+                    }
+                }
+                NvBufSurfaceUnMap(nvsurf, 0, -1);
+            }
+            gst_buffer_unmap(buffer, &dma_map);
+        }
+    } else if (gst_is_nvmm_memory(mem)) {
         /* NVMM: map each plane individually (planes aren't contiguous) */
         for (guint p = 0; p < header->num_planes && p < 4; p++) {
             guint8 *plane_data = nullptr;
