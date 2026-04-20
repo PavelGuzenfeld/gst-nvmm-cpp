@@ -1,9 +1,9 @@
 /// GstNvmmSink — GStreamer sink that exports NVMM buffers via shared memory.
 ///
-/// Receives video/x-raw(memory:NVMM) buffers and publishes them to a named
-/// POSIX shared memory segment. Downstream consumers (e.g., ROS2 nodes,
-/// inference engines) can attach to the segment and access the DMA-buf fd
-/// for zero-copy interop.
+/// Receives video/x-raw(memory:NVMM) buffers and GPU-copies them into a shared
+/// NVMM pool, publishing pool fds via SCM_RIGHTS over a unix socket. Downstream
+/// consumers (e.g., ROS2 nodes, inference engines) import the pool fds and read
+/// from GPU memory without further copies.
 #pragma once
 
 #include <gst/gst.h>

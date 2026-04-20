@@ -1,5 +1,6 @@
 /// fd_ipc.h — SCM_RIGHTS file descriptor passing over unix domain sockets.
-/// Used by nvmmsink (server) and nvmmappsrc (client) for zero-copy IPC.
+/// Used by nvmmsink (server) and nvmmappsrc (client) for GPU-copy IPC
+/// (pool DMA-buf fd passing).
 #pragma once
 
 #include <sys/socket.h>
@@ -101,7 +102,13 @@ nvmm_server_listen(const char *path)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    size_t path_len = strnlen(path, sizeof(addr.sun_path));
+    if (path_len >= sizeof(addr.sun_path)) {
+        close(sock);
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(addr.sun_path, path, path_len);  /* null terminator already set by memset */
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(sock);
@@ -128,7 +135,13 @@ nvmm_client_connect(const char *path)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    size_t path_len = strnlen(path, sizeof(addr.sun_path));
+    if (path_len >= sizeof(addr.sun_path)) {
+        close(sock);
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(addr.sun_path, path, path_len);  /* null terminator already set by memset */
 
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(sock);

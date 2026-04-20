@@ -1,11 +1,12 @@
-/// nvmmsink — Zero-copy NVMM IPC sink.
+/// nvmmsink — GPU-copy NVMM IPC sink.
 ///
-/// Allocates a pool of NVMM buffers, copies incoming frames via NvBufSurfTransform
-/// (GPU-to-GPU on VIC), and shares the pool buffer DMA-buf fds with consumers
-/// via SCM_RIGHTS over a unix domain socket.
+/// Allocates a pool of NVMM buffers, copies incoming frames via NvBufSurfaceCopy
+/// (GPU-to-GPU, no CPU involvement), and shares the pool buffer DMA-buf fds with
+/// consumers via SCM_RIGHTS over a unix domain socket.
 ///
-/// Consumers (nvmmappsrc) import the fds and read directly from GPU memory.
-/// Ref counts in shared memory manage buffer lifecycle.
+/// Consumers (nvmmappsrc) import the fds and read directly from GPU memory
+/// (zero-copy on the consumer side). Ref counts in shared memory manage buffer
+/// lifecycle.
 
 #include "gstnvmmsink.h"
 #include "gstnvmmallocator.h"
@@ -38,7 +39,7 @@
 #include "shm_protocol.h"
 #include "fd_ipc.h"
 
-typedef NvmmShmHeaderZC ShmHeader;
+typedef NvmmShmHeader ShmHeader;
 
 enum {
     PROP_0,
@@ -320,7 +321,7 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     if (priv->shm_name.empty())
         priv->shm_name = "/nvmm_sink_0";
 
-    /* Shared memory: header only (no frame data — zero-copy) */
+    /* Shared memory: header only (no frame data — GPU-copy pool) */
     priv->shm_size = sizeof(ShmHeader);
     priv->shm_fd = shm_open(priv->shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (priv->shm_fd < 0) {
@@ -345,7 +346,7 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
     memset(header, 0, sizeof(ShmHeader));
     header->magic = NVMM_SHM_MAGIC;
-    header->version = NVMM_SHM_VERSION_ZC;
+    header->version = NVMM_SHM_VERSION;
     header->ready = 0;
     for (int i = 0; i < NVMM_POOL_SIZE; i++)
         header->ref_counts[i] = 0;
@@ -439,7 +440,7 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     /* Get NvBufSurface from incoming buffer */
     NvBufSurface *src_surf = get_nvbufsurface_from_buffer(sink, buffer);
     if (!src_surf) {
-        GST_WARNING_OBJECT(self, "Buffer is not NVMM — zero-copy requires NVMM input");
+        GST_WARNING_OBJECT(self, "Buffer is not NVMM — GPU-copy requires NVMM input");
         return GST_FLOW_ERROR;
     }
 
@@ -512,9 +513,9 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
             G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
-        "NVMM Zero-Copy IPC Sink",
+        "NVMM GPU-Copy IPC Sink",
         "Sink/Video",
-        "Zero-copy NVMM IPC via buffer pool + SCM_RIGHTS fd passing",
+        "GPU-copy NVMM IPC via buffer pool + SCM_RIGHTS fd passing",
         "Pavel Guzenfeld, Stereolabs");
 
     GstCaps *caps = gst_caps_from_string(
@@ -568,7 +569,7 @@ GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     nvmmsink,
-    "NVMM zero-copy IPC sink",
+    "NVMM GPU-copy IPC sink",
     plugin_init,
     "1.1.0",
     "LGPL",

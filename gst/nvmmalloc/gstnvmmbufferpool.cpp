@@ -29,18 +29,6 @@ gst_nvmm_buffer_pool_get_options(GstBufferPool* pool)
     return options;
 }
 
-static nvmm::ColorFormat
-gst_format_to_nvmm(GstVideoFormat fmt)
-{
-    switch (fmt) {
-        case GST_VIDEO_FORMAT_NV12: return nvmm::ColorFormat::kNV12;
-        case GST_VIDEO_FORMAT_RGBA: return nvmm::ColorFormat::kRGBA;
-        case GST_VIDEO_FORMAT_BGRA: return nvmm::ColorFormat::kBGRA;
-        case GST_VIDEO_FORMAT_I420: return nvmm::ColorFormat::kI420;
-        default:                    return nvmm::ColorFormat::kNV12;
-    }
-}
-
 static gboolean
 gst_nvmm_buffer_pool_set_config(GstBufferPool* pool, GstStructure* config)
 {

@@ -31,7 +31,7 @@
 #include "shm_protocol.h"
 #include "fd_ipc.h"
 
-typedef NvmmShmHeaderZC ShmHeader;
+typedef NvmmShmHeader ShmHeader;
 
 enum {
     PROP_0,
@@ -229,7 +229,7 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         }
         g_usleep(1000);
     }
-    if (header->version != NVMM_SHM_VERSION_ZC) {
+    if (header->version != NVMM_SHM_VERSION) {
         fprintf(stderr, "[nvmmappsrc] Bad version %u\n", header->version);
         return FALSE;
     }
