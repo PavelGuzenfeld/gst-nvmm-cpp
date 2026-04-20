@@ -1,6 +1,6 @@
 # gst-nvmm-cpp
 
-GStreamer plugin suite for **zero-copy video processing** on NVIDIA Jetson platforms (Xavier, Orin). Wraps the Tegra-native `NvBufSurface` / NVMM memory model in proper GStreamer elements, enabling hardware-accelerated crop, scale, format conversion, and inter-process video sharing — all without CPU copies.
+GStreamer plugin suite for **NVMM-native video processing** on NVIDIA Jetson platforms (Xavier, Orin). Wraps the Tegra-native `NvBufSurface` / NVMM memory model in proper GStreamer elements, enabling hardware-accelerated crop, scale, format conversion, and inter-process video sharing with no CPU copies on the data path. Intra-process transforms are zero-copy (VIC-side); cross-process IPC does a single GPU-side copy into a shared pool, which consumers then import without further copies.
 
 Built with **C++14** internals and a **C ABI** boundary to GStreamer.
 
@@ -35,25 +35,25 @@ Video crop, scale, and color format conversion using the **Tegra VIC** (Video Im
 
 ### nvmmsink
 
-Exports NVMM video frames to a **POSIX shared memory** segment for zero-copy inter-process communication. Consumers (ROS2 nodes, inference engines, visualization tools) attach to the segment and read frames without serialization overhead.
+Shares NVMM video frames across processes via a **GPU-copy pool**: incoming buffers are copied GPU-to-GPU (via `NvBufSurfaceCopy`) into a fixed pool of NVMM buffers, whose DMA-buf fds are handed to consumers over a unix-domain socket (SCM_RIGHTS). Consumers (ROS2 nodes, inference engines, visualization tools) import the fds and read directly from GPU memory — no further copies, no CPU in the data path.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `shm-name` | string | `/nvmm_sink_0` | POSIX shared memory segment name |
-| `export-dmabuf` | bool | false | Export DMA-buf fd in shared memory header |
+| `pool-size` | int (3–16) | 16 | Number of NVMM buffers in the shared pool |
 
-**Shared memory protocol:**
+**Wire protocol (see [`gst/common/shm_protocol.h`](gst/common/shm_protocol.h)):**
 
-```
-[ ShmHeader (128 bytes) ][ frame data ]
-```
+The shm segment holds **only** the header — frame data lives in a pool of NVMM buffers whose DMA-buf fds are passed over a unix-domain socket (SCM_RIGHTS). The header carries:
 
-The `ShmHeader` contains:
 - Magic (`0x4E564D4D` = "NVMM"), version, width, height, pixel format
-- Per-plane pitches and offsets
-- DMA-buf fd (when `export-dmabuf=true`)
-- Monotonic frame number and PTS timestamp (nanoseconds)
-- Atomic `ready` flag for lock-free consumer reads
+- Pool size, per-plane pitches and offsets
+- `socket_path` for the fd-passing unix socket
+- `write_idx`, monotonic `frame_number`, PTS `timestamp_ns`
+- `ready` flag (set once the first frame is published)
+- `ref_counts[pool_size]` so producer knows when a slot is safe to reuse
+
+Producers copy each incoming NVMM buffer into the pool via `NvBufSurfaceCopy` (GPU-to-GPU, no CPU involvement). Consumers connect the socket, receive pool fds + `NvBufSurfaceMapParams`, import with `NvBufSurfaceImport`, and read directly from GPU memory.
 
 ### nvmmappsrc
 
@@ -138,7 +138,7 @@ The ABI boundary to GStreamer is C (`plugin_init`, GObject type system). Inside 
 ### Prerequisites
 
 - GStreamer >= 1.16 development libraries
-- Meson >= 0.62, Ninja
+- Either Meson >= 0.62 + Ninja, **or** CMake >= 3.16
 - C++14 compiler (GCC 7+ or Clang 5+)
 - On Jetson: JetPack 5 (L4T 35.x) or JetPack 6 (L4T 36.x)
 
@@ -170,6 +170,9 @@ docker run --runtime nvidia --rm --network host --privileged \
 
 ### Native build (Jetson)
 
+Two build systems are supported in parallel; pick whichever you prefer. They share the same source tree and the same test suite.
+
+**Meson:**
 ```bash
 pip3 install meson
 meson setup builddir -Dcpp_std=c++14 -Dbuildtype=debugoptimized
@@ -177,7 +180,16 @@ ninja -C builddir
 meson test -C builddir --verbose
 ```
 
-On hosts without Jetson libraries, meson automatically detects the absence of `libnvbufsurface.so` and builds with the **mock API** — a header-only stub that implements the same `NvBufSurface` struct layout and function signatures using heap memory. All tests pass against the mock.
+**CMake:**
+```bash
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-cmake -j$(nproc)
+ctest --test-dir build-cmake --output-on-failure
+```
+
+The CMake build additionally supports `sudo cmake --install build-cmake`, which places the plugins in GStreamer's system pluginsdir (as reported by `pkg-config --variable=pluginsdir gstreamer-1.0`) and sets `RUNPATH=$ORIGIN` on each `.so`. After installing, pipelines work with no `GST_PLUGIN_PATH` / `LD_LIBRARY_PATH` exports. Override with `-DGSTREAMER_PLUGINS_DIR=/some/path` or `-DWERROR=OFF` if needed.
+
+On hosts without Jetson libraries, both build systems automatically detect the absence of `libnvbufsurface.so` and build with the **mock API** — a header-only stub that implements the same `NvBufSurface` struct layout and function signatures using heap memory. All tests pass against the mock.
 
 ## Jetson Hardware Validation
 
@@ -194,9 +206,9 @@ All 7 test suites pass on both Xavier NX and Orin NX:
  2/7 nvmm_transform     OK    6 passed   (scale, crop, convert, flip, null safety)
  3/7 gst_nvmm_allocator OK    6 passed   (create, alloc, surface map, per-plane, roundtrip)
  4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
- 5/7 nvmm_appsrc        OK    3 passed   (create, properties, sink-to-source IPC)
+ 5/7 nvmm_appsrc        OK    2 passed   (create, properties)
  6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
- 7/7 integration        OK    7 passed   (shm roundtrip, multi-shm, dynamic props, stress)
+ 7/7 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
 Ok: 7   Fail: 0
 ```
 
@@ -388,25 +400,29 @@ All images generated on Jetson Xavier NX with real NVMM hardware:
 ### Setup for Reproducing on Jetson
 
 ```bash
-# 1. Install meson
-pip3 install meson
-
-# 2. Clone and build
 git clone https://github.com/PavelGuzenfeld/gst-nvmm-cpp.git
 cd gst-nvmm-cpp
-meson setup builddir -Dcpp_std=c++14 -Dbuildtype=debugoptimized -Dwerror=false
-ninja -C builddir
 
-# 3. Run tests (clear GStreamer registry cache first)
-rm -f ~/.cache/gstreamer-1.0/registry.*.bin
-LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra meson test -C builddir --verbose
+# Build (CMake — recommended; see the meson equivalent in the Building section)
+cmake -S . -B build-cmake
+cmake --build build-cmake -j$(nproc)
 
-# 4. Run benchmarks
-LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra ./builddir/benchmarks/bench_nvmm
+# Run tests
+ctest --test-dir build-cmake --output-on-failure
 
-# 5. Use the plugins in pipelines
-export GST_PLUGIN_PATH=$(pwd)/builddir/gst/nvmmconvert:$(pwd)/builddir/gst/nvmmsink:$(pwd)/builddir/gst/nvmmappsrc:$(pwd)/builddir/gst/nvmmalloc
-export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra:$(pwd)/builddir/gst/nvmmalloc
+# Run benchmarks
+./build-cmake/benchmarks/bench_nvmm
+
+# Install + use (no env vars needed afterwards)
+sudo cmake --install build-cmake
+rm -f ~/.cache/gstreamer-1.0/registry.*.bin   # force GStreamer to rescan
+gst-inspect-1.0 nvmmconvert
+```
+
+To use plugins from the build tree (without installing), point GStreamer at each plugin dir:
+
+```bash
+export GST_PLUGIN_PATH=$(pwd)/build-cmake/gst/nvmmconvert:$(pwd)/build-cmake/gst/nvmmsink:$(pwd)/build-cmake/gst/nvmmappsrc:$(pwd)/build-cmake/gst/nvmmalloc
 gst-inspect-1.0 nvmmconvert
 ```
 
@@ -454,26 +470,52 @@ gst-launch-1.0 \
   nvmmappsrc shm-name=/video_feed ! videoconvert ! autovideosink
 ```
 
-### ROS2 bridge (conceptual)
+### Multi-camera fan-out to multiple consumers
 
-```cpp
-// In a ROS2 node -- attach to shared memory written by nvmmsink
-int fd = shm_open("/camera_feed", O_RDONLY, 0);
-void *ptr = mmap(NULL, shm_size, PROT_READ, MAP_SHARED, fd, 0);
-auto *header = static_cast<ShmHeader *>(ptr);
+The motivating use case for `nvmmsink` / `nvmmappsrc`: one producer stream published once, consumed concurrently by as many processes as you want, all staying on the GPU. Each `nvmmsink` pool is written once per frame; every consumer just imports the fds and reads in place — adding a second (or third) consumer does not add a second GPU copy.
 
-while (rclcpp::ok()) {
-    if (header->ready && header->frame_number > last_frame) {
-        auto *frame_data = (uint8_t *)ptr + sizeof(ShmHeader);
-        sensor_msgs::msg::Image msg;
-        msg.width = header->width;
-        msg.height = header->height;
-        msg.data.assign(frame_data, frame_data + header->data_size);
-        publisher->publish(msg);
-        last_frame = header->frame_number;
-    }
-}
+Given N ZED cameras publishing NVMM NV12 at 120 fps, and K processes that each need to encode all N streams to MP4 — every consumer gets every stream, no CPU copies.
+
+**Producer** (N cameras → N shm segments, one process). Replace the serial numbers with your own (`zedsrc camera-sn=...`):
+
+```bash
+gst-launch-1.0 -e \
+  zedsrc camera-sn=<SN1> camera-resolution=4 camera-fps=120 stream-type=7 \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! queue ! nvmmsink shm-name=/cam1 \
+  zedsrc camera-sn=<SN2> camera-resolution=4 camera-fps=120 stream-type=7 \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! queue ! nvmmsink shm-name=/cam2 \
+  zedsrc camera-sn=<SN3> camera-resolution=4 camera-fps=120 stream-type=7 \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! queue ! nvmmsink shm-name=/cam3
 ```
+
+**Consumers** (each instance attaches to all three shm segments and records to its own files). Launch this pipeline in as many shells as you want — the producer above doesn't care:
+
+```bash
+timeout -s INT 120 gst-launch-1.0 -e \
+  nvmmappsrc shm-name=/cam1 do-timestamp=true is-live=true \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! nvv4l2h264enc bitrate=20000000 ! h264parse ! qtmux \
+    ! filesink location=/tmp/out_cam1.mp4 sync=false async=false \
+  nvmmappsrc shm-name=/cam2 do-timestamp=true is-live=true \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! nvv4l2h264enc bitrate=20000000 ! h264parse ! qtmux \
+    ! filesink location=/tmp/out_cam2.mp4 sync=false async=false \
+  nvmmappsrc shm-name=/cam3 do-timestamp=true is-live=true \
+    ! 'video/x-raw(memory:NVMM),format=NV12' \
+    ! nvv4l2h264enc bitrate=20000000 ! h264parse ! qtmux \
+    ! filesink location=/tmp/out_cam3.mp4 sync=false async=false
+```
+
+The pool's per-slot `ref_counts` handle the fan-out: each consumer atomically increments its slot's count on read and decrements when done, and the producer only reuses a slot once its count is back to 0. Buffers stay GPU-resident through the whole pipeline — decode to encode in the consumer never leaves NVMM.
+
+After `sudo cmake --install` these commands work as shown. If you're running from the build tree instead, export `GST_PLUGIN_PATH` to each plugin subdir as described in [Setup for Reproducing](#setup-for-reproducing-on-jetson).
+
+### ROS2 bridge
+
+The wire protocol (shared-memory header + unix-socket fd passing) is defined in [`gst/common/shm_protocol.h`](gst/common/shm_protocol.h). A ROS2 node that wants to consume `nvmmsink` output without going through GStreamer should follow the same handshake as [`gst/nvmmappsrc/gstnvmmappsrc.cpp`](gst/nvmmappsrc/gstnvmmappsrc.cpp): attach to the shm segment, connect to `header->socket_path`, receive the pool's `NvBufSurfaceMapParams` + DMA-buf fds, and import each one with `NvBufSurfaceImport`. Per-frame reads: wait for `header->ready`, atomically increment `ref_counts[write_idx]`, read from the imported surface, decrement.
 
 ## JetPack Compatibility
 
@@ -487,7 +529,7 @@ The build system auto-detects JetPack version via `/etc/nv_tegra_release` and en
 
 ## Tests
 
-42 tests across 7 suites:
+40 tests across 7 suites:
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
@@ -495,9 +537,9 @@ The build system auto-detects JetPack version via `/etc/nv_tegra_release` and en
 | `nvmm_transform` | 6 | NvmmTransform: scale, crop_and_scale, format convert, flip, null safety |
 | `gst_nvmm_allocator` | 5 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
 | `nvmm_sink` | 4 | GstNvmmSink: element creation, properties, state transitions, shm lifecycle |
-| `nvmm_appsrc` | 3 | GstNvmmAppSrc: element creation, properties, sink-to-source integration via shm |
+| `nvmm_appsrc` | 2 | GstNvmmAppSrc: element creation, properties |
 | `gstcheck_elements` | 8 | Element discovery (3), state transitions (2), property validation, pad template caps, pipeline wiring |
-| `integration` | 7 | Shm data round-trip, multiple shm segments, dynamic properties, pipeline bin, alloc stress, protocol validation, error handling |
+| `integration` | 6 | Multiple shm segments, dynamic properties, pipeline bin, alloc stress, protocol validation, missing-shm error handling |
 
 ```bash
 # Run all tests (Docker, x86_64)
@@ -506,6 +548,8 @@ docker run --rm gst-nvmm-cpp:dev
 
 # Run all tests (Jetson, native)
 LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra meson test -C builddir --verbose
+# or, using CMake:
+ctest --test-dir build-cmake --output-on-failure
 ```
 
 ## Repository Structure
