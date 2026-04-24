@@ -14,6 +14,7 @@
 #include "nvbufsurface_mock.h"
 #else
 #include <nvbufsurface.h>
+#include <nvbufsurftransform.h>
 #endif
 
 #include <atomic>
@@ -42,6 +43,14 @@ typedef NvmmShmCopyHeader ShmHeader;
 /* ------------------------------------------------------------------ */
 
 struct NvmmIpcProducer {
+    /* Scratch pitch-linear NVMM surface used as an intermediate when the
+     * upstream buffer arrives in block-linear layout. Allocated lazily on
+     * first block-linear frame and reused thereafter. */
+    NvBufSurface *scratch_pitch = nullptr;
+    int           scratch_w     = 0;
+    int           scratch_h     = 0;
+    NvBufSurfaceColorFormat scratch_fmt = NVBUF_COLOR_FORMAT_INVALID;
+
     std::string shm_name;
     int   shm_fd    = -1;
     void *shm_ptr   = nullptr;
@@ -109,6 +118,10 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
 gboolean
 nvmm_ipc_producer_stop(NvmmIpcProducer *self, GstElement *owner)
 {
+    if (self->scratch_pitch) {
+        NvBufSurfaceDestroy(self->scratch_pitch);
+        self->scratch_pitch = nullptr;
+    }
     if (self->shm_ptr && self->shm_ptr != MAP_FAILED) {
         munmap(self->shm_ptr, self->shm_size);
         self->shm_ptr = nullptr;
@@ -166,13 +179,55 @@ nvmm_ipc_producer_propose_allocation(NvmmIpcProducer * /*self*/,
     return FALSE;
 }
 
-/* Copy the planes of an externally-allocated NvBufSurface into shm.
- * Used when the incoming buffer carries the memory:NVMM caps feature but
- * the GstMemory isn't from our own allocator (e.g. nvvidconv, zedsrc,
- * nvv4l2decoder). Reads via NvBufSurfaceMap + NvBufSurfaceSyncForCpu. */
+/* Ensure the producer has a pitch-linear scratch surface matching the
+ * given size/format. Reused across frames. */
+static NvBufSurface *
+jp5_get_scratch_pitch(NvmmIpcProducer *self, GstElement *owner,
+                     int w, int h, NvBufSurfaceColorFormat fmt)
+{
+    if (self->scratch_pitch &&
+        self->scratch_w == w && self->scratch_h == h &&
+        self->scratch_fmt == fmt)
+        return self->scratch_pitch;
+
+    if (self->scratch_pitch) {
+        NvBufSurfaceDestroy(self->scratch_pitch);
+        self->scratch_pitch = nullptr;
+    }
+
+    NvBufSurfaceCreateParams params{};
+    params.gpuId        = 0;
+    params.width        = (uint32_t)w;
+    params.height       = (uint32_t)h;
+    params.colorFormat  = fmt;
+    params.layout       = NVBUF_LAYOUT_PITCH;
+    params.memType      = NVBUF_MEM_SURFACE_ARRAY;
+    params.isContiguous = true;
+
+    NvBufSurface *s = nullptr;
+    if (NvBufSurfaceCreate(&s, 1, &params) != 0 || !s) {
+        GST_ERROR_OBJECT(owner, "scratch pitch-linear surface allocation failed");
+        return nullptr;
+    }
+    self->scratch_pitch = s;
+    self->scratch_w     = w;
+    self->scratch_h     = h;
+    self->scratch_fmt   = fmt;
+    GST_INFO_OBJECT(owner,
+        "allocated pitch-linear scratch for block-linear->pitch conversion: %dx%d",
+        w, h);
+    return s;
+}
+
+/* Copy an external NVMM surface's planes into tightly-packed shm, matching
+ * the GstVideoInfo layout the consumer will emit. If the source is
+ * BLOCK_LINEAR (the default for nvvidconv/nvv4l2decoder output on Tegra),
+ * first convert to a pitch-linear scratch via NvBufSurfTransform, then
+ * CPU-map + memcpy. */
 static gsize
-v1_copy_external_nvmm(GstElement *owner, ShmHeader *header,
-                      uint8_t *frame_data, gsize available,
+jp5_copy_external_nvmm(NvmmIpcProducer *self, GstElement *owner,
+                      const GstVideoInfo *vi,
+                      ShmHeader *header, uint8_t *frame_data, gsize available,
                       NvBufSurface *surf)
 {
     if (!surf || !surf->surfaceList) {
@@ -180,56 +235,93 @@ v1_copy_external_nvmm(GstElement *owner, ShmHeader *header,
                            (void*)surf, surf ? (void*)surf->surfaceList : nullptr);
         return 0;
     }
-    const NvBufSurfaceParams *p = &surf->surfaceList[0];
-    const uint32_t nplanes = p->planeParams.num_planes;
+    const NvBufSurfaceParams *sp = &surf->surfaceList[0];
+    const guint nplanes = GST_VIDEO_INFO_N_PLANES(vi);
     if (nplanes == 0 || nplanes > 4) {
         GST_WARNING_OBJECT(owner, "external NVMM: bad plane count %u", nplanes);
         return 0;
     }
-    GST_LOG_OBJECT(owner, "external NVMM: %ux%u nplanes=%u memType=%d",
-                   p->width, p->height, nplanes, surf->memType);
 
-    /* Map planes one-by-one — using -1 to mean "all planes" isn't reliable
-     * across driver versions. */
-    gsize total = 0;
-    for (uint32_t pl = 0; pl < nplanes && pl < 4; pl++) {
-        if (NvBufSurfaceMap(surf, 0, (int)pl, NVBUF_MAP_READ) != 0) {
-            GST_WARNING_OBJECT(owner, "NvBufSurfaceMap failed for plane %u", pl);
-            continue;
+    /* Destination plane sizes derived from GstVideoInfo — these are the
+     * tight-packed byte counts the consumer will expect. */
+    gsize dst_plane_size[4] = {0,0,0,0};
+    for (guint pl = 0; pl < nplanes; pl++) {
+        gsize off  = GST_VIDEO_INFO_PLANE_OFFSET(vi, pl);
+        gsize next = (pl + 1 < nplanes)
+                       ? (gsize)GST_VIDEO_INFO_PLANE_OFFSET(vi, pl + 1)
+                       : (gsize)GST_VIDEO_INFO_SIZE(vi);
+        dst_plane_size[pl] = next - off;
+    }
+
+    GST_LOG_OBJECT(owner,
+                   "external NVMM %dx%d fmt=%s nplanes=%u layout=%d memType=%d "
+                   "src_pitch=[%u,%u] dst_stride=[%d,%d] dst_plane_size=[%zu,%zu]",
+                   GST_VIDEO_INFO_WIDTH(vi), GST_VIDEO_INFO_HEIGHT(vi),
+                   gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(vi)),
+                   nplanes, sp->layout, surf->memType,
+                   sp->planeParams.pitch[0], sp->planeParams.pitch[1],
+                   GST_VIDEO_INFO_PLANE_STRIDE(vi, 0),
+                   nplanes > 1 ? GST_VIDEO_INFO_PLANE_STRIDE(vi, 1) : 0,
+                   dst_plane_size[0], dst_plane_size[1]);
+
+    /* If the source is block-linear (Tegra tiled), go via a pitch-linear
+     * scratch surface first. VIC handles the detile; we then CPU-map the
+     * scratch and memcpy rows out. */
+    NvBufSurface *src_surf = surf;
+    if (sp->layout == NVBUF_LAYOUT_BLOCK_LINEAR) {
+        NvBufSurface *scratch = jp5_get_scratch_pitch(
+            self, owner,
+            sp->width, sp->height, sp->colorFormat);
+        if (!scratch) return 0;
+
+        NvBufSurfTransformParams xp{};
+        xp.transform_flag = 0;
+        if (NvBufSurfTransform(surf, scratch, &xp) != NvBufSurfTransformError_Success) {
+            GST_WARNING_OBJECT(owner, "NvBufSurfTransform block->pitch failed");
+            return 0;
         }
-        NvBufSurfaceSyncForCpu(surf, 0, (int)pl);
+        src_surf = scratch;
+        sp = &scratch->surfaceList[0];  /* use scratch's params from here on */
+    }
 
-        const uint8_t *src = (const uint8_t *)p->mappedAddr.addr[pl];
+    if (NvBufSurfaceMap(src_surf, 0, -1, NVBUF_MAP_READ) != 0) {
+        GST_WARNING_OBJECT(owner, "NvBufSurfaceMap(all-planes) failed");
+        return 0;
+    }
+    NvBufSurfaceSyncForCpu(src_surf, 0, -1);
+
+    gsize total = 0;
+    for (guint pl = 0; pl < nplanes; pl++) {
+        const uint8_t *src = (const uint8_t *)sp->mappedAddr.addr[pl];
         if (!src) {
             GST_WARNING_OBJECT(owner, "plane %u mappedAddr null after map", pl);
-            NvBufSurfaceUnMap(surf, 0, (int)pl);
             continue;
         }
 
-        const uint32_t pitch  = p->planeParams.pitch[pl];
-        const uint32_t height = p->planeParams.height[pl];
-        const uint32_t bpp    = p->planeParams.bytesPerPix[pl];
-        const uint32_t row_bytes = p->planeParams.width[pl] * bpp;
-        if (row_bytes == 0 || pitch == 0 || height == 0) {
-            GST_WARNING_OBJECT(owner, "plane %u bad geom pitch=%u h=%u bpp=%u",
-                               pl, pitch, height, bpp);
-            NvBufSurfaceUnMap(surf, 0, (int)pl);
+        const gsize  src_pitch  = sp->planeParams.pitch[pl];
+        const gsize  dst_pitch  = GST_VIDEO_INFO_PLANE_STRIDE(vi, pl);
+        const gsize  plane_rows = (dst_pitch > 0) ? dst_plane_size[pl] / dst_pitch : 0;
+        const gsize  row_bytes  = MIN(src_pitch, dst_pitch);
+
+        if (!src_pitch || !dst_pitch || !plane_rows) {
+            GST_WARNING_OBJECT(owner,
+                "plane %u bad geom src_pitch=%zu dst_pitch=%zu rows=%zu",
+                pl, src_pitch, dst_pitch, plane_rows);
             continue;
         }
 
         const gsize offset_before = total;
-        for (uint32_t row = 0; row < height; row++) {
-            gsize copy = MIN((gsize)row_bytes, available - total);
-            if (!copy) break;
-            memcpy(frame_data + total, src + (gsize)row * pitch, copy);
-            total += copy;
+        for (gsize row = 0; row < plane_rows && total + row_bytes <= available;
+             row++) {
+            memcpy(frame_data + total, src + row * src_pitch, row_bytes);
+            total += row_bytes;
         }
 
-        header->pitches[pl] = row_bytes;
+        header->pitches[pl] = (uint32_t)dst_pitch;
         header->offsets[pl] = (uint32_t)offset_before;
-
-        NvBufSurfaceUnMap(surf, 0, (int)pl);
     }
+
+    NvBufSurfaceUnMap(src_surf, 0, -1);
     return total;
 }
 
@@ -298,7 +390,8 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
         if (gst_buffer_map(buffer, &info, GST_MAP_READ)) {
             NvBufSurface *surf = reinterpret_cast<NvBufSurface *>(info.data);
             if (surf)
-                total = v1_copy_external_nvmm(owner, header, frame_data,
+                total = jp5_copy_external_nvmm(self, owner, &self->video_info,
+                                              header, frame_data,
                                               available, surf);
             else
                 GST_WARNING_OBJECT(owner, "external NVMM map returned null surf");
@@ -475,6 +568,26 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
             static_cast<const uint8_t *>(self->shm_ptr) + sizeof(ShmHeader);
         memcpy(info.data, frame_data, data_size);
         gst_buffer_unmap(buf, &info);
+    }
+
+    /* Attach GstVideoMeta with the exact strides the producer wrote.
+     * Without this, downstream elements fall back to
+     * gst_video_info_to_caps defaults which may differ from what we
+     * actually wrote (especially for multi-plane formats like NV12). */
+    if (self->caps_ready) {
+        gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
+        gint  strides[GST_VIDEO_MAX_PLANES] = {0};
+        guint n = GST_VIDEO_INFO_N_PLANES(&self->video_info);
+        for (guint p = 0; p < n && p < 4; p++) {
+            offsets[p] = header->offsets[p];
+            strides[p] = (gint)header->pitches[p];
+        }
+        gst_buffer_add_video_meta_full(
+            buf, GST_VIDEO_FRAME_FLAG_NONE,
+            GST_VIDEO_INFO_FORMAT(&self->video_info),
+            GST_VIDEO_INFO_WIDTH(&self->video_info),
+            GST_VIDEO_INFO_HEIGHT(&self->video_info),
+            n, offsets, strides);
     }
 
     GST_BUFFER_PTS(buf)      = header->timestamp_ns;

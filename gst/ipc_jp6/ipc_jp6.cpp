@@ -114,7 +114,7 @@ struct NvmmIpcProducer {
 };
 
 static gboolean
-v2_allocate_pool(NvmmIpcProducer *self, GstElement *owner)
+jp6_allocate_pool(NvmmIpcProducer *self, GstElement *owner)
 {
     const int w = GST_VIDEO_INFO_WIDTH(&self->video_info);
     const int h = GST_VIDEO_INFO_HEIGHT(&self->video_info);
@@ -159,7 +159,7 @@ v2_allocate_pool(NvmmIpcProducer *self, GstElement *owner)
 }
 
 static void
-v2_destroy_pool(NvmmIpcProducer *self)
+jp6_destroy_pool(NvmmIpcProducer *self)
 {
     for (auto &slot : self->pool) {
         if (slot.surface) {
@@ -173,7 +173,7 @@ v2_destroy_pool(NvmmIpcProducer *self)
 }
 
 static void
-v2_send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
+jp6_send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
 {
     int ps = (int)self->pool.size();
     if (send(client_fd, &ps, sizeof(ps), 0) != (ssize_t)sizeof(ps)) {
@@ -210,7 +210,7 @@ v2_send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
 }
 
 static void
-v2_accept_loop(NvmmIpcProducer *self, GstElement *owner)
+jp6_accept_loop(NvmmIpcProducer *self, GstElement *owner)
 {
     while (self->running.load()) {
         struct pollfd pfd { self->listen_fd, POLLIN, 0 };
@@ -225,7 +225,7 @@ v2_accept_loop(NvmmIpcProducer *self, GstElement *owner)
             g_usleep(10000);
 
         if (!self->running.load()) { close(client); break; }
-        v2_send_fds_to_client(self, owner, client);
+        jp6_send_fds_to_client(self, owner, client);
     }
 }
 
@@ -288,7 +288,7 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
     }
 
     self->running.store(true);
-    self->accept_thread = std::thread(v2_accept_loop, self, owner);
+    self->accept_thread = std::thread(jp6_accept_loop, self, owner);
     self->frame_number.store(0);
     self->write_idx = 0;
 
@@ -311,7 +311,7 @@ nvmm_ipc_producer_stop(NvmmIpcProducer *self, GstElement *owner)
     if (self->listen_fd >= 0) { close(self->listen_fd); self->listen_fd = -1; }
     if (!self->socket_path.empty()) { unlink(self->socket_path.c_str()); self->socket_path.clear(); }
 
-    v2_destroy_pool(self);
+    jp6_destroy_pool(self);
 
     if (self->shm_ptr && self->shm_ptr != MAP_FAILED) {
         munmap(self->shm_ptr, self->shm_size);
@@ -332,7 +332,7 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
     self->video_info = *info;
     self->caps_set   = TRUE;
 
-    if (!self->pool_allocated && !v2_allocate_pool(self, owner))
+    if (!self->pool_allocated && !jp6_allocate_pool(self, owner))
         return FALSE;
 
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
@@ -367,7 +367,7 @@ nvmm_ipc_producer_propose_allocation(NvmmIpcProducer * /*self*/,
 
 /* Helper: fetch NvBufSurface* from an incoming NVMM GstBuffer. */
 static NvBufSurface *
-v2_buffer_to_surface(GstBuffer *buffer, gboolean caps_is_nvmm)
+jp6_buffer_to_surface(GstBuffer *buffer, gboolean caps_is_nvmm)
 {
     if (!caps_is_nvmm) return nullptr;
     GstMapInfo info;
@@ -386,7 +386,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
-    NvBufSurface *src = v2_buffer_to_surface(buffer, TRUE);
+    NvBufSurface *src = jp6_buffer_to_surface(buffer, TRUE);
     if (!src) {
         GST_WARNING_OBJECT(owner, "render: buffer is not NVMM (pool backend requires NVMM input)");
         return GST_FLOW_ERROR;
@@ -601,7 +601,7 @@ nvmm_ipc_consumer_peek_caps(NvmmIpcConsumer *self, GstVideoInfo *out_info,
  * GStreamer process.
  */
 static GstMemory *
-v2_wrap_imported(NvBufSurface *surf)
+jp6_wrap_imported(NvBufSurface *surf)
 {
     return gst_memory_new_wrapped(
         GST_MEMORY_FLAG_NO_SHARE,
@@ -668,7 +668,7 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     self->ring_head = (self->ring_head + 1) % V2_RELEASE_DELAY;
 
     GstBuffer *buf = gst_buffer_new();
-    gst_buffer_append_memory(buf, v2_wrap_imported(self->imported[idx]));
+    gst_buffer_append_memory(buf, jp6_wrap_imported(self->imported[idx]));
     GST_BUFFER_PTS(buf)      = header->timestamp_ns;
     GST_BUFFER_DURATION(buf) = GST_CLOCK_TIME_NONE;
 
