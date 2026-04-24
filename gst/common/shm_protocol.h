@@ -58,20 +58,33 @@ typedef struct NvmmShmCopyHeader {
 /* -------------------------------------------------------------- */
 /*
  * Fields below are shared across processes. They are NOT declared `volatile`
- * deliberately — `volatile` tells the compiler "do not cache in a register"
- * but gives no atomicity or cross-CPU ordering guarantees and is the wrong
- * tool for IPC synchronization. Access them from C/C++ code using the
- * __atomic_* builtins with explicit memory order:
+ * — `volatile` blocks compiler register-caching but provides no atomicity
+ * or cross-CPU ordering, which is the wrong tool for IPC synchronization.
+ *
+ * Access them from C/C++ code using the __atomic_* builtins with explicit
+ * memory order:
  *
  *   reads       -> __atomic_load_n(&field, __ATOMIC_ACQUIRE)
  *   publishes   -> __atomic_store_n(&field, v, __ATOMIC_RELEASE)
  *   CAS         -> __atomic_compare_exchange_n(..., __ATOMIC_ACQ_REL, ...)
  *   fences      -> __atomic_thread_fence(__ATOMIC_ACQUIRE/RELEASE)
  *
- * uint32_t / int32_t / uint64_t are lock-free on every Linux target this
- * project supports (aarch64 + x86_64 glibc). Producer and consumer agree
- * on the write_idx + ref_counts[] contract; see the ref_counts comment
- * below.
+ * Rationale for __atomic_* over std::atomic<T> on C++14: the C++14
+ * standard requires an atomic object to be constructed via its
+ * constructor, and does not guarantee its layout matches plain T.
+ * Reinterpret-casting a shm byte range to std::atomic<T>* is
+ * technically UB and ABI-implementation-defined. std::atomic_ref<T>
+ * (C++20) legitimizes the pattern but the project is pinned to
+ * cpp_std=c++14. __atomic_* works on plain integral fields, lowers to
+ * the same machine code std::atomic<T> would on supported architectures
+ * (aarch64 ldar/stlr, x86 mov+mfence), and compiles identically in C
+ * and C++.
+ *
+ * TODO: when we drop pre-C++20 toolchain support, migrate these to
+ * std::atomic_ref with the same memory_order arguments.
+ *
+ * uint32_t / int32_t / uint64_t are lock-free on every Linux target
+ * this project supports (aarch64 + x86_64 glibc).
  */
 typedef struct NvmmShmPoolHeader {
     uint32_t magic;
