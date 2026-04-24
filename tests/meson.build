@@ -67,13 +67,21 @@ test_gstcheck = executable('test_gstcheck_elements',
 plugin_path_with_convert = plugin_path + ':' + \
     meson.current_build_dir() / '..' / 'gst' / 'nvmmconvert'
 
+# Tests below use gst_element_factory_make, which dlopens our plugin .so
+# files. Under TSan that fails (GStreamer rejects dlopen'ing TSan-instrumented
+# .so files from an unsanitized plugin scanner, and TSan can't be LD_PRELOADed
+# the way ASan can). Group them under the 'plugin-factory' suite so the TSan
+# runner can --no-suite=plugin-factory them out.
 test('nvmm_sink', test_sink, protocol : 'exitcode',
+  suite : 'plugin-factory',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path])
 test('nvmm_appsrc', test_appsrc, protocol : 'exitcode',
+  suite : 'plugin-factory',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path])
 test('gstcheck_elements', test_gstcheck, protocol : 'exitcode',
+  suite : 'plugin-factory',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
 
@@ -91,5 +99,22 @@ test_integration = executable('test_integration',
 )
 
 test('integration', test_integration, protocol : 'exitcode',
+  suite : 'plugin-factory',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
+
+# Backend concurrency / TSan test — drives ipc_backend directly so it
+# works under TSan (plugin-factory tests can't, TSan cannot be LD_PRELOADed).
+test_backend_concurrency = executable('test_backend_concurrency',
+  'test_backend_concurrency.cpp',
+  include_directories : [
+    config_inc, common_inc,
+    include_directories('../gst/nvmmalloc'),
+  ],
+  dependencies : [ipc_backend_dep, gstnvmmalloc_dep, gst_dep, gst_video_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+test('backend_concurrency', test_backend_concurrency, protocol : 'exitcode',
+  is_parallel : false,
+  timeout : 30)
