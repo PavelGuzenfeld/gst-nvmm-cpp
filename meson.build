@@ -1,5 +1,5 @@
 project('gst-nvmm-cpp', ['c', 'cpp'],
-  version : '1.0.1',
+  version : '1.2.0',
   meson_version : '>= 0.62.0',
   license : 'LGPL-2.1-or-later',
   default_options : [
@@ -76,20 +76,39 @@ endif
 have_nvbufsurface = nvbufsurface_dep.found()
 have_nvbufsurftransform = nvbufsurftransform_dep.found()
 
-# JetPack version detection via L4T version file
+# JetPack version detection.
+#
+# We do NOT rely on the L4T release file — that only works when configuring
+# on a Jetson. Instead, probe the nvbufsurface.h header for a JP6-only
+# symbol (NvBufSurfaceMapParams). This also works when cross-compiling
+# against JP6 headers in a Docker build on an x86 host.
 jetpack_version = 'unknown'
-l4t_release = run_command('bash', '-c',
-  'cat /etc/nv_tegra_release 2>/dev/null | head -1 | sed "s/.*R\\([0-9]*\\).*/\\1/"',
-  check : false,
-)
-if l4t_release.returncode() == 0
-  l4t_major = l4t_release.stdout().strip()
-  if l4t_major == '35'
-    jetpack_version = '5'
-  elif l4t_major == '36'
-    jetpack_version = '6'
-  endif
+have_jp6_api = false
+if have_nvbufsurface
+  nvmm_hdr_dirs = []
+  fsmod = import('fs')
+  foreach d : ['/usr/src/jetson_multimedia_api/include',
+               '/usr/include/nvbufsurface',
+               '/opt/nvidia/deepstream/deepstream/sources/includes']
+    if fsmod.is_dir(d)
+      nvmm_hdr_dirs += '-I' + d
+    endif
+  endforeach
+  have_jp6_api = cpp.has_header_symbol(
+    'nvbufsurface.h', 'NvBufSurfaceMapParams',
+    args : nvmm_hdr_dirs,
+    required : false)
+  jetpack_version = have_jp6_api ? '6' : '5'
+else
+  # Mock build — always exercises the JP6 backend (mock headers carry stubs
+  # for every JP6 API the backend calls).
+  have_jp6_api = true
+  jetpack_version = 'mock-jp6'
 endif
+
+message('selected IPC backend: @0@  (JetPack: @1@)'.format(
+  have_jp6_api ? 'jp6 (pool + SCM_RIGHTS)' : 'jp5 (shm-copy)',
+  jetpack_version))
 
 # NvSciBuf support (JP6+ only)
 have_nvscibuf = false
@@ -129,7 +148,16 @@ if build_mock
 endif
 
 subdir('gst/common')
-subdir('gst/nvmmalloc')
+subdir('gst/nvmmalloc')   # provides gstnvmmalloc_dep, consumed by jp5 backend
+
+# IPC backend — exactly one of these subdirs is compiled, picked by JP detection.
+# The subdir defines `ipc_backend_dep` which sink/appsrc depend on.
+if have_jp6_api
+  subdir('gst/ipc_jp6')
+else
+  subdir('gst/ipc_jp5')
+endif
+
 subdir('gst/nvmmconvert')
 subdir('gst/nvmmsink')
 subdir('gst/nvmmappsrc')
