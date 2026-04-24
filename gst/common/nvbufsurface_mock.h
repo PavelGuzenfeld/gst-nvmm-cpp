@@ -10,6 +10,10 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <linux/memfd.h>
+#include <fcntl.h>
 
 #define NVBUF_MAX_PLANES 4
 #define STRUCTURE_PADDING 4
@@ -216,7 +220,11 @@ static inline int NvBufSurfaceCreate(NvBufSurface** surf,
         p->colorFormat = params->colorFormat;
         p->layout = params->layout;
         p->pitch = params->width * _mock_bpp(params->colorFormat);
-        p->bufferDesc = 42 + i;  /* fake DMA-buf fd */
+        /* Real fd so SCM_RIGHTS passing works in tests. memfd_create
+         * is Linux-specific but that's all we support. */
+        int fd = (int)syscall(SYS_memfd_create, "nvmm-mock", 0u);
+        if (fd < 0) { free(s->surfaceList); free(s); return -1; }
+        p->bufferDesc = (uint64_t)fd;
 
         uint32_t nplanes = _mock_plane_count(params->colorFormat);
         p->planeParams.num_planes = nplanes;
@@ -261,6 +269,8 @@ static inline int NvBufSurfaceDestroy(NvBufSurface* surf) {
             free(surf->surfaceList[i].dataPtr);
             for (int p = 0; p < NVBUF_MAX_PLANES; p++)
                 free(surf->surfaceList[i].mappedAddr.addr[p]);
+            int fd = (int)surf->surfaceList[i].bufferDesc;
+            if (fd >= 0) close(fd);
         }
         free(surf->surfaceList);
     }

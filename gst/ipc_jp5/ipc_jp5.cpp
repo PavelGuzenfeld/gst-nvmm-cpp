@@ -108,7 +108,10 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
     }
 
     memset(self->shm_ptr, 0, self->shm_size);
-    self->frame_number.store(0);
+    /* Start at 1 so the first published frame_number (fetch_add returns
+     * pre-increment = 1) is distinguishable from a consumer's default
+     * last_frame=0. */
+    self->frame_number.store(1);
 
     GST_INFO_OBJECT(owner, "jp5 producer started: shm='%s' size=%" G_GSIZE_FORMAT,
                     self->shm_name.c_str(), self->shm_size);

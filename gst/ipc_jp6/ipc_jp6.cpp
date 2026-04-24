@@ -50,11 +50,11 @@ typedef NvmmShmPoolHeader ShmHeader;
 /* ================================================================== */
 /* Atomic accessors for shm fields shared with remote consumers.
  *
- * The underlying ref_counts[] / write_idx / ready / frame_number fields
- * are plain int32_t / uint32_t / uint64_t — NOT volatile. `volatile`
- * blocks compiler register caching but provides no atomicity or cross-
- * CPU ordering; it is the wrong tool for IPC. Use __atomic_* builtins
- * with explicit memory order everywhere below.
+ * The underlying slots[].ref_count / write_idx / ready / frame_number
+ * fields are plain int32_t / uint32_t / uint64_t — NOT volatile.
+ * `volatile` blocks compiler register caching but provides no atomicity
+ * or cross-CPU ordering; it is the wrong tool for IPC. Use __atomic_*
+ * builtins with explicit memory order everywhere below.
  */
 static inline int32_t refc_load(int32_t *p)
 {
@@ -270,7 +270,7 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
     memset(header, 0, sizeof(*header));
     header->magic   = NVMM_SHM_MAGIC;
     header->version = NVMM_SHM_PROTO_POOL;
-    for (int i = 0; i < NVMM_POOL_SIZE_MAX; i++) refc_store(&header->ref_counts[i], 0);
+    for (int i = 0; i < NVMM_POOL_SIZE_MAX; i++) refc_store(&header->slots[i].ref_count, 0);
 
     /* Socket path derived from shm name; flatten slashes. */
     std::string flat = self->shm_name;
@@ -286,7 +286,10 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
 
     self->running.store(true);
     self->accept_thread = std::thread(jp6_accept_loop, self, owner);
-    self->frame_number.store(0);
+    /* Start at 1 so the first published frame_number (fetch_add returns
+     * pre-increment = 1) is distinguishable from a consumer's default
+     * last_frame=0. */
+    self->frame_number.store(1);
     self->write_idx = 0;
 
     GST_INFO_OBJECT(owner, "jp6 producer started: shm='%s' socket='%s'",
@@ -344,7 +347,11 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
     }
     g_strlcpy(header->socket_path, self->socket_path.c_str(),
               sizeof(header->socket_path));
-    __atomic_thread_fence(__ATOMIC_RELEASE);
+
+    /* Publish "header complete" via RELEASE on `ready`; pairs with the
+     * consumer's ACQUIRE load in start() and makes all the non-atomic
+     * field writes above visible. */
+    __atomic_store_n(&header->ready, 1u, __ATOMIC_RELEASE);
 
     GST_INFO_OBJECT(owner, "jp6 configured: %dx%d %s pool=%u",
                     header->width, header->height,
@@ -394,7 +401,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
     int target = -1;
     for (int i = 0; i < ps; i++) {
         int idx = (self->write_idx + 1 + i) % ps;
-        if (refc_cas(&header->ref_counts[idx], 0, -1)) { target = idx; break; }
+        if (refc_cas(&header->slots[idx].ref_count, 0, -1)) { target = idx; break; }
     }
     if (target < 0) {
         GST_WARNING_OBJECT(owner, "all %d pool buffers busy, dropping frame", ps);
@@ -403,7 +410,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 
     if (NvBufSurfaceCopy(src, self->pool[target].surface) != 0) {
         GST_WARNING_OBJECT(owner, "NvBufSurfaceCopy failed for slot %d", target);
-        refc_store(&header->ref_counts[target], 0);
+        refc_store(&header->slots[target].ref_count, 0);
         return GST_FLOW_ERROR;
     }
 
@@ -411,7 +418,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
      * store on `ready` pairs with the consumer's ACQUIRE load on `ready`
      * and makes the preceding writes to write_idx / frame_number /
      * timestamp_ns visible to the consumer. */
-    refc_store(&header->ref_counts[target], 0);
+    refc_store(&header->slots[target].ref_count, 0);
     const uint64_t fn = self->frame_number.fetch_add(1);
     __atomic_store_n(&header->timestamp_ns, (uint64_t)GST_BUFFER_PTS(buffer), __ATOMIC_RELAXED);
     __atomic_store_n(&header->frame_number, fn,                                __ATOMIC_RELAXED);
@@ -492,14 +499,21 @@ nvmm_ipc_consumer_start(NvmmIpcConsumer *self, GstElement *owner)
 
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
-    /* Wait for producer ready (magic + socket_path populated). */
+    /* Wait for producer to publish "header complete". ACQUIRE load on
+     * `ready` pairs with the RELEASE store in the producer's set_caps;
+     * after the load returns 1, all header fields (magic, version,
+     * socket_path, pool_size, pitches, offsets) are guaranteed visible. */
     int waited = 0;
-    while (header->magic != NVMM_SHM_MAGIC || header->socket_path[0] == '\0') {
+    while (__atomic_load_n(&header->ready, __ATOMIC_ACQUIRE) == 0) {
         if (++waited > 5000) {
             GST_ERROR_OBJECT(owner, "timeout waiting for producer");
             return FALSE;
         }
         g_usleep(1000);
+    }
+    if (header->magic != NVMM_SHM_MAGIC) {
+        GST_ERROR_OBJECT(owner, "shm magic mismatch: got 0x%08x", header->magic);
+        return FALSE;
     }
     if (header->version != NVMM_SHM_PROTO_POOL) {
         GST_ERROR_OBJECT(owner, "shm version mismatch: got %u, want %u",
@@ -657,7 +671,7 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
 
     int cas_attempts = 0;
     while (true) {
-        int32_t cur = refc_load(&header->ref_counts[idx]);
+        int32_t cur = refc_load(&header->slots[idx].ref_count);
         if (cur < 0) {                         /* producer writing this slot */
             g_usleep(100);
             idx = __atomic_load_n(&header->write_idx, __ATOMIC_ACQUIRE);
@@ -665,13 +679,13 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
             if (++cas_attempts > 1000) return GST_FLOW_ERROR;
             continue;
         }
-        if (refc_cas(&header->ref_counts[idx], cur, cur + 1)) break;
+        if (refc_cas(&header->slots[idx].ref_count, cur, cur + 1)) break;
     }
 
     /* Delayed release: decrement the slot we acquired RELEASE_DELAY frames ago. */
     int32_t *old = self->ring[self->ring_head];
     if (old) refc_fetch_add(old, -1);
-    self->ring[self->ring_head] = &header->ref_counts[idx];
+    self->ring[self->ring_head] = &header->slots[idx].ref_count;
     self->ring_head = (self->ring_head + 1) % V2_RELEASE_DELAY;
 
     GstBuffer *buf = gst_buffer_new();
