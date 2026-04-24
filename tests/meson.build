@@ -86,7 +86,7 @@ test_integration = executable('test_integration',
     include_directories('../gst/nvmmsink'),
     include_directories('../gst/nvmmappsrc'),
   ],
-  dependencies : [gstnvmmsink_dep, gstnvmmappsrc_dep, gst_dep, gst_video_dep],
+  dependencies : [gstnvmmalloc_dep, gstnvmmsink_dep, gstnvmmappsrc_dep, gst_dep, gst_video_dep],
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 

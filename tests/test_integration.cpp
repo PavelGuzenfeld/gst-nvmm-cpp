@@ -43,7 +43,9 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
 #include "shm_protocol.h"
-typedef NvmmShmHeader ShmHeader;
+/* JP6 mock build uses the pool protocol; JP5 path uses the copy protocol. */
+#include "config.h"
+typedef NvmmShmPoolHeader ShmHeader;
 
 /// Test: Multiple shm segments sequentially (avoid Docker /dev/shm limit).
 static void test_multiple_shm_segments() {
