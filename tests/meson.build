@@ -111,10 +111,26 @@ test_backend_concurrency = executable('test_backend_concurrency',
     config_inc, common_inc,
     include_directories('../gst/nvmmalloc'),
   ],
-  dependencies : [ipc_backend_dep, gstnvmmalloc_dep, gst_dep, gst_video_dep],
+  dependencies : [
+    ipc_backend_dep, gstnvmmalloc_dep, gst_dep, gst_video_dep,
+    dependency('threads'),
+  ],
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
 test('backend_concurrency', test_backend_concurrency, protocol : 'exitcode',
   is_parallel : false,
   timeout : 30)
+
+# Header-parsing fuzz harness. Runs a fixed 10k iterations by default,
+# each iteration fed from /dev/urandom. Any ASan/UBSan/TSan finding
+# during the run fails the test; otherwise the header-parsing code
+# survived the random-byte stream.
+fuzz_shm = executable('fuzz_shm_header',
+  'fuzz_shm_header.cpp',
+  include_directories : [config_inc, common_inc],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+test('fuzz_shm_header', fuzz_shm, protocol : 'exitcode',
+  args : ['10000'],
+  timeout : 60)

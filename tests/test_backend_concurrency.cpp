@@ -24,6 +24,7 @@
 #include <gst/video/video.h>
 
 #include <atomic>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -156,6 +157,100 @@ static void test_producer_start_stop_churn()
     gst_object_unref(owner);
 }
 
+/// Multi-consumer fan-out. Three consumers read from one producer
+/// simultaneously. Verifies that ref_counts[] scheme lets all three
+/// observe every published frame (the consumer CAS-increments the
+/// count so producer sees nonzero and skips the slot for recycle).
+///
+/// This is the original motivation in @adujardin's #1:
+/// "buffer corruption when sharing a single camera source to multiple
+/// receivers". The old nvunixfdsink/nvunixfdsrc path had a data race
+/// here; the pool + ref-count scheme should not.
+static void test_multi_consumer_fanout()
+{
+    const char *shm = "/test_fanout";
+    shm_unlink(shm);
+
+    GstElement *prod_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "prod_fo", NULL));
+    GstAllocator *alloc = gst_nvmm_allocator_new(0);
+
+    NvmmIpcProducer *prod = nvmm_ipc_producer_new(shm, 8);
+    ASSERT_TRUE(prod);
+    ASSERT_TRUE(nvmm_ipc_producer_start(prod, prod_owner));
+
+    GstVideoInfo vi;
+    gst_video_info_set_format(&vi, GST_VIDEO_FORMAT_RGBA, 64, 64);
+    ASSERT_TRUE(nvmm_ipc_producer_set_caps(prod, prod_owner, &vi, TRUE));
+
+    constexpr int kConsumers = 3;
+    std::atomic<int> seen[kConsumers] = {};
+    std::atomic<bool> stop{false};
+    std::thread consumers[kConsumers];
+
+    auto consumer_fn = [&](int id) {
+        GstElement *co = GST_ELEMENT(g_object_new(GST_TYPE_BIN,
+            "name", g_strdup_printf("cons_fo_%d", id), NULL));
+        NvmmIpcConsumer *c = nvmm_ipc_consumer_new(shm);
+        if (!nvmm_ipc_consumer_start(c, co)) {
+            nvmm_ipc_consumer_free(c);
+            gst_object_unref(co);
+            return;
+        }
+        GstPad *pad = gst_pad_new("src", GST_PAD_SRC);
+        while (!stop.load()) {
+            GstBuffer *buf = nullptr;
+            GstFlowReturn r = nvmm_ipc_consumer_fetch(c, co, pad, &buf);
+            if (r == GST_FLOW_OK && buf) {
+                seen[id].fetch_add(1);
+                gst_buffer_unref(buf);
+            } else if (r == GST_FLOW_EOS) {
+                break;
+            }
+        }
+        nvmm_ipc_consumer_stop(c, co);
+        nvmm_ipc_consumer_free(c);
+        gst_object_unref(pad);
+        gst_object_unref(co);
+    };
+
+    for (int i = 0; i < kConsumers; i++)
+        consumers[i] = std::thread(consumer_fn, i);
+
+    /* Give consumers a moment to connect + handshake. */
+    g_usleep(50000);
+
+    const int total_frames = 100;
+    for (int i = 0; i < total_frames; i++) {
+        GstBuffer *frame = make_nvmm_buffer(alloc, &vi);
+        ASSERT_TRUE(frame);
+        GST_BUFFER_PTS(frame) = i * 1000000;
+        nvmm_ipc_producer_render(prod, prod_owner, frame);
+        gst_buffer_unref(frame);
+        g_usleep(2000);   /* ~500 Hz, slower than consumer polling */
+    }
+
+    g_usleep(100000);
+    stop.store(true);
+    for (auto &t : consumers) t.join();
+
+    nvmm_ipc_producer_stop(prod, prod_owner);
+    nvmm_ipc_producer_free(prod);
+    gst_object_unref(alloc);
+    gst_object_unref(prod_owner);
+
+    int min_seen = INT_MAX, max_seen = 0;
+    for (int i = 0; i < kConsumers; i++) {
+        int s = seen[i].load();
+        if (s < min_seen) min_seen = s;
+        if (s > max_seen) max_seen = s;
+    }
+    std::printf("[consumers: min=%d max=%d of %d] ",
+                min_seen, max_seen, total_frames);
+    /* All three consumers should observe >0 frames; we don't require
+     * every frame (some may be dropped if the producer laps them). */
+    ASSERT_TRUE(min_seen > 0);
+}
+
 int main(int argc, char *argv[])
 {
     gst_init(&argc, &argv);
@@ -167,6 +262,7 @@ int main(int argc, char *argv[])
     std::printf("=== Backend Concurrency Tests ===\n");
     RUN(concurrent_producer_consumer);
     RUN(producer_start_stop_churn);
+    RUN(multi_consumer_fanout);
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }

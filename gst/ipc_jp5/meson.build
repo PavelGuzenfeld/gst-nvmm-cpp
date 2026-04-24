@@ -7,9 +7,13 @@ ipc_backend_deps = [
   gst_dep, gst_base_dep, gst_video_dep,
   gstnvmmalloc_dep,
   nvmm_common_dep,
+  cpp.find_library('rt', required : true),   # shm_open/shm_unlink
 ]
 if have_nvbufsurface
   ipc_backend_deps += nvbufsurface_dep
+endif
+if nvbufsurftransform_dep.found()
+  ipc_backend_deps += nvbufsurftransform_dep
 endif
 
 ipc_backend_lib = static_library(
