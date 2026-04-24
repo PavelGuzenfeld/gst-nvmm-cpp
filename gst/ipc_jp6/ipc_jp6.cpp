@@ -48,31 +48,28 @@ nvmm_ipc_backend_init_debug(void)
 typedef NvmmShmPoolHeader ShmHeader;
 
 /* ================================================================== */
-/* Shared atomic view over shm ref_counts[].
+/* Atomic accessors for shm fields shared with remote consumers.
  *
- * NvmmShmPoolHeader::ref_counts[] is declared `volatile int32_t` for C
- * compatibility; here we treat each slot as an atomic via __atomic_*
- * primitives. Both paths produce the same machine code on Linux/aarch64;
- * the wrappers just make the intent explicit.
+ * The underlying ref_counts[] / write_idx / ready / frame_number fields
+ * are plain int32_t / uint32_t / uint64_t — NOT volatile. `volatile`
+ * blocks compiler register caching but provides no atomicity or cross-
+ * CPU ordering; it is the wrong tool for IPC. Use __atomic_* builtins
+ * with explicit memory order everywhere below.
  */
-static inline int32_t
-refc_load(volatile int32_t *p)
+static inline int32_t refc_load(int32_t *p)
 {
     return __atomic_load_n(p, __ATOMIC_ACQUIRE);
 }
-static inline void
-refc_store(volatile int32_t *p, int32_t v)
+static inline void refc_store(int32_t *p, int32_t v)
 {
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
-static inline bool
-refc_cas(volatile int32_t *p, int32_t expect, int32_t desired)
+static inline bool refc_cas(int32_t *p, int32_t expect, int32_t desired)
 {
     return __atomic_compare_exchange_n(p, &expect, desired, false,
                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
-static inline int32_t
-refc_fetch_add(volatile int32_t *p, int32_t d)
+static inline int32_t refc_fetch_add(int32_t *p, int32_t d)
 {
     return __atomic_fetch_add(p, d, __ATOMIC_ACQ_REL);
 }
@@ -410,18 +407,20 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
         return GST_FLOW_ERROR;
     }
 
-    /* Release writer lock, publish. */
+    /* Release writer lock and publish the new frame. The final RELEASE
+     * store on `ready` pairs with the consumer's ACQUIRE load on `ready`
+     * and makes the preceding writes to write_idx / frame_number /
+     * timestamp_ns visible to the consumer. */
     refc_store(&header->ref_counts[target], 0);
-    __atomic_thread_fence(__ATOMIC_RELEASE);
-    header->write_idx    = target;
-    header->timestamp_ns = GST_BUFFER_PTS(buffer);
-    header->frame_number = self->frame_number.fetch_add(1);
-    __atomic_thread_fence(__ATOMIC_RELEASE);
-    header->ready = 1;
+    const uint64_t fn = self->frame_number.fetch_add(1);
+    __atomic_store_n(&header->timestamp_ns, (uint64_t)GST_BUFFER_PTS(buffer), __ATOMIC_RELAXED);
+    __atomic_store_n(&header->frame_number, fn,                                __ATOMIC_RELAXED);
+    __atomic_store_n(&header->write_idx,    (uint32_t)target,                  __ATOMIC_RELAXED);
+    __atomic_store_n(&header->ready,        1u,                                __ATOMIC_RELEASE);
     self->write_idx = target;
 
     GST_LOG_OBJECT(owner, "published frame #%" G_GUINT64_FORMAT " into slot %d",
-                   (guint64)header->frame_number, target);
+                   (guint64)fn, target);
     return GST_FLOW_OK;
 }
 
@@ -448,8 +447,9 @@ struct NvmmIpcConsumer {
     GstVideoInfo video_info{};
     gboolean     caps_ready = FALSE;
 
-    /* Delayed release ring — see note above. */
-    volatile int32_t *ring[V2_RELEASE_DELAY] = {};
+    /* Delayed release ring — see note above. Pointers into shm ref_counts[];
+     * accessed through refc_* helpers. */
+    int32_t *ring[V2_RELEASE_DELAY] = {};
     int ring_head = 0;
 };
 
@@ -582,8 +582,9 @@ nvmm_ipc_consumer_peek_caps(NvmmIpcConsumer *self, GstVideoInfo *out_info,
                             gboolean *out_is_nvmm)
 {
     if (!self->shm_ptr) return FALSE;
-    auto *header = static_cast<const ShmHeader *>(self->shm_ptr);
-    if (header->magic != NVMM_SHM_MAGIC || !header->ready ||
+    auto *header = static_cast<ShmHeader *>(self->shm_ptr);
+    if (header->magic != NVMM_SHM_MAGIC ||
+        __atomic_load_n(&header->ready, __ATOMIC_ACQUIRE) == 0 ||
         header->width == 0 || header->height == 0)
         return FALSE;
     gst_video_info_set_format(out_info, (GstVideoFormat)header->format,
@@ -618,7 +619,15 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
     int attempts = 0;
-    while (!header->ready || header->frame_number == self->last_frame) {
+    /* Poll `ready` + `frame_number` with ACQUIRE semantics. When the
+     * load returns a new value the producer's prior writes (write_idx,
+     * timestamp_ns, ref_counts) are guaranteed visible. */
+    uint32_t ready;
+    uint64_t fn;
+    while (true) {
+        ready = __atomic_load_n(&header->ready,        __ATOMIC_ACQUIRE);
+        fn    = __atomic_load_n(&header->frame_number, __ATOMIC_RELAXED);
+        if (ready && fn != self->last_frame) break;
         if (GST_PAD_IS_FLUSHING(src_pad)) return GST_FLOW_FLUSHING;
         if (++attempts > 2000) {
             GST_INFO_OBJECT(owner, "no new frame for 2s, returning EOS");
@@ -626,7 +635,6 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
         }
         g_usleep(1000);
     }
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
 
     if (header->magic != NVMM_SHM_MAGIC) return GST_FLOW_ERROR;
 
@@ -644,7 +652,7 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     }
 
     /* CAS-increment ref_count on current write_idx, avoiding writer lock. */
-    uint32_t idx = header->write_idx;
+    uint32_t idx = __atomic_load_n(&header->write_idx, __ATOMIC_ACQUIRE);
     if (idx >= (uint32_t)self->pool_size) return GST_FLOW_ERROR;
 
     int cas_attempts = 0;
@@ -652,29 +660,28 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
         int32_t cur = refc_load(&header->ref_counts[idx]);
         if (cur < 0) {                         /* producer writing this slot */
             g_usleep(100);
-            idx = header->write_idx;
+            idx = __atomic_load_n(&header->write_idx, __ATOMIC_ACQUIRE);
             if (idx >= (uint32_t)self->pool_size) return GST_FLOW_ERROR;
             if (++cas_attempts > 1000) return GST_FLOW_ERROR;
             continue;
         }
         if (refc_cas(&header->ref_counts[idx], cur, cur + 1)) break;
     }
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
 
     /* Delayed release: decrement the slot we acquired RELEASE_DELAY frames ago. */
-    volatile int32_t *old = self->ring[self->ring_head];
+    int32_t *old = self->ring[self->ring_head];
     if (old) refc_fetch_add(old, -1);
     self->ring[self->ring_head] = &header->ref_counts[idx];
     self->ring_head = (self->ring_head + 1) % V2_RELEASE_DELAY;
 
     GstBuffer *buf = gst_buffer_new();
     gst_buffer_append_memory(buf, jp6_wrap_imported(self->imported[idx]));
-    GST_BUFFER_PTS(buf)      = header->timestamp_ns;
+    GST_BUFFER_PTS(buf)      = __atomic_load_n(&header->timestamp_ns, __ATOMIC_RELAXED);
     GST_BUFFER_DURATION(buf) = GST_CLOCK_TIME_NONE;
 
-    self->last_frame = header->frame_number;
+    self->last_frame = fn;
     GST_LOG_OBJECT(owner, "fetched frame #%" G_GUINT64_FORMAT " from slot %u",
-                   (guint64)header->frame_number, idx);
+                   (guint64)fn, idx);
 
     *out_buffer = buf;
     return GST_FLOW_OK;

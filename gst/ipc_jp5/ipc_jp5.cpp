@@ -339,15 +339,17 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 
     GstMemory *mem = gst_buffer_peek_memory(buffer, 0);
 
-    header->ready = 0;
-    __sync_synchronize();
+    /* Take the `ready` flag to 0 with RELEASE so any stale reader that
+     * still sees 1 at least observes the pre-update values consistently. */
+    __atomic_store_n(&header->ready, 0u, __ATOMIC_RELEASE);
 
     header->magic        = NVMM_SHM_MAGIC;
     header->version      = NVMM_SHM_PROTO_COPY;
     header->width        = GST_VIDEO_INFO_WIDTH(&self->video_info);
     header->height       = GST_VIDEO_INFO_HEIGHT(&self->video_info);
     header->format       = (uint32_t)GST_VIDEO_INFO_FORMAT(&self->video_info);
-    header->frame_number = self->frame_number.fetch_add(1);
+    const uint64_t fn    = self->frame_number.fetch_add(1);
+    header->frame_number = fn;
     header->timestamp_ns = GST_BUFFER_PTS(buffer);
     header->dmabuf_fd    = -1;
     header->num_planes   = GST_VIDEO_INFO_N_PLANES(&self->video_info);
@@ -413,11 +415,12 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
     }
     header->data_size = (uint32_t)total;
 
-    __sync_synchronize();
-    header->ready = 1;
+    /* RELEASE on `ready` pairs with the consumer's ACQUIRE load; every
+     * write above is visible once the consumer observes ready == 1. */
+    __atomic_store_n(&header->ready, 1u, __ATOMIC_RELEASE);
 
     GST_LOG_OBJECT(owner, "published frame #%" G_GUINT64_FORMAT " (%" G_GSIZE_FORMAT " bytes)",
-                   (guint64)header->frame_number, total);
+                   (guint64)fn, total);
     return GST_FLOW_OK;
 }
 
@@ -505,7 +508,8 @@ nvmm_ipc_consumer_peek_caps(NvmmIpcConsumer *self, GstVideoInfo *out_info,
 {
     if (!self->shm_ptr) return FALSE;
     auto *header = static_cast<const ShmHeader *>(self->shm_ptr);
-    if (header->magic != NVMM_SHM_MAGIC || !header->ready ||
+    if (header->magic != NVMM_SHM_MAGIC ||
+        __atomic_load_n(&header->ready, __ATOMIC_ACQUIRE) == 0 ||
         header->width == 0 || header->height == 0)
         return FALSE;
 
@@ -520,19 +524,25 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
                         GstPad *src_pad, GstBuffer **out_buffer)
 {
     if (!self->shm_ptr) return GST_FLOW_ERROR;
-    auto *header = static_cast<const ShmHeader *>(self->shm_ptr);
+    auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
+    /* Poll `ready` with ACQUIRE semantics; that makes the producer's
+     * prior writes (frame_number, width, height, pixel data in shm)
+     * visible once the load returns 1. */
     int attempts = 0;
-    while (!header->ready || header->frame_number == self->last_frame) {
-        if (GST_PAD_IS_FLUSHING(src_pad))
-            return GST_FLOW_FLUSHING;
+    uint32_t ready;
+    uint64_t fn;
+    while (true) {
+        ready = __atomic_load_n(&header->ready,        __ATOMIC_ACQUIRE);
+        fn    = __atomic_load_n(&header->frame_number, __ATOMIC_RELAXED);
+        if (ready && fn != self->last_frame) break;
+        if (GST_PAD_IS_FLUSHING(src_pad)) return GST_FLOW_FLUSHING;
         if (++attempts > 500) {
             GST_INFO_OBJECT(owner, "no new frame for 500ms, returning EOS");
             return GST_FLOW_EOS;
         }
         g_usleep(1000);
     }
-    __sync_synchronize();
 
     if (header->magic != NVMM_SHM_MAGIC) {
         GST_ERROR_OBJECT(owner, "invalid shm magic: 0x%08x", header->magic);
@@ -590,12 +600,12 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
             n, offsets, strides);
     }
 
-    GST_BUFFER_PTS(buf)      = header->timestamp_ns;
+    GST_BUFFER_PTS(buf)      = __atomic_load_n(&header->timestamp_ns, __ATOMIC_RELAXED);
     GST_BUFFER_DURATION(buf) = GST_CLOCK_TIME_NONE;
 
-    self->last_frame = header->frame_number;
+    self->last_frame = fn;
     GST_LOG_OBJECT(owner, "fetched frame #%" G_GUINT64_FORMAT " (%" G_GSIZE_FORMAT " bytes)",
-                   (guint64)header->frame_number, data_size);
+                   (guint64)fn, data_size);
 
     *out_buffer = buf;
     return GST_FLOW_OK;

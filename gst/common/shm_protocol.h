@@ -56,6 +56,23 @@ typedef struct NvmmShmCopyHeader {
 /* -------------------------------------------------------------- */
 /* "pool" protocol — metadata-only shm, fds over unix socket       */
 /* -------------------------------------------------------------- */
+/*
+ * Fields below are shared across processes. They are NOT declared `volatile`
+ * deliberately — `volatile` tells the compiler "do not cache in a register"
+ * but gives no atomicity or cross-CPU ordering guarantees and is the wrong
+ * tool for IPC synchronization. Access them from C/C++ code using the
+ * __atomic_* builtins with explicit memory order:
+ *
+ *   reads       -> __atomic_load_n(&field, __ATOMIC_ACQUIRE)
+ *   publishes   -> __atomic_store_n(&field, v, __ATOMIC_RELEASE)
+ *   CAS         -> __atomic_compare_exchange_n(..., __ATOMIC_ACQ_REL, ...)
+ *   fences      -> __atomic_thread_fence(__ATOMIC_ACQUIRE/RELEASE)
+ *
+ * uint32_t / int32_t / uint64_t are lock-free on every Linux target this
+ * project supports (aarch64 + x86_64 glibc). Producer and consumer agree
+ * on the write_idx + ref_counts[] contract; see the ref_counts comment
+ * below.
+ */
 typedef struct NvmmShmPoolHeader {
     uint32_t magic;
     uint32_t version;           /* NVMM_SHM_PROTO_POOL */
@@ -68,19 +85,18 @@ typedef struct NvmmShmPoolHeader {
     uint32_t offsets[4];
     char     socket_path[108];  /* unix socket path for SCM_RIGHTS fd passing */
 
-    /* Updated per frame. Readers must issue an acquire fence before trusting
-       fields below this point. */
-    volatile uint32_t write_idx;
-    volatile uint64_t frame_number;
-    volatile uint64_t timestamp_ns;
-    volatile uint32_t ready;
+    /* Updated per frame. Access via __atomic_* — see note above. */
+    uint32_t write_idx;
+    uint64_t frame_number;
+    uint64_t timestamp_ns;
+    uint32_t ready;
 
-    /* Per-slot ref counts:
+    /* Per-slot ref counts — access via __atomic_* (see note above):
          0    = idle; producer may claim via CAS 0 -> -1
         -1    = writer lock held; consumers skip this slot
          >0   = N consumers currently reading
        The producer recycles a slot only when its ref == 0. */
-    volatile int32_t ref_counts[NVMM_POOL_SIZE_MAX];
+    int32_t ref_counts[NVMM_POOL_SIZE_MAX];
 
     uint32_t _reserved[16];
 } NvmmShmPoolHeader;
