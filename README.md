@@ -1,6 +1,15 @@
 # gst-nvmm-cpp
 
-GStreamer plugin suite for **NVMM-native video processing** on NVIDIA Jetson platforms (Xavier, Orin). Wraps the Tegra-native `NvBufSurface` / NVMM memory model in proper GStreamer elements, enabling hardware-accelerated crop, scale, format conversion, and inter-process video sharing with no CPU copies on the data path. Intra-process transforms are zero-copy (VIC-side); cross-process IPC does a single GPU-side copy into a shared pool, which consumers then import without further copies.
+GStreamer plugin suite for **NVMM-native video processing** on NVIDIA Jetson
+platforms (Xavier, Orin). Wraps the Tegra-native `NvBufSurface` / NVMM
+memory model in proper GStreamer elements with hardware-accelerated crop,
+scale, format conversion, and inter-process video sharing.
+
+Two IPC backends ship side-by-side and meson picks one at build time. On
+JetPack 5 (Xavier), the sink/source pair use a shared-memory copy
+protocol. On JetPack 6 (Orin), they use an NVMM buffer pool with fd
+passing — consumer-side reads are zero-copy from GPU memory, and the
+producer pays at most one `NvBufSurfaceCopy` (GPU-to-GPU) per frame.
 
 Built with **C++14** internals and a **C ABI** boundary to GStreamer.
 
@@ -33,38 +42,60 @@ Video crop, scale, and color format conversion using the **Tegra VIC** (Video Im
 
 **Caps:** `video/x-raw(memory:NVMM), format={NV12,RGBA,I420,BGRA}, width=[1,8192], height=[1,8192]`
 
-### nvmmsink
+### nvmmsink / nvmmappsrc
 
-Shares NVMM video frames across processes via a **GPU-copy pool**: incoming buffers are copied GPU-to-GPU (via `NvBufSurfaceCopy`) into a fixed pool of NVMM buffers, whose DMA-buf fds are handed to consumers over a unix-domain socket (SCM_RIGHTS). Consumers (ROS2 nodes, inference engines, visualization tools) import the fds and read directly from GPU memory — no further copies, no CPU in the data path.
+A producer/consumer pair for sharing NVMM video frames across processes.
+Two IPC backends are implemented; meson picks one at configure time based on
+the JetPack SDK headers available on the build machine.
+
+| Backend dir | JetPack | Wire protocol | Transport | Frame path |
+|-------------|---------|---------------|-----------|------------|
+| `gst/ipc_jp5` | JP5 / L4T 35.x (Xavier) | `NvmmShmCopyHeader` (code = 1) | one POSIX shm segment | producer CPU memcpy → shm → consumer CPU memcpy |
+| `gst/ipc_jp6` | JP6 / L4T 36.x+ (Orin) | `NvmmShmPoolHeader`  (code = 2) | shm header + unix-domain socket (SCM_RIGHTS fd passing) | producer `NvBufSurfaceCopy` into NVMM pool, consumer `NvBufSurfaceImport`s fds and reads GPU memory directly |
+
+Both backends implement the same `NvmmIpcProducer` / `NvmmIpcConsumer` C
+interface (see [`gst/common/ipc_backend.h`](gst/common/ipc_backend.h)); the
+`nvmmsink` and `nvmmappsrc` element sources have no `#ifdef` on backend
+choice.
+
+JetPack detection: meson probes `NvBufSurfaceMapParams` via
+`has_header_symbol`. Present → JP6 backend; absent → JP5 backend. The
+selection prints at configure time:
+
+```
+Message: selected IPC backend: jp6 (pool + SCM_RIGHTS)  (JetPack: 6)
+```
+
+**nvmmsink properties**
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `shm-name` | string | `/nvmm_sink_0` | POSIX shared memory segment name |
-| `pool-size` | int (3–16) | 16 | Number of NVMM buffers in the shared pool |
+| `shm-name` | string | `/nvmm_sink_0` | POSIX shared-memory segment name |
+| `pool-size` | int (4–32) | 8 | NVMM buffer pool size (JP6 backend only; JP5 ignores) |
 
-**Wire protocol (see [`gst/common/shm_protocol.h`](gst/common/shm_protocol.h)):**
-
-The shm segment holds **only** the header — frame data lives in a pool of NVMM buffers whose DMA-buf fds are passed over a unix-domain socket (SCM_RIGHTS). The header carries:
-
-- Magic (`0x4E564D4D` = "NVMM"), version, width, height, pixel format
-- Pool size, per-plane pitches and offsets
-- `socket_path` for the fd-passing unix socket
-- `write_idx`, monotonic `frame_number`, PTS `timestamp_ns`
-- `ready` flag (set once the first frame is published)
-- `ref_counts[pool_size]` so producer knows when a slot is safe to reuse
-
-Producers copy each incoming NVMM buffer into the pool via `NvBufSurfaceCopy` (GPU-to-GPU, no CPU involvement). Consumers connect the socket, receive pool fds + `NvBufSurfaceMapParams`, import with `NvBufSurfaceImport`, and read directly from GPU memory.
-
-### nvmmappsrc
-
-Reads NVMM video frames from a **POSIX shared memory** segment written by `nvmmsink` or an external producer. Pushes frames into a GStreamer pipeline.
+**nvmmappsrc properties**
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `shm-name` | string | `/nvmm_sink_0` | POSIX shared memory segment name to read from |
-| `is-live` | bool | true | Whether this source is a live source |
+| `shm-name` | string | `/nvmm_sink_0` | POSIX segment name to connect to (must match the sink) |
+| `is-live` | bool | true | Advertise as live source |
 
-Auto-detects video format, resolution, and plane layout from the `ShmHeader` on the first frame.
+The consumer auto-detects video format, resolution, and plane layout from
+the producer's header on the first frame. JP5 emits plain `video/x-raw`;
+JP6 emits `video/x-raw(memory:NVMM)`.
+
+**External NVMM sources (zedsrc, nvvidconv, nvv4l2decoder)** are accepted
+on both backends. Detection is via the `memory:NVMM` caps feature; the JP5
+backend uses `NvBufSurfaceMap` + per-plane CPU memcpy (with pitch
+stripping) so the consumer sees a standard GstVideoInfo-compatible stride,
+and the JP6 backend uses `NvBufSurfaceCopy` into its own pool.
+
+**Debug categories**
+
+- `nvmmsink` — sink-side element lifecycle
+- `nvmmappsrc` — source-side element lifecycle
+- `nvmmipc.jp5` or `nvmmipc.jp6` — backend-internal producer/consumer logs
+  (LOG level emits one line per frame)
 
 ### GstNvmmAllocator
 
