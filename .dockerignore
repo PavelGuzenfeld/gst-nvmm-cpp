@@ -1,0 +1,5 @@
+builddir
+builddir-*
+test_output
+.git
+*.swp

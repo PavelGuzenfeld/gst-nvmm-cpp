@@ -1,0 +1,6 @@
+option('mock',
+  type : 'boolean',
+  value : false,
+  description : 'Build with the mock NvBufSurface API for host-side unit tests. ' +
+                'Production builds must NOT enable this — the mock has no GPU, ' +
+                'no DMA-buf fds, and no real surfaces. Default false.')

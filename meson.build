@@ -38,10 +38,14 @@ if not nvbufsurface_dep.found()
   )
   if nvbufsurface_lib.found()
     fsmod = import('fs')
+    # NOTE: do NOT include /opt/nvidia/deepstream/.../sources/includes here.
+    # DeepStream <= 6.2 ships an older nvbufsurface.h pinned to JP 5.0.x and
+    # missing NvBufSurfaceImport. If both DeepStream and jetson-multimedia-api
+    # are installed, DeepStream's stale header silently wins on systems where
+    # something else added it to the search path.
     nvmm_inc_candidates = [
       '/usr/src/jetson_multimedia_api/include',
       '/usr/include/nvbufsurface',
-      '/opt/nvidia/deepstream/deepstream/sources/includes',
     ]
     nvmm_inc_dirs = []
     foreach d : nvmm_inc_candidates
@@ -76,61 +80,57 @@ endif
 have_nvbufsurface = nvbufsurface_dep.found()
 have_nvbufsurftransform = nvbufsurftransform_dep.found()
 
-# JetPack version detection.
+# NVMM cross-process import API check.
 #
-# We do NOT rely on the L4T release file — that only works when configuring
-# on a Jetson. Instead, probe the nvbufsurface.h header for a JP6-only
-# symbol (NvBufSurfaceMapParams). This also works when cross-compiling
-# against JP6 headers in a Docker build on an x86 host.
-jetpack_version = 'unknown'
-have_jp6_api = false
+# Pool + SCM_RIGHTS IPC requires NvBufSurfaceImport / NvBufSurfaceMapParams /
+# NvBufSurfaceGetMapParams. These ship in:
+#   - L4T R35.3.1 (JetPack 5.1.1, March 2023) and later for the JP5 line
+#   - L4T R36.0  (JetPack 6.0)                  and later for the JP6 line
+#
+# The earlier L4T 35.x revisions (R35.2.1 = JP 5.0.x) do NOT have the
+# import API and cannot do cross-process NVMM zero-copy at all — the only
+# JP5 entry point, NvBufSurfaceFromFd, is process-local.
+#
+# Probed via has_header_symbol so cross-builds against the right headers
+# in Docker also work.
+nvmm_target = 'unknown'
 if have_nvbufsurface
   nvmm_hdr_dirs = []
   fsmod = import('fs')
   foreach d : ['/usr/src/jetson_multimedia_api/include',
-               '/usr/include/nvbufsurface',
-               '/opt/nvidia/deepstream/deepstream/sources/includes']
+               '/usr/include/nvbufsurface']
     if fsmod.is_dir(d)
       nvmm_hdr_dirs += '-I' + d
     endif
   endforeach
-  have_jp6_api = cpp.has_header_symbol(
-    'nvbufsurface.h', 'NvBufSurfaceMapParams',
+  have_import_api = cpp.has_header_symbol(
+    'nvbufsurface.h', 'NvBufSurfaceImport',
     args : nvmm_hdr_dirs,
     required : false)
-  jetpack_version = have_jp6_api ? '6' : '5'
-else
-  # Mock build — always exercises the JP6 backend (mock headers carry stubs
-  # for every JP6 API the backend calls).
-  have_jp6_api = true
-  jetpack_version = 'mock-jp6'
-endif
-
-message('selected IPC backend: @0@  (JetPack: @1@)'.format(
-  have_jp6_api ? 'jp6 (pool + SCM_RIGHTS)' : 'jp5 (shm-copy)',
-  jetpack_version))
-
-# NvSciBuf support (JP6+ only)
-have_nvscibuf = false
-if jetpack_version == '6'
-  nvscibuf_dep = dependency('nvscibuf', required : false)
-  if not nvscibuf_dep.found()
-    nvscibuf_lib = cc.find_library('nvscibuf', dirs : nvmm_lib_dirs, required : false)
-    if nvscibuf_lib.found()
-      nvscibuf_dep = declare_dependency(dependencies : nvscibuf_lib)
-      have_nvscibuf = true
-    endif
-  else
-    have_nvscibuf = true
+  if not have_import_api
+    error('NvBufSurfaceImport not present in nvbufsurface.h. ' +
+          'Cross-process NVMM IPC requires L4T R35.3.1 (JetPack 5.1.1) or newer ' +
+          'on the JP5 line, or any JP6. Detected an older L4T (probably R35.2.1 / ' +
+          'JP 5.0.x). Upgrade jetson-multimedia-api or use -Dmock=true for host tests.')
   endif
+  nvmm_target = 'jetson (real NvBufSurface)'
+else
+  # Mock build — mock headers carry NvBufSurfaceImport stubs.
+  nvmm_target = 'mock'
 endif
+
+message('NVMM IPC backend: pool + SCM_RIGHTS  (target: @0@)'.format(nvmm_target))
+
+# NvSciBuf currently unused (no public headers ship with nvidia-l4t-nvsci);
+# left here for the day NVIDIA exposes the API.
+have_nvscibuf = false
 
 # Configuration header
 conf = configuration_data()
 conf.set10('HAVE_NVBUFSURFACE', have_nvbufsurface)
 conf.set10('HAVE_NVBUFSURFTRANSFORM', have_nvbufsurftransform)
 conf.set10('HAVE_NVSCIBUF', have_nvscibuf)
-conf.set_quoted('JETPACK_VERSION', jetpack_version)
+conf.set_quoted('JETPACK_VERSION', nvmm_target)
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 
 configure_file(
@@ -141,22 +141,30 @@ configure_file(
 config_inc = include_directories('.')
 common_inc = include_directories('gst/common')
 
-# When NVMM libs not available, build mock versions for testing
-build_mock = not have_nvbufsurface
+# Mock vs real NVMM: explicit opt-in via -Dmock=true. No silent fallback —
+# if NvBufSurface isn't available and mock isn't requested, fail at configure.
+# This catches the "I thought I was building for Jetson but actually shipped a
+# CPU-only mock" mistake at build time, not at deploy time.
+build_mock = get_option('mock')
+if build_mock and have_nvbufsurface
+  warning('-Dmock=true overrides the real NvBufSurface found on this host. ' +
+          'You probably want to drop -Dmock for a production build.')
+endif
+if not build_mock and not have_nvbufsurface
+  error('NvBufSurface (NVIDIA Multimedia API) not found and -Dmock=false. ' +
+        'This plugin requires the Tegra NVMM stack. ' +
+        'Install jetson-multimedia-api on a Jetson, or configure with -Dmock=true ' +
+        'for host-side unit testing only.')
+endif
 if build_mock
-  message('NvBufSurface not found — building with mock API for host-side testing')
+  message('Building with MOCK NvBufSurface API. NOT FOR PRODUCTION.')
 endif
 
 subdir('gst/common')
-subdir('gst/nvmmalloc')   # provides gstnvmmalloc_dep, consumed by jp5 backend
+subdir('gst/nvmmalloc')
 
-# IPC backend — exactly one of these subdirs is compiled, picked by JP detection.
-# The subdir defines `ipc_backend_dep` which sink/appsrc depend on.
-if have_jp6_api
-  subdir('gst/ipc_jp6')
-else
-  subdir('gst/ipc_jp5')
-endif
+# Pool + SCM_RIGHTS IPC backend (one backend, both JetPacks).
+subdir('gst/ipc_pool')
 
 subdir('gst/nvmmconvert')
 subdir('gst/nvmmsink')
