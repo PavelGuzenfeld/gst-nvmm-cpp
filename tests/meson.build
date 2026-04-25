@@ -134,3 +134,19 @@ fuzz_shm = executable('fuzz_shm_header',
 test('fuzz_shm_header', fuzz_shm, protocol : 'exitcode',
   args : ['10000'],
   timeout : 60)
+
+# Visual roundtrip demo — not a test, an executable that produces
+# inspectable PPM frames for human verification. Builds alongside the
+# tests for convenience.
+demo_visual = executable('demo_visual_roundtrip',
+  'demo_visual_roundtrip.cpp',
+  include_directories : [
+    config_inc, common_inc,
+    include_directories('../gst/nvmmalloc'),
+  ],
+  dependencies : [
+    ipc_backend_dep, gstnvmmalloc_dep, gst_dep, gst_video_dep,
+    dependency('threads'),
+  ],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
