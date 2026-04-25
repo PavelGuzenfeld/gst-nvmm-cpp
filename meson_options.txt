@@ -16,3 +16,9 @@ option('poll_interval_us',
   min : 100, max : 100000, value : 1000,
   description : 'Consumer + producer-handshake poll interval in microseconds. ' +
                 'Lower = lower latency, higher CPU. Default 1000 (1 ms).')
+
+option('fetch_idle_ticks',
+  type : 'integer',
+  min : 0, max : 1000000, value : 2000,
+  description : 'Consumer EOS timeout in poll-interval ticks. 0 disables (block forever). ' +
+                'Default 2000 ticks * 1ms = 2s.')

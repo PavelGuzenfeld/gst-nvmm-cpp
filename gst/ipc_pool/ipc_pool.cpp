@@ -380,6 +380,28 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
                            const GstVideoInfo *info,
                            gboolean /*caps_have_nvmm_feature*/)
 {
+    /* Reject caps renegotiation. The pool slot surfaces were sized and
+     * formatted at first set_caps and the fds are already in remote
+     * consumers' hands. Reallocating here would break those consumers
+     * silently. Tear the pipeline down and start fresh if caps change. */
+    if (self->caps_set) {
+        const GstVideoInfo *cur = &self->video_info;
+        if (GST_VIDEO_INFO_FORMAT(cur) != GST_VIDEO_INFO_FORMAT(info) ||
+            GST_VIDEO_INFO_WIDTH(cur)  != GST_VIDEO_INFO_WIDTH(info)  ||
+            GST_VIDEO_INFO_HEIGHT(cur) != GST_VIDEO_INFO_HEIGHT(info)) {
+            GST_ERROR_OBJECT(owner,
+                "caps renegotiation not supported: had %dx%d %s, got %dx%d %s. "
+                "Pool slots are already shared with consumers; restart the "
+                "pipeline to pick up new caps.",
+                GST_VIDEO_INFO_WIDTH(cur), GST_VIDEO_INFO_HEIGHT(cur),
+                gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(cur)),
+                GST_VIDEO_INFO_WIDTH(info), GST_VIDEO_INFO_HEIGHT(info),
+                gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(info)));
+            return FALSE;
+        }
+        return TRUE;  /* same caps, nothing to do */
+    }
+
     self->video_info = *info;
     self->caps_set   = TRUE;
 
@@ -696,7 +718,8 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
         fn    = __atomic_load_n(&header->frame_number, __ATOMIC_RELAXED);
         if (ready && fn != self->last_frame) break;
         if (GST_PAD_IS_FLUSHING(src_pad)) return GST_FLOW_FLUSHING;
-        if (++attempts > nvmm::config::fetch_idle_ticks) {
+        if (nvmm::config::fetch_idle_ticks > 0 &&
+            ++attempts > nvmm::config::fetch_idle_ticks) {
             GST_INFO_OBJECT(owner, "no new frame for ~%d ms, returning EOS",
                             nvmm::config::fetch_idle_ticks * nvmm::config::poll_interval_us / 1000);
             return GST_FLOW_EOS;

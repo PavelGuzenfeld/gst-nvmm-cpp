@@ -136,6 +136,7 @@ conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 # Tunable defaults — see gst/common/nvmm_config.h for the full list.
 conf.set('NVMM_POOL_RELEASE_DELAY', get_option('pool_release_delay'))
 conf.set('NVMM_POLL_INTERVAL_US',   get_option('poll_interval_us'))
+conf.set('NVMM_FETCH_IDLE_TICKS',   get_option('fetch_idle_ticks'))
 
 configure_file(
   output : 'config.h',

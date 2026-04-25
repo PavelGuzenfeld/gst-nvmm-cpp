@@ -81,7 +81,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         self->priv->shm_name = nvmm::config::default_shm_name;
 
     self->priv->cons = nvmm_ipc_consumer_new(self->priv->shm_name.c_str());
-    if (!self->priv->cons) return FALSE;
     return nvmm_ipc_consumer_start(self->priv->cons, GST_ELEMENT(self));
 }
 

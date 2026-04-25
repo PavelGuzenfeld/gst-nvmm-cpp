@@ -89,7 +89,6 @@ gst_nvmm_sink_start(GstBaseSink *sink)
 
     self->priv->prod = nvmm_ipc_producer_new(self->priv->shm_name.c_str(),
                                               self->priv->pool_size);
-    if (!self->priv->prod) return FALSE;
     return nvmm_ipc_producer_start(self->priv->prod, GST_ELEMENT(self));
 }
 

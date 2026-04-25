@@ -59,8 +59,13 @@ constexpr int poll_interval_us =
 constexpr int start_wait_ticks = 5000;
 
 /* Consumer fetch idle timeout, count of poll_interval_us ticks.
- * Default = 2000 ticks * 1ms = 2s before returning EOS. */
-constexpr int fetch_idle_ticks = 2000;
+ * 0 = block forever. Default = 2000 ticks * 1ms = 2s before returning EOS. */
+constexpr int fetch_idle_ticks =
+#ifdef NVMM_FETCH_IDLE_TICKS
+    NVMM_FETCH_IDLE_TICKS;
+#else
+    2000;
+#endif
 
 /* CAS retry budget when a consumer races a producer writer-locking the
  * current slot. Combined with busy_slot_backoff_us, default is
