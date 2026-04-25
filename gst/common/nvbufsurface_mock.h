@@ -346,7 +346,9 @@ static inline int NvBufSurfaceFromFd(int fd, void** surf_ptr) {
     return -1;  /* not implemented in mock */
 }
 
-/* ---- Mock stubs for JP6 APIs ---- */
+/* ---- Mock stubs for the cross-process Import API
+ *      (NvBufSurfaceImport / NvBufSurfaceMapParams / NvBufSurfaceGetMapParams).
+ *      These ship in real L4T R35.3.1+ (JP 5.1.1) and any JP6.            ---- */
 
 typedef struct NvBufSurfaceMapParams {
     int fd;

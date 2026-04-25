@@ -1,11 +1,10 @@
 /// libFuzzer harness for the consumer's shm-header parsing path.
 ///
-/// The consumer reads a NvmmShmCopyHeader (JP5) or NvmmShmPoolHeader (JP6)
-/// from shared memory written by an untrusted producer. A malicious or
-/// buggy producer could write nonsense — wrong magic, out-of-range
-/// width/height/format/pool_size, corrupt offsets/pitches, negative
-/// ref_counts, anything. The consumer must not crash / read OOB / UB out
-/// on any byte pattern.
+/// The consumer reads a NvmmShmPoolHeader from shared memory written by an
+/// untrusted producer. A malicious or buggy producer could write nonsense —
+/// wrong magic, out-of-range width/height/format/pool_size, corrupt
+/// offsets/pitches, negative ref_counts, anything. The consumer must not
+/// crash / read OOB / UB on any byte pattern.
 ///
 /// Build with: -Db_sanitize=address,undefined AND -Db_lundef=false AND
 ///             either clang with -fsanitize=fuzzer or link a driver
@@ -33,38 +32,6 @@
  * stdin-based fuzzing loop used by libFuzzer. */
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
-
-/* -------- target: NvmmShmCopyHeader validation -------- */
-
-static int
-fuzz_copy_header(const uint8_t *data, size_t size)
-{
-    if (size < sizeof(NvmmShmCopyHeader)) return 0;
-    NvmmShmCopyHeader h;
-    memcpy(&h, data, sizeof(h));
-
-    /* Mimic the consumer's validation logic. Any combination of fields
-     * must not cause UB here. */
-    if (h.magic != NVMM_SHM_MAGIC) return 0;
-    if (h.version != NVMM_SHM_PROTO_COPY) return 0;
-    if (h.width == 0 || h.width > 16384) return 0;
-    if (h.height == 0 || h.height > 16384) return 0;
-    if (h.num_planes > 4) return 0;
-
-    /* data_size must be within the trailing buffer bounds (attacker
-     * controls the value). The consumer clamps; reproduce that here. */
-    size_t available = size > sizeof(h) ? size - sizeof(h) : 0;
-    if (h.data_size > available) return 0;
-
-    /* pitches/offsets should be internally consistent; fuzzer may give
-     * us anything. Check the consumer's derived math doesn't overflow. */
-    for (uint32_t p = 0; p < h.num_planes; p++) {
-        uint64_t end = (uint64_t)h.offsets[p] + (uint64_t)h.pitches[p] * h.height;
-        if (end > h.data_size) return 0;
-    }
-
-    return 0;
-}
 
 /* -------- target: NvmmShmPoolHeader validation -------- */
 
@@ -104,13 +71,7 @@ fuzz_pool_header(const uint8_t *data, size_t size)
 extern "C" int
 LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-    if (size == 0) return 0;
-    /* First byte picks which target we exercise. */
-    uint8_t sel = data[0];
-    data++;
-    size--;
-    if (sel & 1)  return fuzz_copy_header(data, size);
-    else          return fuzz_pool_header(data, size);
+    return fuzz_pool_header(data, size);
 }
 
 #ifndef LIB_FUZZING_ENGINE

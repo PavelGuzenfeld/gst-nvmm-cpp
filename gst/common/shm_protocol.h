@@ -1,22 +1,14 @@
-/// NVMM shared-memory IPC wire formats.
+/// NVMM shared-memory IPC wire format.
 ///
-/// Two byte-layouts coexist. Each carries an explicit `version` byte code so
-/// a consumer can inspect the header and reject or support the protocol
-/// before touching any other fields.
+/// Single protocol: pool + SCM_RIGHTS fd passing. The shm segment carries
+/// metadata + per-slot ref counts only; pixel data lives in NVMM DMA-buf
+/// surfaces whose fds are passed over a unix-domain socket. Consumers
+/// `NvBufSurfaceImport` the fds and read directly from GPU memory — no
+/// further copies.
 ///
-///   "copy"  (NvmmShmCopyHeader, NVMM_SHM_PROTO_COPY = 1)
-///     Header + plane-interleaved pixel data live in one shm segment. The
-///     producer memcpy's each frame in; the consumer memcpy's each frame
-///     out. Works on any Linux + NVIDIA SDK but pays two CPU copies per
-///     frame. Used by the JetPack 5 / L4T 35.x backend where neither
-///     NvBufSurfaceImport nor NvBufSurfaceMapParams is available.
-///
-///   "pool"  (NvmmShmPoolHeader, NVMM_SHM_PROTO_POOL = 2)
-///     Header holds metadata + per-slot ref counts only; no pixels in shm.
-///     The producer exports a pool of NVMM DMA-buf fds over a unix-domain
-///     socket (SCM_RIGHTS). Consumers import the fds with NvBufSurfaceImport
-///     and read directly from GPU memory. Used by the JetPack 6 / L4T 36.x+
-///     backend.
+/// Requires the NVMM cross-process import API (NvBufSurfaceImport,
+/// NvBufSurfaceGetMapParams), which ships in L4T R35.3.1+ (JetPack 5.1.1)
+/// and any JetPack 6.
 #pragma once
 
 #include <stdint.h>
@@ -27,40 +19,16 @@ extern "C" {
 
 #define NVMM_SHM_MAGIC        0x4E564D4D    /* "NVMM" */
 
-/* Wire-format version codes. These integers go on disk — do not renumber.
- *   1 = "copy" protocol, header + inline pixels, one shm segment
- *   2 = "pool" protocol, v1: header + 16-slot pool, slots share cache lines
- *   3 = "pool" protocol, v2: each pool slot on its own cache line (no
- *       false sharing), hot publish fields isolated, 32-slot cap */
-#define NVMM_SHM_PROTO_COPY   1
+/* Wire-format version. Bytes on disk — never renumber, only bump.
+ *   1 (legacy "copy" protocol) — removed; never released
+ *   2 (legacy "pool" v1)        — removed; slots shared cache lines
+ *   3 = current "pool" protocol — each slot on its own cache line, hot
+ *       publish fields isolated, 32-slot cap. */
 #define NVMM_SHM_PROTO_POOL   3
 
 #define NVMM_POOL_SIZE_MAX    32            /* compile-time cap for pool protocol */
 #define NVMM_CACHE_LINE       64            /* aarch64 + x86_64 mainstream size */
 
-/* -------------------------------------------------------------- */
-/* "copy" protocol — header + inline pixel data in the same shm    */
-/* -------------------------------------------------------------- */
-typedef struct NvmmShmCopyHeader {
-    uint32_t magic;             /* NVMM_SHM_MAGIC */
-    uint32_t version;           /* NVMM_SHM_PROTO_COPY */
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;            /* GstVideoFormat enum value */
-    uint32_t data_size;         /* bytes of pixel data following this header */
-    uint32_t num_planes;
-    uint32_t pitches[4];
-    uint32_t offsets[4];
-    int32_t  dmabuf_fd;         /* -1 when no fd exported */
-    uint64_t frame_number;
-    uint64_t timestamp_ns;
-    uint32_t ready;
-    uint32_t _reserved[8];
-} NvmmShmCopyHeader;
-
-/* -------------------------------------------------------------- */
-/* "pool" protocol — metadata-only shm, fds over unix socket       */
-/* -------------------------------------------------------------- */
 /*
  * IPC synchronization rules — READ BEFORE TOUCHING THIS STRUCT.
  *
