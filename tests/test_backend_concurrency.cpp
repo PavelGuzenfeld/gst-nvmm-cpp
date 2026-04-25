@@ -27,7 +27,9 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -251,6 +253,141 @@ static void test_multi_consumer_fanout()
     ASSERT_TRUE(min_seen > 0);
 }
 
+/* Tiny rotate-and-xor checksum. Good enough to detect any nonzero bit
+ * flip in a frame; not cryptographically strong, but we only need to
+ * distinguish "this is the frame I expected" from "this isn't". */
+static uint32_t frame_checksum(const uint8_t *p, size_t n) {
+    uint32_t c = 0xDEADBEEFu;
+    for (size_t i = 0; i < n; i++) {
+        c = (c << 5) | (c >> 27);
+        c ^= p[i];
+    }
+    return c;
+}
+
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
+
+/// Fill a known pattern into a fresh NVMM frame, render it, expect the
+/// consumer to receive a buffer whose plane-0 bytes hash to the same
+/// checksum. Catches silent corruption in the IPC path — unaligned
+/// memcpy, dropped bytes, wrong stride, half-published slots.
+static void test_crc_roundtrip()
+{
+    const char *shm = "/test_crc_roundtrip";
+    shm_unlink(shm);
+
+    GstElement *prod_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "prod_crc", NULL));
+    GstElement *cons_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "cons_crc", NULL));
+    GstAllocator *alloc = gst_nvmm_allocator_new(0);
+    ASSERT_TRUE(alloc);
+
+    NvmmIpcProducer *prod = nvmm_ipc_producer_new(shm, 8);
+    ASSERT_TRUE(nvmm_ipc_producer_start(prod, prod_owner));
+
+    constexpr int W = 64, H = 64;
+    GstVideoInfo vi;
+    gst_video_info_set_format(&vi, GST_VIDEO_FORMAT_RGBA, W, H);
+    ASSERT_TRUE(nvmm_ipc_producer_set_caps(prod, prod_owner, &vi, TRUE));
+
+    constexpr int kFrames = 50;
+    std::atomic<bool> stop{false};
+    std::vector<uint32_t> rx_crcs;
+    std::mutex             rx_mtx;
+
+    std::thread consumer([&]() {
+        NvmmIpcConsumer *cons = nvmm_ipc_consumer_new(shm);
+        if (!nvmm_ipc_consumer_start(cons, cons_owner)) {
+            nvmm_ipc_consumer_free(cons);
+            return;
+        }
+        GstPad *pad = gst_pad_new("src", GST_PAD_SRC);
+        while (!stop.load()) {
+            GstBuffer *buf = nullptr;
+            GstFlowReturn r = nvmm_ipc_consumer_fetch(cons, cons_owner, pad, &buf);
+            if (r == GST_FLOW_OK && buf) {
+                /* The consumer wraps the imported NvBufSurface in a
+                 * GstMemory whose mapped data is the surface pointer. */
+                GstMapInfo info;
+                if (gst_buffer_map(buf, &info, GST_MAP_READ)) {
+                    NvBufSurface *surf = reinterpret_cast<NvBufSurface*>(info.data);
+                    if (surf && NvBufSurfaceMap(surf, 0, -1, NVBUF_MAP_READ) == 0) {
+                        NvBufSurfaceSyncForCpu(surf, 0, -1);
+                        const uint8_t *plane =
+                            (const uint8_t *)surf->surfaceList[0].mappedAddr.addr[0];
+                        if (plane) {
+                            uint32_t c = frame_checksum(plane, W * H * 4);
+                            std::lock_guard<std::mutex> g(rx_mtx);
+                            rx_crcs.push_back(c);
+                        }
+                        NvBufSurfaceUnMap(surf, 0, -1);
+                    }
+                    gst_buffer_unmap(buf, &info);
+                }
+                gst_buffer_unref(buf);
+            } else if (r == GST_FLOW_EOS) {
+                break;
+            }
+        }
+        nvmm_ipc_consumer_stop(cons, cons_owner);
+        nvmm_ipc_consumer_free(cons);
+        gst_object_unref(pad);
+    });
+
+    g_usleep(50000);  /* let the consumer handshake */
+
+    std::vector<uint32_t> tx_crcs;
+    tx_crcs.reserve(kFrames);
+    for (int i = 0; i < kFrames; i++) {
+        GstBuffer *frame = make_nvmm_buffer(alloc, &vi);
+        ASSERT_TRUE(frame);
+        GstMemory *mem = gst_buffer_peek_memory(frame, 0);
+        guint8 *plane = nullptr;
+        gsize   psize = 0;
+        ASSERT_TRUE(gst_nvmm_memory_map_plane(mem, 0, GST_MAP_WRITE, &plane, &psize));
+        /* Deterministic per-frame pattern. */
+        for (gsize j = 0; j < psize; j++)
+            plane[j] = (uint8_t)((i * 7 + j) & 0xff);
+        tx_crcs.push_back(frame_checksum(plane, W * H * 4));
+        gst_nvmm_memory_unmap_plane(mem);
+        GST_BUFFER_PTS(frame) = i * 1000000;
+        nvmm_ipc_producer_render(prod, prod_owner, frame);
+        gst_buffer_unref(frame);
+        g_usleep(2000);  /* slower than consumer poll, lets each frame land */
+    }
+
+    g_usleep(100000);
+    stop.store(true);
+    consumer.join();
+
+    nvmm_ipc_producer_stop(prod, prod_owner);
+    nvmm_ipc_producer_free(prod);
+    gst_object_unref(alloc);
+    gst_object_unref(prod_owner);
+    gst_object_unref(cons_owner);
+
+    std::printf("[tx=%d rx=%d] ", (int)tx_crcs.size(), (int)rx_crcs.size());
+    ASSERT_TRUE(!rx_crcs.empty());
+
+    /* Each received checksum must be one we sent. Producer can lap the
+     * consumer (the consumer sees a subset of frames), but the consumer
+     * must NEVER see a checksum that wasn't a real produced frame. */
+    int matched = 0;
+    for (uint32_t cc : rx_crcs) {
+        for (uint32_t ec : tx_crcs) {
+            if (cc == ec) { matched++; break; }
+        }
+    }
+    if (matched != (int)rx_crcs.size()) {
+        std::printf("CORRUPTION: %d of %d received frames don't match any sent ",
+                    (int)rx_crcs.size() - matched, (int)rx_crcs.size());
+        ASSERT_TRUE(matched == (int)rx_crcs.size());
+    }
+}
+
 int main(int argc, char *argv[])
 {
     gst_init(&argc, &argv);
@@ -263,6 +400,7 @@ int main(int argc, char *argv[])
     RUN(concurrent_producer_consumer);
     RUN(producer_start_stop_churn);
     RUN(multi_consumer_fanout);
+    RUN(crc_roundtrip);
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }
