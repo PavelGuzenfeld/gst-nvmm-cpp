@@ -1,12 +1,14 @@
-# JetPack 6 IPC backend (pool + SCM_RIGHTS protocol).
+# Pool + SCM_RIGHTS NVMM IPC backend. Single backend, supports both
+# JetPack 5 (>= R35.3.1 / JP 5.1.1) and JetPack 6 (any).
 # Built into a static library that sink + appsrc plugins link against.
 
-ipc_backend_src = ['ipc_jp6.cpp']
+ipc_backend_src = ['ipc_pool.cpp']
 
 ipc_backend_deps = [
   gst_dep, gst_base_dep, gst_video_dep,
   nvmm_common_dep,
   cpp.find_library('rt', required : true),   # shm_open/shm_unlink
+  cpp.find_library('dl', required : true),   # dlopen/dlsym for runtime probe
 ]
 if have_nvbufsurface
   ipc_backend_deps += nvbufsurface_dep

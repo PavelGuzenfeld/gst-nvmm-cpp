@@ -1,4 +1,8 @@
-/// JetPack 6 IPC backend.
+/// Pool + SCM_RIGHTS NVMM IPC backend.
+///
+/// Single backend for both JetPack 5 (>= R35.3.1 / JP 5.1.1, March 2023) and
+/// JetPack 6 (any). Earlier L4T 35.x revisions cannot use this code path —
+/// `NvBufSurfaceImport` shipped in R35.3.1; meson rejects older toolchains.
 ///
 /// Wire format: NvmmShmPoolHeader (code NVMM_SHM_PROTO_POOL). Producer holds
 /// an NVMM buffer pool whose DMA-buf fds are exported to consumers via
@@ -29,6 +33,7 @@
 #include <thread>
 #include <vector>
 
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/mman.h>
@@ -41,8 +46,58 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_ipc_debug);
 extern "C" void
 nvmm_ipc_backend_init_debug(void)
 {
-    GST_DEBUG_CATEGORY_INIT(gst_nvmm_ipc_debug, "nvmmipc.jp6", 0,
-                            "NVMM IPC (JetPack 6 pool-backend)");
+    GST_DEBUG_CATEGORY_INIT(gst_nvmm_ipc_debug, "nvmmipc.pool", 0,
+                            "NVMM IPC (pool + SCM_RIGHTS backend)");
+}
+
+/* Runtime guard. The meson configure step verifies that NvBufSurfaceImport
+ * exists in the headers. This catches the deploy-time mismatch where a
+ * binary built against R35.3.1+ headers ends up running on a host whose
+ * libnvbufsurface.so is older — the symbol won't resolve. With direct
+ * symbol references the linker would fail loudly, but in some scenarios
+ * (containers with --runtime nvidia mounting host libs, lazy linking,
+ * stub libs in NVIDIA's l4t-jetpack image) the failure surfaces only
+ * when the symbol is actually called. Probe via dlsym at start() so the
+ * error message names the cause instead of the SoC just dying. */
+static gboolean
+runtime_check_import_api(GstElement *owner)
+{
+#ifdef NVMM_MOCK_API
+    (void)owner;
+    return TRUE;  /* mock provides the symbol unconditionally */
+#else
+    static gboolean checked = FALSE;
+    static gboolean ok      = FALSE;
+    if (checked) return ok;
+    checked = TRUE;
+
+    /* libnvbufsurface is already loaded by the time we get here (the
+     * backend's own static refs to NvBufSurfaceCreate etc. pulled it in).
+     * RTLD_NOLOAD just gives us a handle without re-loading. */
+    void *h = dlopen("libnvbufsurface.so.1.0.0", RTLD_NOW | RTLD_NOLOAD);
+    if (!h) h = dlopen("libnvbufsurface.so.1",   RTLD_NOW | RTLD_NOLOAD);
+    if (!h) h = dlopen("libnvbufsurface.so",     RTLD_NOW | RTLD_NOLOAD);
+    if (!h) {
+        GST_ERROR_OBJECT(owner,
+            "NVMM IPC: libnvbufsurface not loaded (this should be impossible "
+            "if any NVMM code ran above this point). Refusing to start.");
+        return FALSE;
+    }
+    void *sym = dlsym(h, "NvBufSurfaceImport");
+    dlclose(h);
+    if (!sym) {
+        GST_ERROR_OBJECT(owner,
+            "NVMM IPC: libnvbufsurface.so on this host does NOT export "
+            "NvBufSurfaceImport. Cross-process NVMM IPC requires L4T "
+            "R35.3.1 (JetPack 5.1.1) or newer on the JP5 line, or any JP6. "
+            "This binary was built against newer headers but is running on "
+            "an older BSP — upgrade jetson-multimedia-api on the host.");
+        return FALSE;
+    }
+    ok = TRUE;
+    GST_INFO_OBJECT(owner, "NVMM IPC: NvBufSurfaceImport present in libnvbufsurface");
+    return TRUE;
+#endif
 }
 
 typedef NvmmShmPoolHeader ShmHeader;
@@ -111,7 +166,7 @@ struct NvmmIpcProducer {
 };
 
 static gboolean
-jp6_allocate_pool(NvmmIpcProducer *self, GstElement *owner)
+allocate_pool(NvmmIpcProducer *self, GstElement *owner)
 {
     const int w = GST_VIDEO_INFO_WIDTH(&self->video_info);
     const int h = GST_VIDEO_INFO_HEIGHT(&self->video_info);
@@ -156,7 +211,7 @@ jp6_allocate_pool(NvmmIpcProducer *self, GstElement *owner)
 }
 
 static void
-jp6_destroy_pool(NvmmIpcProducer *self)
+destroy_pool(NvmmIpcProducer *self)
 {
     for (auto &slot : self->pool) {
         if (slot.surface) {
@@ -170,7 +225,7 @@ jp6_destroy_pool(NvmmIpcProducer *self)
 }
 
 static void
-jp6_send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
+send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
 {
     int ps = (int)self->pool.size();
     if (send(client_fd, &ps, sizeof(ps), 0) != (ssize_t)sizeof(ps)) {
@@ -207,7 +262,7 @@ jp6_send_fds_to_client(NvmmIpcProducer *self, GstElement *owner, int client_fd)
 }
 
 static void
-jp6_accept_loop(NvmmIpcProducer *self, GstElement *owner)
+accept_loop(NvmmIpcProducer *self, GstElement *owner)
 {
     while (self->running.load()) {
         struct pollfd pfd { self->listen_fd, POLLIN, 0 };
@@ -222,7 +277,7 @@ jp6_accept_loop(NvmmIpcProducer *self, GstElement *owner)
             g_usleep(10000);
 
         if (!self->running.load()) { close(client); break; }
-        jp6_send_fds_to_client(self, owner, client);
+        send_fds_to_client(self, owner, client);
     }
 }
 
@@ -244,6 +299,8 @@ nvmm_ipc_producer_free(NvmmIpcProducer *self) { delete self; }
 gboolean
 nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
 {
+    if (!runtime_check_import_api(owner)) return FALSE;
+
     self->shm_size = sizeof(ShmHeader);
     self->shm_fd = shm_open(self->shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (self->shm_fd < 0) {
@@ -285,14 +342,14 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
     }
 
     self->running.store(true);
-    self->accept_thread = std::thread(jp6_accept_loop, self, owner);
+    self->accept_thread = std::thread(accept_loop, self, owner);
     /* Start at 1 so the first published frame_number (fetch_add returns
      * pre-increment = 1) is distinguishable from a consumer's default
      * last_frame=0. */
     self->frame_number.store(1);
     self->write_idx = 0;
 
-    GST_INFO_OBJECT(owner, "jp6 producer started: shm='%s' socket='%s'",
+    GST_INFO_OBJECT(owner, "producer started: shm='%s' socket='%s'",
                     self->shm_name.c_str(), self->socket_path.c_str());
     return TRUE;
 }
@@ -311,7 +368,7 @@ nvmm_ipc_producer_stop(NvmmIpcProducer *self, GstElement *owner)
     if (self->listen_fd >= 0) { close(self->listen_fd); self->listen_fd = -1; }
     if (!self->socket_path.empty()) { unlink(self->socket_path.c_str()); self->socket_path.clear(); }
 
-    jp6_destroy_pool(self);
+    destroy_pool(self);
 
     if (self->shm_ptr && self->shm_ptr != MAP_FAILED) {
         munmap(self->shm_ptr, self->shm_size);
@@ -320,7 +377,7 @@ nvmm_ipc_producer_stop(NvmmIpcProducer *self, GstElement *owner)
     if (self->shm_fd >= 0) { close(self->shm_fd); self->shm_fd = -1; }
     shm_unlink(self->shm_name.c_str());
 
-    GST_INFO_OBJECT(owner, "jp6 producer stopped");
+    GST_INFO_OBJECT(owner, "producer stopped");
     return TRUE;
 }
 
@@ -332,7 +389,7 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
     self->video_info = *info;
     self->caps_set   = TRUE;
 
-    if (!self->pool_allocated && !jp6_allocate_pool(self, owner))
+    if (!self->pool_allocated && !allocate_pool(self, owner))
         return FALSE;
 
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
@@ -353,7 +410,7 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
      * field writes above visible. */
     __atomic_store_n(&header->ready, 1u, __ATOMIC_RELEASE);
 
-    GST_INFO_OBJECT(owner, "jp6 configured: %dx%d %s pool=%u",
+    GST_INFO_OBJECT(owner, "configured: %dx%d %s pool=%u",
                     header->width, header->height,
                     gst_video_format_to_string(GST_VIDEO_INFO_FORMAT(info)),
                     header->pool_size);
@@ -371,7 +428,7 @@ nvmm_ipc_producer_propose_allocation(NvmmIpcProducer * /*self*/,
 
 /* Helper: fetch NvBufSurface* from an incoming NVMM GstBuffer. */
 static NvBufSurface *
-jp6_buffer_to_surface(GstBuffer *buffer, gboolean caps_is_nvmm)
+buffer_to_surface(GstBuffer *buffer, gboolean caps_is_nvmm)
 {
     if (!caps_is_nvmm) return nullptr;
     GstMapInfo info;
@@ -390,7 +447,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
-    NvBufSurface *src = jp6_buffer_to_surface(buffer, TRUE);
+    NvBufSurface *src = buffer_to_surface(buffer, TRUE);
     if (!src) {
         GST_WARNING_OBJECT(owner, "render: buffer is not NVMM (pool backend requires NVMM input)");
         return GST_FLOW_ERROR;
@@ -438,7 +495,7 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 /* Delayed release of imported surfaces: the hardware encoder may still be
    reading a DMA buffer after the consuming GstBuffer is unref'd. We decrement
    the shm ref_count only after RELEASE_DELAY frames have passed. */
-#define V2_RELEASE_DELAY 4
+#define POOL_RELEASE_DELAY 4
 
 struct NvmmIpcConsumer {
     std::string shm_name;
@@ -456,7 +513,7 @@ struct NvmmIpcConsumer {
 
     /* Delayed release ring — see note above. Pointers into shm ref_counts[];
      * accessed through refc_* helpers. */
-    int32_t *ring[V2_RELEASE_DELAY] = {};
+    int32_t *ring[POOL_RELEASE_DELAY] = {};
     int ring_head = 0;
 };
 
@@ -475,6 +532,8 @@ nvmm_ipc_consumer_free(NvmmIpcConsumer *self) { delete self; }
 gboolean
 nvmm_ipc_consumer_start(NvmmIpcConsumer *self, GstElement *owner)
 {
+    if (!runtime_check_import_api(owner)) return FALSE;
+
     self->shm_fd = shm_open(self->shm_name.c_str(), O_RDWR, 0);
     if (self->shm_fd < 0) {
         GST_ERROR_OBJECT(owner, "shm_open(%s) failed: %s",
@@ -561,7 +620,7 @@ nvmm_ipc_consumer_start(NvmmIpcConsumer *self, GstElement *owner)
         }
         self->imported[i] = s;
     }
-    GST_INFO_OBJECT(owner, "jp6 consumer started: pool=%d, imported %d surfaces",
+    GST_INFO_OBJECT(owner, "consumer started: pool=%d, imported %d surfaces",
                     ps, (int)self->imported.size());
     return TRUE;
 }
@@ -570,7 +629,7 @@ gboolean
 nvmm_ipc_consumer_stop(NvmmIpcConsumer *self, GstElement *owner)
 {
     /* Drain release ring. */
-    for (int i = 0; i < V2_RELEASE_DELAY; i++) {
+    for (int i = 0; i < POOL_RELEASE_DELAY; i++) {
         if (self->ring[i]) {
             refc_fetch_add(self->ring[i], -1);
             self->ring[i] = nullptr;
@@ -587,7 +646,7 @@ nvmm_ipc_consumer_stop(NvmmIpcConsumer *self, GstElement *owner)
     }
     if (self->shm_fd >= 0) { close(self->shm_fd); self->shm_fd = -1; }
 
-    GST_INFO_OBJECT(owner, "jp6 consumer stopped");
+    GST_INFO_OBJECT(owner, "consumer stopped");
     return TRUE;
 }
 
@@ -616,7 +675,7 @@ nvmm_ipc_consumer_peek_caps(NvmmIpcConsumer *self, GstVideoInfo *out_info,
  * GStreamer process.
  */
 static GstMemory *
-jp6_wrap_imported(NvBufSurface *surf)
+wrap_imported(NvBufSurface *surf)
 {
     return gst_memory_new_wrapped(
         GST_MEMORY_FLAG_NO_SHARE,
@@ -686,10 +745,10 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     int32_t *old = self->ring[self->ring_head];
     if (old) refc_fetch_add(old, -1);
     self->ring[self->ring_head] = &header->slots[idx].ref_count;
-    self->ring_head = (self->ring_head + 1) % V2_RELEASE_DELAY;
+    self->ring_head = (self->ring_head + 1) % POOL_RELEASE_DELAY;
 
     GstBuffer *buf = gst_buffer_new();
-    gst_buffer_append_memory(buf, jp6_wrap_imported(self->imported[idx]));
+    gst_buffer_append_memory(buf, wrap_imported(self->imported[idx]));
     GST_BUFFER_PTS(buf)      = __atomic_load_n(&header->timestamp_ns, __ATOMIC_RELAXED);
     GST_BUFFER_DURATION(buf) = GST_CLOCK_TIME_NONE;
 
