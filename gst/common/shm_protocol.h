@@ -22,9 +22,10 @@ extern "C" {
 /* Wire-format version. Bytes on disk — never renumber, only bump.
  *   1 (legacy "copy" protocol) — removed; never released
  *   2 (legacy "pool" v1)        — removed; slots shared cache lines
- *   3 = current "pool" protocol — each slot on its own cache line, hot
- *       publish fields isolated, 32-slot cap. */
-#define NVMM_SHM_PROTO_POOL   3
+ *   3 (legacy "pool" v2)        — removed; no wake_counter, polled wait
+ *   4 = current "pool" protocol — adds wake_counter for cross-process
+ *       futex wakeup; consumer no longer polls in 1ms increments. */
+#define NVMM_SHM_PROTO_POOL   4
 
 #define NVMM_POOL_SIZE_MAX    32            /* compile-time cap for pool protocol */
 #define NVMM_CACHE_LINE       64            /* aarch64 + x86_64 mainstream size */
@@ -76,14 +77,17 @@ typedef struct NvmmShmPoolHeader {
 
     /* ---------- hot publish line (producer writes, consumers read) ---------- */
     /* Dedicated cache line. The RELEASE store on `ready` is the sync
-     * edge for every non-atomic setup field above. */
+     * edge for every non-atomic setup field above. wake_counter is
+     * the futex address — producer increments + FUTEX_WAKEs after
+     * every publish, consumers FUTEX_WAIT on it. */
     __attribute__((aligned(NVMM_CACHE_LINE))) uint32_t ready;
     uint32_t write_idx;
     uint64_t frame_number;
     uint64_t timestamp_ns;
+    uint32_t wake_counter;
     /* Pad to end-of-cache-line so the next member starts fresh. */
     char _hot_pad[NVMM_CACHE_LINE
-                  - sizeof(uint32_t) * 2   /* ready + write_idx */
+                  - sizeof(uint32_t) * 3   /* ready + write_idx + wake_counter */
                   - sizeof(uint64_t) * 2]; /* frame_number + timestamp_ns */
 
     /* ---------- per-slot ref counts ----------

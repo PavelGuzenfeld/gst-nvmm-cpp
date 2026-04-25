@@ -36,9 +36,12 @@
 
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <linux/futex.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 GST_DEBUG_CATEGORY_STATIC(gst_nvmm_ipc_debug);
@@ -102,6 +105,21 @@ runtime_check_import_api(GstElement *owner)
 }
 
 typedef NvmmShmPoolHeader ShmHeader;
+
+/* Cross-process futex on a shared-memory uint32_t. FUTEX (not
+ * FUTEX_PRIVATE) so the kernel knows the address is shared between
+ * processes — required for SCM_RIGHTS-style IPC. */
+static inline int futex_wait(uint32_t *addr, uint32_t expected,
+                              const struct timespec *timeout)
+{
+    return (int)syscall(SYS_futex, addr, FUTEX_WAIT, expected,
+                        timeout, nullptr, 0);
+}
+static inline int futex_wake(uint32_t *addr, int n_waiters)
+{
+    return (int)syscall(SYS_futex, addr, FUTEX_WAKE, n_waiters,
+                        nullptr, nullptr, 0);
+}
 
 /* Atomic accessors for the shm slot ref_counts shared with remote
  * consumers. See shm_protocol.h for memory-order rules. */
@@ -499,6 +517,12 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
     __atomic_store_n(&header->ready,        1u,                                __ATOMIC_RELEASE);
     self->write_idx = target;
 
+    /* Bump the futex address with RELEASE so consumers' ACQUIRE-load
+     * sees a fresh value, then wake every waiter. INT_MAX = unbounded —
+     * we want all consumers, not just one. */
+    __atomic_add_fetch(&header->wake_counter, 1, __ATOMIC_RELEASE);
+    futex_wake(&header->wake_counter, INT_MAX);
+
     GST_LOG_OBJECT(owner, "published frame #%" G_GUINT64_FORMAT " into slot %d",
                    (guint64)fn, target);
     return GST_FLOW_OK;
@@ -707,24 +731,43 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     if (!self->shm_ptr) return GST_FLOW_ERROR;
     auto *header = static_cast<ShmHeader *>(self->shm_ptr);
 
-    int attempts = 0;
-    /* Poll `ready` + `frame_number` with ACQUIRE semantics. When the
-     * load returns a new value the producer's prior writes (write_idx,
-     * timestamp_ns, ref_counts) are guaranteed visible. */
+    /* Block until producer publishes a new frame. The futex wait on
+     * wake_counter pairs with the producer's __atomic_add_fetch +
+     * FUTEX_WAKE in render(). Each iteration:
+     *   1. ACQUIRE-load wake_counter; if changed since last frame we
+     *      saw, the new frame's writes are visible — go grab it.
+     *   2. Honor flushing — return immediately if the pad is going down.
+     *   3. Apply the EOS deadline — short timeouts so we periodically
+     *      re-check flushing and the deadline rather than blocking
+     *      forever on a stuck producer.
+     *   4. futex_wait on wake_counter == observed value. If producer
+     *      bumped it between (1) and (4), wait returns EAGAIN and we
+     *      loop; that's fine, the next ACQUIRE-load picks up the new
+     *      frame. */
     uint32_t ready;
     uint64_t fn;
+    int      ticks  = 0;
+    const long tick_us = nvmm::config::poll_interval_us;
+    struct timespec wait_to = {
+        tick_us / 1000000,
+        (tick_us % 1000000) * 1000
+    };
+
     while (true) {
+        const uint32_t wc = __atomic_load_n(&header->wake_counter, __ATOMIC_ACQUIRE);
         ready = __atomic_load_n(&header->ready,        __ATOMIC_ACQUIRE);
         fn    = __atomic_load_n(&header->frame_number, __ATOMIC_RELAXED);
         if (ready && fn != self->last_frame) break;
         if (GST_PAD_IS_FLUSHING(src_pad)) return GST_FLOW_FLUSHING;
         if (nvmm::config::fetch_idle_ticks > 0 &&
-            ++attempts > nvmm::config::fetch_idle_ticks) {
+            ++ticks > nvmm::config::fetch_idle_ticks) {
             GST_INFO_OBJECT(owner, "no new frame for ~%d ms, returning EOS",
-                            nvmm::config::fetch_idle_ticks * nvmm::config::poll_interval_us / 1000);
+                            nvmm::config::fetch_idle_ticks * (int)tick_us / 1000);
             return GST_FLOW_EOS;
         }
-        g_usleep(nvmm::config::poll_interval_us);
+        /* Block until producer bumps wake_counter or our tick expires.
+         * Spurious wakes (EINTR, EAGAIN) loop normally. */
+        futex_wait(&header->wake_counter, wc, &wait_to);
     }
 
     if (header->magic != NVMM_SHM_MAGIC) return GST_FLOW_ERROR;
