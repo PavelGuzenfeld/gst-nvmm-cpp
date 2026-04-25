@@ -102,15 +102,8 @@ runtime_check_import_api(GstElement *owner)
 
 typedef NvmmShmPoolHeader ShmHeader;
 
-/* ================================================================== */
-/* Atomic accessors for shm fields shared with remote consumers.
- *
- * The underlying slots[].ref_count / write_idx / ready / frame_number
- * fields are plain int32_t / uint32_t / uint64_t — NOT volatile.
- * `volatile` blocks compiler register caching but provides no atomicity
- * or cross-CPU ordering; it is the wrong tool for IPC. Use __atomic_*
- * builtins with explicit memory order everywhere below.
- */
+/* Atomic accessors for the shm slot ref_counts shared with remote
+ * consumers. See shm_protocol.h for memory-order rules. */
 static inline int32_t refc_load(int32_t *p)
 {
     return __atomic_load_n(p, __ATOMIC_ACQUIRE);

@@ -32,21 +32,11 @@ extern "C" {
 /*
  * IPC synchronization rules — READ BEFORE TOUCHING THIS STRUCT.
  *
- * (1) Fields are NOT declared `volatile`. `volatile` blocks compiler
- *     register-caching but gives no atomicity or cross-CPU ordering,
- *     which is the wrong tool for IPC synchronization. Access them
- *     with __atomic_* builtins and explicit memory order:
- *
- *        reads       -> __atomic_load_n(&field, __ATOMIC_ACQUIRE)
- *        publishes   -> __atomic_store_n(&field, v, __ATOMIC_RELEASE)
- *        CAS         -> __atomic_compare_exchange_n(..., __ATOMIC_ACQ_REL, ...)
- *
- *     Rationale for __atomic_* over std::atomic<T> on C++14: the C++14
- *     standard requires atomic objects to be constructed via their
- *     constructor and does not guarantee layout-compat with plain T.
- *     Reinterpret-casting a shm byte range to std::atomic<T>* is UB
- *     and ABI-implementation-defined. std::atomic_ref<T> (C++20) fixes
- *     this cleanly — TODO: migrate when we can bump the language level.
+ * (1) Use __atomic_* with explicit memory order on plain integers, not
+ *     std::atomic<T>. Reinterpret-casting an shm byte range to
+ *     std::atomic<T>* is UB and ABI-implementation-defined in C++14.
+ *     std::atomic_ref<T> (C++20) is the standard answer — TODO when we
+ *     bump the language level.
  *
  * (2) Cache-line aware layout — avoid false sharing on SMP.
  *     - Setup-time fields (magic/version/width/...) go first, read-mostly.
