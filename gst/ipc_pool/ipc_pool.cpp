@@ -19,6 +19,7 @@
 #include "ipc_backend.h"
 #include "shm_protocol.h"
 #include "fd_ipc.h"
+#include "nvmm_config.h"
 
 #ifdef NVMM_MOCK_API
 #include "nvbufsurface_mock.h"
@@ -259,7 +260,7 @@ accept_loop(NvmmIpcProducer *self, GstElement *owner)
 {
     while (self->running.load()) {
         struct pollfd pfd { self->listen_fd, POLLIN, 0 };
-        int ret = poll(&pfd, 1, 200 /* ms */);
+        int ret = poll(&pfd, 1, nvmm::config::accept_poll_ms);
         if (ret <= 0) continue;
 
         int client = accept(self->listen_fd, nullptr, nullptr);
@@ -267,7 +268,7 @@ accept_loop(NvmmIpcProducer *self, GstElement *owner)
 
         /* Wait until the pool is ready (set_caps has been called). */
         while (!self->pool_allocated && self->running.load())
-            g_usleep(10000);
+            g_usleep(nvmm::config::accept_pool_wait_us);
 
         if (!self->running.load()) { close(client); break; }
         send_fds_to_client(self, owner, client);
@@ -280,8 +281,8 @@ NvmmIpcProducer *
 nvmm_ipc_producer_new(const gchar *shm_name, int pool_size)
 {
     auto *self = new NvmmIpcProducer();
-    self->shm_name = (shm_name && *shm_name) ? shm_name : "/nvmm_sink_0";
-    self->pool_size_requested = CLAMP(pool_size, 4, NVMM_POOL_SIZE_MAX);
+    self->shm_name = (shm_name && *shm_name) ? shm_name : nvmm::config::default_shm_name;
+    self->pool_size_requested = CLAMP(pool_size, nvmm::config::min_pool_size, NVMM_POOL_SIZE_MAX);
     gst_video_info_init(&self->video_info);
     return self;
 }
@@ -325,7 +326,7 @@ nvmm_ipc_producer_start(NvmmIpcProducer *self, GstElement *owner)
     /* Socket path derived from shm name; flatten slashes. */
     std::string flat = self->shm_name;
     for (auto &c : flat) if (c == '/') c = '_';
-    self->socket_path = std::string("/tmp/nvmm") + flat + ".sock";
+    self->socket_path = std::string(nvmm::config::socket_path_prefix) + flat + ".sock";
 
     self->listen_fd = nvmm_server_listen(self->socket_path.c_str());
     if (self->listen_fd < 0) {
@@ -487,8 +488,8 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
 
 /* Delayed release of imported surfaces: the hardware encoder may still be
    reading a DMA buffer after the consuming GstBuffer is unref'd. We decrement
-   the shm ref_count only after RELEASE_DELAY frames have passed. */
-#define POOL_RELEASE_DELAY 4
+   the shm ref_count only after pool_release_delay frames have passed
+   (see nvmm_config.h). */
 
 struct NvmmIpcConsumer {
     std::string shm_name;
@@ -506,7 +507,7 @@ struct NvmmIpcConsumer {
 
     /* Delayed release ring — see note above. Pointers into shm ref_counts[];
      * accessed through refc_* helpers. */
-    int32_t *ring[POOL_RELEASE_DELAY] = {};
+    int32_t *ring[nvmm::config::pool_release_delay] = {};
     int ring_head = 0;
 };
 
@@ -557,11 +558,11 @@ nvmm_ipc_consumer_start(NvmmIpcConsumer *self, GstElement *owner)
      * socket_path, pool_size, pitches, offsets) are guaranteed visible. */
     int waited = 0;
     while (__atomic_load_n(&header->ready, __ATOMIC_ACQUIRE) == 0) {
-        if (++waited > 5000) {
+        if (++waited > nvmm::config::start_wait_ticks) {
             GST_ERROR_OBJECT(owner, "timeout waiting for producer");
             return FALSE;
         }
-        g_usleep(1000);
+        g_usleep(nvmm::config::poll_interval_us);
     }
     if (header->magic != NVMM_SHM_MAGIC) {
         GST_ERROR_OBJECT(owner, "shm magic mismatch: got 0x%08x", header->magic);
@@ -622,7 +623,7 @@ gboolean
 nvmm_ipc_consumer_stop(NvmmIpcConsumer *self, GstElement *owner)
 {
     /* Drain release ring. */
-    for (int i = 0; i < POOL_RELEASE_DELAY; i++) {
+    for (int i = 0; i < nvmm::config::pool_release_delay; i++) {
         if (self->ring[i]) {
             refc_fetch_add(self->ring[i], -1);
             self->ring[i] = nullptr;
@@ -695,11 +696,12 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
         fn    = __atomic_load_n(&header->frame_number, __ATOMIC_RELAXED);
         if (ready && fn != self->last_frame) break;
         if (GST_PAD_IS_FLUSHING(src_pad)) return GST_FLOW_FLUSHING;
-        if (++attempts > 2000) {
-            GST_INFO_OBJECT(owner, "no new frame for 2s, returning EOS");
+        if (++attempts > nvmm::config::fetch_idle_ticks) {
+            GST_INFO_OBJECT(owner, "no new frame for ~%d ms, returning EOS",
+                            nvmm::config::fetch_idle_ticks * nvmm::config::poll_interval_us / 1000);
             return GST_FLOW_EOS;
         }
-        g_usleep(1000);
+        g_usleep(nvmm::config::poll_interval_us);
     }
 
     if (header->magic != NVMM_SHM_MAGIC) return GST_FLOW_ERROR;
@@ -725,10 +727,10 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     while (true) {
         int32_t cur = refc_load(&header->slots[idx].ref_count);
         if (cur < 0) {                         /* producer writing this slot */
-            g_usleep(100);
+            g_usleep(nvmm::config::busy_slot_backoff_us);
             idx = __atomic_load_n(&header->write_idx, __ATOMIC_ACQUIRE);
             if (idx >= (uint32_t)self->pool_size) return GST_FLOW_ERROR;
-            if (++cas_attempts > 1000) return GST_FLOW_ERROR;
+            if (++cas_attempts > nvmm::config::cas_retry_limit) return GST_FLOW_ERROR;
             continue;
         }
         if (refc_cas(&header->slots[idx].ref_count, cur, cur + 1)) break;
@@ -738,7 +740,7 @@ nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self, GstElement *owner,
     int32_t *old = self->ring[self->ring_head];
     if (old) refc_fetch_add(old, -1);
     self->ring[self->ring_head] = &header->slots[idx].ref_count;
-    self->ring_head = (self->ring_head + 1) % POOL_RELEASE_DELAY;
+    self->ring_head = (self->ring_head + 1) % nvmm::config::pool_release_delay;
 
     GstBuffer *buf = gst_buffer_new();
     gst_buffer_append_memory(buf, wrap_imported(self->imported[idx]));

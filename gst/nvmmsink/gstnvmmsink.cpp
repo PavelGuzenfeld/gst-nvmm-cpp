@@ -10,6 +10,8 @@
 
 #include "gstnvmmsink.h"
 #include "ipc_backend.h"
+#include "nvmm_config.h"
+#include "shm_protocol.h"   /* NVMM_POOL_SIZE_MAX */
 
 #include <string>
 
@@ -26,10 +28,6 @@ enum {
     PROP_POOL_SIZE,
 };
 
-#define DEFAULT_SHM_NAME   "/nvmm_sink_0"
-#define DEFAULT_POOL_SIZE  8
-#define MIN_POOL_SIZE      4
-#define MAX_POOL_SIZE      32
 
 struct _GstNvmmSinkPrivate {
     std::string       shm_name;
@@ -54,7 +52,7 @@ gst_nvmm_sink_set_property(GObject *object, guint prop_id,
         }
         case PROP_POOL_SIZE:
             self->priv->pool_size =
-                CLAMP(g_value_get_int(value), MIN_POOL_SIZE, MAX_POOL_SIZE);
+                CLAMP(g_value_get_int(value), nvmm::config::min_pool_size, NVMM_POOL_SIZE_MAX);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -87,7 +85,7 @@ gst_nvmm_sink_start(GstBaseSink *sink)
 {
     auto *self = GST_NVMM_SINK(sink);
     if (self->priv->shm_name.empty())
-        self->priv->shm_name = DEFAULT_SHM_NAME;
+        self->priv->shm_name = nvmm::config::default_shm_name;
 
     self->priv->prod = nvmm_ipc_producer_new(self->priv->shm_name.c_str(),
                                               self->priv->pool_size);
@@ -171,12 +169,12 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
     g_object_class_install_property(gobject_class, PROP_SHM_NAME,
         g_param_spec_string("shm-name", "Shared Memory Name",
             "POSIX shared-memory segment name (e.g. /cam1)",
-            DEFAULT_SHM_NAME, G_PARAM_READWRITE));
+            nvmm::config::default_shm_name, G_PARAM_READWRITE));
 
     g_object_class_install_property(gobject_class, PROP_POOL_SIZE,
         g_param_spec_int("pool-size", "Pool Size",
             "Number of NVMM buffers in the cross-process pool",
-            MIN_POOL_SIZE, MAX_POOL_SIZE, DEFAULT_POOL_SIZE,
+            nvmm::config::min_pool_size, NVMM_POOL_SIZE_MAX, nvmm::config::default_pool_size,
             G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
@@ -203,8 +201,8 @@ gst_nvmm_sink_init(GstNvmmSink *self)
     self->priv = static_cast<GstNvmmSinkPrivate *>(
         gst_nvmm_sink_get_instance_private(self));
     new (self->priv) GstNvmmSinkPrivate();
-    self->priv->shm_name = DEFAULT_SHM_NAME;
-    self->priv->pool_size = DEFAULT_POOL_SIZE;
+    self->priv->shm_name = nvmm::config::default_shm_name;
+    self->priv->pool_size = nvmm::config::default_pool_size;
     self->priv->prod = nullptr;
 }
 

@@ -5,6 +5,7 @@
 
 #include "gstnvmmappsrc.h"
 #include "ipc_backend.h"
+#include "nvmm_config.h"
 
 #include <string>
 
@@ -20,8 +21,6 @@ enum {
     PROP_SHM_NAME,
     PROP_IS_LIVE,
 };
-
-#define DEFAULT_SHM_NAME "/nvmm_sink_0"
 
 struct _GstNvmmAppSrcPrivate {
     std::string       shm_name;
@@ -79,7 +78,7 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
 {
     auto *self = GST_NVMM_APP_SRC(src);
     if (self->priv->shm_name.empty())
-        self->priv->shm_name = DEFAULT_SHM_NAME;
+        self->priv->shm_name = nvmm::config::default_shm_name;
 
     self->priv->cons = nvmm_ipc_consumer_new(self->priv->shm_name.c_str());
     if (!self->priv->cons) return FALSE;
@@ -127,7 +126,7 @@ gst_nvmm_app_src_class_init(GstNvmmAppSrcClass *klass)
     g_object_class_install_property(gobject_class, PROP_SHM_NAME,
         g_param_spec_string("shm-name", "Shared Memory Name",
             "POSIX shared-memory segment name (must match the sink)",
-            DEFAULT_SHM_NAME, G_PARAM_READWRITE));
+            nvmm::config::default_shm_name, G_PARAM_READWRITE));
 
     g_object_class_install_property(gobject_class, PROP_IS_LIVE,
         g_param_spec_boolean("is-live", "Is Live",
@@ -162,7 +161,7 @@ gst_nvmm_app_src_init(GstNvmmAppSrc *self)
     self->priv = static_cast<GstNvmmAppSrcPrivate *>(
         gst_nvmm_app_src_get_instance_private(self));
     new (self->priv) GstNvmmAppSrcPrivate();
-    self->priv->shm_name = DEFAULT_SHM_NAME;
+    self->priv->shm_name = nvmm::config::default_shm_name;
     self->priv->is_live  = TRUE;
     self->priv->cons     = nullptr;
 

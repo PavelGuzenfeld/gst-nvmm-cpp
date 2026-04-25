@@ -133,6 +133,10 @@ conf.set10('HAVE_NVSCIBUF', have_nvscibuf)
 conf.set_quoted('JETPACK_VERSION', nvmm_target)
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 
+# Tunable defaults — see gst/common/nvmm_config.h for the full list.
+conf.set('NVMM_POOL_RELEASE_DELAY', get_option('pool_release_delay'))
+conf.set('NVMM_POLL_INTERVAL_US',   get_option('poll_interval_us'))
+
 configure_file(
   output : 'config.h',
   configuration : conf,
