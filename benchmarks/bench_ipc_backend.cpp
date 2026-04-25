@@ -4,6 +4,7 @@
 ///   - producer publish rate vs single consumer
 ///   - producer publish rate vs N consumers (1, 2, 4) — cache-line layout payoff
 ///   - end-to-end latency: producer publish timestamp -> consumer fetch return
+///   - copy vs zero-copy producer paths side by side
 ///
 /// Notes:
 ///   - On host this exercises the atomic + memcpy paths only; NvBufSurfaceCopy
@@ -35,6 +36,8 @@
 using Clock = std::chrono::steady_clock;
 using Ns    = std::chrono::nanoseconds;
 
+enum BenchMode { MODE_COPY, MODE_ZEROCOPY };
+
 static GstBuffer *make_nvmm_buffer(GstAllocator *alloc, const GstVideoInfo *vi)
 {
     GstMemory *mem = gst_nvmm_allocator_alloc_video(
@@ -56,18 +59,20 @@ struct ConsumerStats {
     std::vector<double> samples;  /* for p50/p99 */
 };
 
-static void run_case(int n_consumers, int total_frames, int width, int height)
+static void run_case(BenchMode mode, int n_consumers, int total_frames,
+                     int width, int height)
 {
     char shm_name[64];
-    std::snprintf(shm_name, sizeof(shm_name), "/bench_ipc_n%d", n_consumers);
+    std::snprintf(shm_name, sizeof(shm_name), "/bench_ipc_%s_n%d",
+                  mode == MODE_ZEROCOPY ? "zc" : "cp", n_consumers);
     shm_unlink(shm_name);
 
     GstElement *prod_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN,
         "name", "bench_prod", NULL));
-    GstAllocator *alloc = gst_nvmm_allocator_new(0);
+    GstAllocator *alloc = (mode == MODE_COPY) ? gst_nvmm_allocator_new(0) : nullptr;
 
     NvmmIpcProducer *prod = nvmm_ipc_producer_new(shm_name, 16);
-    if (!prod || !nvmm_ipc_producer_start(prod, prod_owner)) {
+    if (!nvmm_ipc_producer_start(prod, prod_owner)) {
         std::fprintf(stderr, "producer start failed\n");
         return;
     }
@@ -76,6 +81,28 @@ static void run_case(int n_consumers, int total_frames, int width, int height)
     if (!nvmm_ipc_producer_set_caps(prod, prod_owner, &vi, TRUE)) {
         std::fprintf(stderr, "set_caps failed\n");
         return;
+    }
+
+    /* For zero-copy mode, get the upstream pool the same way a real
+     * upstream element would: fire propose_allocation with a fresh
+     * GstQuery, take the pool back. */
+    GstBufferPool *upstream_pool = nullptr;
+    if (mode == MODE_ZEROCOPY) {
+        GstCaps *caps = gst_video_info_to_caps(&vi);
+        GstQuery *q = gst_query_new_allocation(caps, TRUE);
+        if (!nvmm_ipc_producer_propose_allocation(prod, prod_owner, q) ||
+            gst_query_get_n_allocation_pools(q) == 0) {
+            std::fprintf(stderr, "propose_allocation didn't return a pool\n");
+            return;
+        }
+        gst_query_parse_nth_allocation_pool(q, 0, &upstream_pool, nullptr, nullptr, nullptr);
+        gst_object_ref_sink(upstream_pool);
+        gst_query_unref(q);
+        gst_caps_unref(caps);
+        if (!gst_buffer_pool_set_active(upstream_pool, TRUE)) {
+            std::fprintf(stderr, "upstream pool activate failed\n");
+            return;
+        }
     }
 
     std::vector<ConsumerStats> stats(n_consumers);
@@ -129,8 +156,17 @@ static void run_case(int n_consumers, int total_frames, int width, int height)
 
     auto t0 = Clock::now();
     for (int i = 0; i < total_frames; i++) {
-        GstBuffer *frame = make_nvmm_buffer(alloc, &vi);
-        if (!frame) { std::fprintf(stderr, "frame alloc failed\n"); break; }
+        GstBuffer *frame = nullptr;
+        if (mode == MODE_ZEROCOPY) {
+            if (gst_buffer_pool_acquire_buffer(upstream_pool, &frame, nullptr)
+                != GST_FLOW_OK || !frame) {
+                std::fprintf(stderr, "pool acquire failed at frame %d\n", i);
+                break;
+            }
+        } else {
+            frame = make_nvmm_buffer(alloc, &vi);
+            if (!frame) { std::fprintf(stderr, "frame alloc failed\n"); break; }
+        }
         GST_BUFFER_PTS(frame) = (GstClockTime)Clock::now().time_since_epoch().count();
         nvmm_ipc_producer_render(prod, prod_owner, frame);
         gst_buffer_unref(frame);
@@ -144,9 +180,13 @@ static void run_case(int n_consumers, int total_frames, int width, int height)
     stop.store(true);
     for (auto &t : consumers) t.join();
 
+    if (upstream_pool) {
+        gst_buffer_pool_set_active(upstream_pool, FALSE);
+        gst_object_unref(upstream_pool);
+    }
     nvmm_ipc_producer_stop(prod, prod_owner);
     nvmm_ipc_producer_free(prod);
-    gst_object_unref(alloc);
+    if (alloc) gst_object_unref(alloc);
     gst_object_unref(prod_owner);
 
     /* Aggregate. */
@@ -176,8 +216,9 @@ static void run_case(int n_consumers, int total_frames, int width, int height)
     double avg_lat  = cons_with_data ? cons_avg_us_sum / cons_with_data : 0;
 
     std::printf(
-        "n_cons=%d  prod_fps=%8.0f  cons_frames=[min=%d,max=%d]/%d  "
+        "%-10s n_cons=%d  prod_fps=%8.0f  cons_frames=[min=%d,max=%d]/%d  "
         "lat_avg=%6.0f us  p50=%6.0f us  p99=%6.0f us\n",
+        mode == MODE_ZEROCOPY ? "zero-copy" : "copy",
         n_consumers, prod_fps,
         cons_min_frames, cons_max_frames, total_frames,
         avg_lat, avg_p50, cons_max_p99_us);
@@ -200,16 +241,21 @@ int main(int argc, char *argv[])
 #else
     const char *backend_kind = "real NVMM (NvBufSurfaceImport)";
     const char *note =
-        "Note: real Jetson NVMM. NvBufSurfaceCopy on producer, zero-copy\n"
-        "      consumer fetch. Frame size kept small to expose the IPC\n"
-        "      synchronization path rather than VIC bandwidth.";
+        "Note: real Jetson NVMM. Two producer paths benchmarked side by\n"
+        "      side: 'copy' = upstream allocates separately, render() does\n"
+        "      one NvBufSurfaceCopy GPU->GPU into the slot.\n"
+        "      'zero-copy' = upstream acquires from our propose_allocation\n"
+        "      pool, render() publishes the slot index without any copy.\n"
+        "      Frame size kept small to expose the IPC sync path rather than\n"
+        "      VIC bandwidth.";
 #endif
     std::printf("=== IPC backend bench (%s, %dx%d RGBA, %d frames) ===\n",
                 backend_kind, width, height, total_frames);
     std::printf("%s\n\n", note);
 
     for (int n : {1, 2, 4}) {
-        run_case(n, total_frames, width, height);
+        run_case(MODE_COPY,     n, total_frames, width, height);
+        run_case(MODE_ZEROCOPY, n, total_frames, width, height);
     }
     return 0;
 }
