@@ -142,11 +142,31 @@ static inline int32_t refc_fetch_add(int32_t *p, int32_t d)
 }
 /* ================================================================== */
 
+/* ================================================================== */
+/* GstNvmmIpcUpstreamPool — GstBufferPool subclass that exposes our
+ * pre-allocated IPC slot surfaces directly to upstream. When upstream
+ * accepts the pool via propose_allocation, every frame upstream renders
+ * lands directly in one of our slots; render() then publishes the slot
+ * index without an NvBufSurfaceCopy.
+ *
+ * Lifecycle dance: a slot is acquireable only when BOTH
+ *   (a) it's in the pool's standard free queue (no local GstBuffer
+ *       holding it), AND
+ *   (b) the shm refcount slots[i].ref_count == 0 (no remote consumer
+ *       still reading it).
+ * Producer's render() ref's the buffer through a delayed-release ring
+ * to keep (a) false long enough for (b) to drain.
+ * ================================================================== */
+
 struct PoolSlot {
     NvBufSurface          *surface    = nullptr;
     int                    fd         = -1;
     NvBufSurfaceMapParams  map_params{};
 };
+
+/* Forward decl — the upstream-facing GstBufferPool subclass below. */
+struct _GstNvmmIpcUpstreamPool;
+typedef struct _GstNvmmIpcUpstreamPool GstNvmmIpcUpstreamPool;
 
 /* ------------------------------------------------------------------ */
 /*                            Producer                                 */
@@ -175,7 +195,144 @@ struct NvmmIpcProducer {
     std::atomic<bool>         running{false};
     std::vector<int>          client_fds;
     std::mutex                clients_mutex;
+
+    /* Upstream-facing buffer pool: when upstream agrees, it allocates
+     * straight into our IPC slot surfaces and render() skips the copy. */
+    GstBufferPool            *upstream_pool = nullptr;
+
+    /* Producer-side delayed-release ring for zero-copy buffers — keep
+     * the upstream GstBuffer ref'd for pool_release_delay frames after
+     * publishing so the slot doesn't get reissued while remote consumers
+     * are reading. */
+    std::vector<GstBuffer *>  zc_release_ring;
+    int                       zc_ring_head = 0;
 };
+
+/* Per-buffer marker so render() can recognize "this came from our pool"
+ * and read the slot index. */
+static GQuark
+nvmm_pool_slot_quark(void)
+{
+    static GQuark q = 0;
+    if (!q) q = g_quark_from_static_string("nvmm-ipc-pool-slot-idx");
+    return q;
+}
+
+struct _GstNvmmIpcUpstreamPool {
+    GstBufferPool       parent;
+    NvmmIpcProducer    *producer;        /* back-ref; not owned */
+    int                 next_slot_hint;  /* round-robin acquire start */
+};
+
+typedef struct _GstNvmmIpcUpstreamPoolClass {
+    GstBufferPoolClass parent_class;
+} GstNvmmIpcUpstreamPoolClass;
+
+G_DEFINE_TYPE(GstNvmmIpcUpstreamPool, nvmm_ipc_upstream_pool, GST_TYPE_BUFFER_POOL)
+
+#define NVMM_IPC_UPSTREAM_POOL(obj) \
+    G_TYPE_CHECK_INSTANCE_CAST((obj), nvmm_ipc_upstream_pool_get_type(), GstNvmmIpcUpstreamPool)
+
+/* alloc_buffer: hand out the pre-allocated slot surfaces in round-robin
+ * order. After all N slots have been alloc'd once, the pool's standard
+ * free-queue mechanism handles further acquire/release. */
+static GstFlowReturn
+nvmm_ipc_upstream_pool_alloc(GstBufferPool *pool, GstBuffer **out,
+                              GstBufferPoolAcquireParams * /*params*/)
+{
+    auto *self = NVMM_IPC_UPSTREAM_POOL(pool);
+    NvmmIpcProducer *prod = self->producer;
+    if (!prod || !prod->pool_allocated) return GST_FLOW_ERROR;
+
+    const int n = (int)prod->pool.size();
+    int idx = self->next_slot_hint;
+    self->next_slot_hint = (idx + 1) % n;
+    if (idx >= n) return GST_FLOW_ERROR;
+
+    NvBufSurface *surf = prod->pool[idx].surface;
+    GstBuffer *buf = gst_buffer_new();
+    GstMemory *mem = gst_memory_new_wrapped(
+        GST_MEMORY_FLAG_NO_SHARE,
+        surf, sizeof(NvBufSurface),
+        0, sizeof(NvBufSurface),
+        nullptr, nullptr);
+    gst_buffer_append_memory(buf, mem);
+    /* Tag the buffer with its slot index so render() can find it. */
+    gst_mini_object_set_qdata(GST_MINI_OBJECT_CAST(buf),
+                              nvmm_pool_slot_quark(),
+                              GINT_TO_POINTER(idx + 1),  /* +1 to distinguish from NULL */
+                              nullptr);
+    *out = buf;
+    return GST_FLOW_OK;
+}
+
+/* acquire_buffer: rejected slots whose shm refcount is still nonzero —
+ * remote consumers are reading them, can't reissue. Falls through to the
+ * default acquire (which pops from the free queue + may call alloc_buffer
+ * for the first N) and re-checks the refcount; if pinned, releases and
+ * tries again up to N times. */
+static GstFlowReturn
+nvmm_ipc_upstream_pool_acquire(GstBufferPool *pool, GstBuffer **out,
+                                GstBufferPoolAcquireParams *params)
+{
+    auto *self = NVMM_IPC_UPSTREAM_POOL(pool);
+    NvmmIpcProducer *prod = self->producer;
+    if (!prod || !prod->shm_ptr) return GST_FLOW_ERROR;
+
+    auto *header = static_cast<ShmHeader *>(prod->shm_ptr);
+    const int n_attempts = (int)prod->pool.size() * 2;
+
+    for (int i = 0; i < n_attempts; i++) {
+        GstBuffer *buf = nullptr;
+        GstFlowReturn r = GST_BUFFER_POOL_CLASS(
+            nvmm_ipc_upstream_pool_parent_class)->acquire_buffer(pool, &buf, params);
+        if (r != GST_FLOW_OK) return r;
+
+        gpointer tag = gst_mini_object_get_qdata(GST_MINI_OBJECT_CAST(buf),
+                                                 nvmm_pool_slot_quark());
+        int idx = GPOINTER_TO_INT(tag) - 1;
+        if (idx < 0 || idx >= (int)prod->pool.size()) {
+            /* Stranger buffer — shouldn't happen in our pool. Pass it back. */
+            *out = buf;
+            return GST_FLOW_OK;
+        }
+
+        if (refc_load(&header->slots[idx].ref_count) == 0) {
+            *out = buf;
+            return GST_FLOW_OK;  /* slot is remote-free, take it */
+        }
+
+        /* Slot still pinned remotely. Release back and try the next. */
+        GST_BUFFER_POOL_CLASS(nvmm_ipc_upstream_pool_parent_class)
+            ->release_buffer(pool, buf);
+        g_usleep(nvmm::config::busy_slot_backoff_us);
+    }
+    return GST_FLOW_EOS;  /* every slot is remote-pinned, give up */
+}
+
+static void
+nvmm_ipc_upstream_pool_init(GstNvmmIpcUpstreamPool *self)
+{
+    self->producer = nullptr;
+    self->next_slot_hint = 0;
+}
+
+static void
+nvmm_ipc_upstream_pool_class_init(GstNvmmIpcUpstreamPoolClass *klass)
+{
+    auto *pool_class = GST_BUFFER_POOL_CLASS(klass);
+    pool_class->alloc_buffer   = nvmm_ipc_upstream_pool_alloc;
+    pool_class->acquire_buffer = nvmm_ipc_upstream_pool_acquire;
+}
+
+static GstBufferPool *
+nvmm_ipc_upstream_pool_new(NvmmIpcProducer *prod)
+{
+    auto *p = (GstNvmmIpcUpstreamPool *)
+        g_object_new(nvmm_ipc_upstream_pool_get_type(), nullptr);
+    p->producer = prod;
+    return GST_BUFFER_POOL(p);
+}
 
 static gboolean
 allocate_pool(NvmmIpcProducer *self, GstElement *owner)
@@ -380,6 +537,19 @@ nvmm_ipc_producer_stop(NvmmIpcProducer *self, GstElement *owner)
     if (self->listen_fd >= 0) { close(self->listen_fd); self->listen_fd = -1; }
     if (!self->socket_path.empty()) { unlink(self->socket_path.c_str()); self->socket_path.clear(); }
 
+    /* Drain the zero-copy delayed-release ring before destroying the
+     * pool — those buffers wrap our slot surfaces and must not be
+     * unref'd after we tear the pool down. */
+    for (auto *&b : self->zc_release_ring) {
+        if (b) { gst_buffer_unref(b); b = nullptr; }
+    }
+    self->zc_release_ring.clear();
+    if (self->upstream_pool) {
+        gst_buffer_pool_set_active(self->upstream_pool, FALSE);
+        gst_object_unref(self->upstream_pool);
+        self->upstream_pool = nullptr;
+    }
+
     destroy_pool(self);
 
     if (self->shm_ptr && self->shm_ptr != MAP_FAILED) {
@@ -452,12 +622,43 @@ nvmm_ipc_producer_set_caps(NvmmIpcProducer *self, GstElement *owner,
 }
 
 gboolean
-nvmm_ipc_producer_propose_allocation(NvmmIpcProducer * /*self*/,
-                                     GstElement      * /*owner*/,
-                                     GstQuery        * /*query*/)
+nvmm_ipc_producer_propose_allocation(NvmmIpcProducer *self, GstElement *owner,
+                                     GstQuery *query)
 {
-    /* Stage (c) will offer the pool here; until then we always copy. */
-    return FALSE;
+    /* Need caps + pool to advertise. set_caps must have run first. */
+    if (!self->pool_allocated) return FALSE;
+
+    GstCaps *caps = nullptr;
+    gboolean need_pool = FALSE;
+    gst_query_parse_allocation(query, &caps, &need_pool);
+    if (!need_pool || !caps) return FALSE;
+
+    /* Lazily build the upstream-facing pool. Initial buffer count = our
+     * slot count; min/max cap so upstream can size its internal queues. */
+    if (!self->upstream_pool) {
+        self->upstream_pool = nvmm_ipc_upstream_pool_new(self);
+        GstStructure *config = gst_buffer_pool_get_config(self->upstream_pool);
+        gst_buffer_pool_config_set_params(
+            config, caps,
+            sizeof(NvBufSurface),                /* "size" — opaque to upstream */
+            (guint)self->pool.size(),            /* min */
+            (guint)self->pool.size());           /* max */
+        if (!gst_buffer_pool_set_config(self->upstream_pool, config)) {
+            GST_WARNING_OBJECT(owner, "upstream pool set_config failed");
+            gst_object_unref(self->upstream_pool);
+            self->upstream_pool = nullptr;
+            return FALSE;
+        }
+        self->zc_release_ring.assign(nvmm::config::pool_release_delay, nullptr);
+    }
+
+    gst_query_add_allocation_pool(query, self->upstream_pool,
+                                  sizeof(NvBufSurface),
+                                  (guint)self->pool.size(),
+                                  (guint)self->pool.size());
+    GST_INFO_OBJECT(owner, "offered NVMM pool (%d slots) to upstream for zero-copy",
+                    (int)self->pool.size());
+    return TRUE;
 }
 
 /* Helper: fetch NvBufSurface* from an incoming NVMM GstBuffer. */
@@ -487,29 +688,56 @@ nvmm_ipc_producer_render(NvmmIpcProducer *self, GstElement *owner,
         return GST_FLOW_ERROR;
     }
 
-    /* Claim next idle slot via CAS 0 -> -1 (writer lock). */
-    const int ps = (int)self->pool.size();
+    /* Zero-copy fast path: did upstream write into one of our pool slots?
+     * The pool tags every buffer it hands out with the slot index in
+     * qdata. If present, skip the copy and publish the slot directly;
+     * we then ref the buffer through a delayed-release ring so the slot
+     * doesn't get reissued until remote consumers have had time to drop
+     * their refs. */
     int target = -1;
-    for (int i = 0; i < ps; i++) {
-        int idx = (self->write_idx + 1 + i) % ps;
-        if (refc_cas(&header->slots[idx].ref_count, 0, -1)) { target = idx; break; }
-    }
-    if (target < 0) {
-        GST_WARNING_OBJECT(owner, "all %d pool buffers busy, dropping frame", ps);
-        return GST_FLOW_OK;
+    gpointer tag = gst_mini_object_get_qdata(GST_MINI_OBJECT_CAST(buffer),
+                                              nvmm_pool_slot_quark());
+    if (tag) {
+        target = GPOINTER_TO_INT(tag) - 1;
+        if (target < 0 || target >= (int)self->pool.size())
+            target = -1;  /* corrupt qdata, fall through to copy path */
     }
 
-    if (NvBufSurfaceCopy(src, self->pool[target].surface) != 0) {
-        GST_WARNING_OBJECT(owner, "NvBufSurfaceCopy failed for slot %d", target);
+    const int ps = (int)self->pool.size();
+
+    if (target >= 0) {
+        /* Zero-copy: upstream rendered straight into slot[target]. No
+         * NvBufSurfaceCopy. Ref the buffer for delayed release. */
+        if (!self->zc_release_ring.empty()) {
+            const int delay = (int)self->zc_release_ring.size();
+            GstBuffer *old = self->zc_release_ring[self->zc_ring_head];
+            if (old) gst_buffer_unref(old);
+            self->zc_release_ring[self->zc_ring_head] = gst_buffer_ref(buffer);
+            self->zc_ring_head = (self->zc_ring_head + 1) % delay;
+        }
+        GST_LOG_OBJECT(owner, "render zero-copy into slot %d", target);
+    } else {
+        /* Copy path: claim next idle slot via CAS 0 -> -1 (writer lock),
+         * GPU-to-GPU NvBufSurfaceCopy, then unlock. */
+        for (int i = 0; i < ps; i++) {
+            int idx = (self->write_idx + 1 + i) % ps;
+            if (refc_cas(&header->slots[idx].ref_count, 0, -1)) { target = idx; break; }
+        }
+        if (target < 0) {
+            GST_WARNING_OBJECT(owner, "all %d pool buffers busy, dropping frame", ps);
+            return GST_FLOW_OK;
+        }
+
+        if (NvBufSurfaceCopy(src, self->pool[target].surface) != 0) {
+            GST_WARNING_OBJECT(owner, "NvBufSurfaceCopy failed for slot %d", target);
+            refc_store(&header->slots[target].ref_count, 0);
+            return GST_FLOW_ERROR;
+        }
         refc_store(&header->slots[target].ref_count, 0);
-        return GST_FLOW_ERROR;
     }
 
-    /* Release writer lock and publish the new frame. The final RELEASE
-     * store on `ready` pairs with the consumer's ACQUIRE load on `ready`
-     * and makes the preceding writes to write_idx / frame_number /
-     * timestamp_ns visible to the consumer. */
-    refc_store(&header->slots[target].ref_count, 0);
+    /* Publish the new frame. RELEASE store on `ready` makes the preceding
+     * writes to write_idx / frame_number / timestamp_ns visible. */
     const uint64_t fn = self->frame_number.fetch_add(1);
     __atomic_store_n(&header->timestamp_ns, (uint64_t)GST_BUFFER_PTS(buffer), __ATOMIC_RELAXED);
     __atomic_store_n(&header->frame_number, fn,                                __ATOMIC_RELAXED);

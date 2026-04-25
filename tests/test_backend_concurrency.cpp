@@ -388,6 +388,147 @@ static void test_crc_roundtrip()
     }
 }
 
+/// Producer-side zero-copy path. Drives propose_allocation, takes the
+/// pool the producer hands back, acquires buffers from it, fills them
+/// and renders. The producer's render() should detect the slot tag in
+/// qdata and skip NvBufSurfaceCopy. Verified end-to-end with the same
+/// CRC scheme as test_crc_roundtrip — every received frame's plane-0
+/// must hash to a value we sent.
+static void test_producer_zerocopy()
+{
+    const char *shm = "/test_producer_zerocopy";
+    shm_unlink(shm);
+
+    GstElement *prod_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "prod_zc", NULL));
+    GstElement *cons_owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "cons_zc", NULL));
+
+    NvmmIpcProducer *prod = nvmm_ipc_producer_new(shm, 8);
+    ASSERT_TRUE(nvmm_ipc_producer_start(prod, prod_owner));
+
+    constexpr int W = 64, H = 64;
+    GstVideoInfo vi;
+    gst_video_info_set_format(&vi, GST_VIDEO_FORMAT_RGBA, W, H);
+    ASSERT_TRUE(nvmm_ipc_producer_set_caps(prod, prod_owner, &vi, TRUE));
+
+    /* Drive propose_allocation the way upstream would. */
+    GstCaps *caps = gst_video_info_to_caps(&vi);
+    GstQuery *q = gst_query_new_allocation(caps, TRUE);
+    ASSERT_TRUE(nvmm_ipc_producer_propose_allocation(prod, prod_owner, q));
+    ASSERT_TRUE(gst_query_get_n_allocation_pools(q) > 0);
+
+    GstBufferPool *upstream_pool = nullptr;
+    guint pool_size = 0, pool_min = 0, pool_max = 0;
+    gst_query_parse_nth_allocation_pool(q, 0, &upstream_pool,
+                                         &pool_size, &pool_min, &pool_max);
+    ASSERT_TRUE(upstream_pool);
+    /* The pool comes back floating-ref'd from query; sink it. */
+    gst_object_ref_sink(upstream_pool);
+    gst_query_unref(q);
+    gst_caps_unref(caps);
+
+    ASSERT_TRUE(gst_buffer_pool_set_active(upstream_pool, TRUE));
+
+    constexpr int kFrames = 50;
+    std::atomic<bool> stop{false};
+    std::vector<uint32_t> rx_crcs;
+    std::mutex             rx_mtx;
+
+    std::thread consumer([&]() {
+        NvmmIpcConsumer *cons = nvmm_ipc_consumer_new(shm);
+        if (!nvmm_ipc_consumer_start(cons, cons_owner)) {
+            nvmm_ipc_consumer_free(cons);
+            return;
+        }
+        GstPad *pad = gst_pad_new("src", GST_PAD_SRC);
+        while (!stop.load()) {
+            GstBuffer *buf = nullptr;
+            GstFlowReturn r = nvmm_ipc_consumer_fetch(cons, cons_owner, pad, &buf);
+            if (r == GST_FLOW_OK && buf) {
+                GstMapInfo info;
+                if (gst_buffer_map(buf, &info, GST_MAP_READ)) {
+                    NvBufSurface *surf = reinterpret_cast<NvBufSurface*>(info.data);
+                    if (surf && NvBufSurfaceMap(surf, 0, -1, NVBUF_MAP_READ) == 0) {
+                        NvBufSurfaceSyncForCpu(surf, 0, -1);
+                        const uint8_t *plane =
+                            (const uint8_t *)surf->surfaceList[0].mappedAddr.addr[0];
+                        if (plane) {
+                            uint32_t c = frame_checksum(plane, W * H * 4);
+                            std::lock_guard<std::mutex> g(rx_mtx);
+                            rx_crcs.push_back(c);
+                        }
+                        NvBufSurfaceUnMap(surf, 0, -1);
+                    }
+                    gst_buffer_unmap(buf, &info);
+                }
+                gst_buffer_unref(buf);
+            } else if (r == GST_FLOW_EOS) {
+                break;
+            }
+        }
+        nvmm_ipc_consumer_stop(cons, cons_owner);
+        nvmm_ipc_consumer_free(cons);
+        gst_object_unref(pad);
+    });
+
+    g_usleep(50000);
+
+    std::vector<uint32_t> tx_crcs;
+    tx_crcs.reserve(kFrames);
+    for (int i = 0; i < kFrames; i++) {
+        GstBuffer *buf = nullptr;
+        GstFlowReturn r = gst_buffer_pool_acquire_buffer(upstream_pool, &buf, nullptr);
+        ASSERT_TRUE(r == GST_FLOW_OK);
+        ASSERT_TRUE(buf);
+
+        /* Buffer wraps a slot's NvBufSurface directly. Map it CPU-side
+         * via NvBufSurfaceMap — we're writing into the shared slot. */
+        GstMapInfo info;
+        ASSERT_TRUE(gst_buffer_map(buf, &info, GST_MAP_READWRITE));
+        NvBufSurface *surf = reinterpret_cast<NvBufSurface*>(info.data);
+        ASSERT_TRUE(surf);
+        ASSERT_TRUE(NvBufSurfaceMap(surf, 0, -1, NVBUF_MAP_READ_WRITE) == 0);
+        uint8_t *plane = (uint8_t *)surf->surfaceList[0].mappedAddr.addr[0];
+        ASSERT_TRUE(plane);
+        for (gsize j = 0; j < (gsize)W * H * 4; j++)
+            plane[j] = (uint8_t)((i * 11 + j) & 0xff);
+        tx_crcs.push_back(frame_checksum(plane, W * H * 4));
+        NvBufSurfaceSyncForDevice(surf, 0, -1);
+        NvBufSurfaceUnMap(surf, 0, -1);
+        gst_buffer_unmap(buf, &info);
+
+        GST_BUFFER_PTS(buf) = i * 1000000;
+        nvmm_ipc_producer_render(prod, prod_owner, buf);
+        gst_buffer_unref(buf);
+        g_usleep(2000);
+    }
+
+    g_usleep(100000);
+    stop.store(true);
+    consumer.join();
+
+    gst_buffer_pool_set_active(upstream_pool, FALSE);
+    gst_object_unref(upstream_pool);
+    nvmm_ipc_producer_stop(prod, prod_owner);
+    nvmm_ipc_producer_free(prod);
+    gst_object_unref(prod_owner);
+    gst_object_unref(cons_owner);
+
+    std::printf("[zc tx=%d rx=%d] ", (int)tx_crcs.size(), (int)rx_crcs.size());
+    ASSERT_TRUE(!rx_crcs.empty());
+
+    int matched = 0;
+    for (uint32_t cc : rx_crcs) {
+        for (uint32_t ec : tx_crcs) {
+            if (cc == ec) { matched++; break; }
+        }
+    }
+    if (matched != (int)rx_crcs.size()) {
+        std::printf("ZERO-COPY CORRUPTION: %d of %d received don't match ",
+                    (int)rx_crcs.size() - matched, (int)rx_crcs.size());
+        ASSERT_TRUE(matched == (int)rx_crcs.size());
+    }
+}
+
 int main(int argc, char *argv[])
 {
     gst_init(&argc, &argv);
@@ -401,6 +542,7 @@ int main(int argc, char *argv[])
     RUN(producer_start_stop_churn);
     RUN(multi_consumer_fanout);
     RUN(crc_roundtrip);
+    RUN(producer_zerocopy);
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;
 }
