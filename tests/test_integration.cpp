@@ -43,7 +43,7 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
 #include "shm_protocol.h"
-/* JP6 mock build uses the pool protocol; JP5 path uses the copy protocol. */
+/* Single backend, pool + SCM_RIGHTS protocol. */
 #include "config.h"
 typedef NvmmShmPoolHeader ShmHeader;
 

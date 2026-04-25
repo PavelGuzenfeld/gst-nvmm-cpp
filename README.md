@@ -5,10 +5,9 @@ platforms (Xavier, Orin). Wraps the Tegra-native `NvBufSurface` / NVMM
 memory model in proper GStreamer elements with hardware-accelerated crop,
 scale, format conversion, and inter-process video sharing.
 
-Two IPC backends ship side-by-side and meson picks one at build time. On
-JetPack 5 (Xavier), the sink/source pair use a shared-memory copy
-protocol. On JetPack 6 (Orin), they use an NVMM buffer pool with fd
-passing — consumer-side reads are zero-copy from GPU memory, and the
+Cross-process video sharing is one backend (NVMM pool + SCM_RIGHTS fd
+passing) that works on both JetPack 5.1.1+ (L4T R35.3.1, Xavier) and
+JetPack 6 (Orin). Consumer-side reads are zero-copy from GPU memory; the
 producer pays at most one `NvBufSurfaceCopy` (GPU-to-GPU) per frame.
 
 Built with **C++14** internals and a **C ABI** boundary to GStreamer.
@@ -44,26 +43,25 @@ Video crop, scale, and color format conversion using the **Tegra VIC** (Video Im
 
 ### nvmmsink / nvmmappsrc
 
-A producer/consumer pair for sharing NVMM video frames across processes.
-Two IPC backends are implemented; meson picks one at configure time based on
-the JetPack SDK headers available on the build machine.
+A producer/consumer pair for sharing NVMM video frames across processes
+with consumer-side zero-copy. One backend, supports both JetPacks:
 
-| Backend dir | JetPack | Wire protocol | Transport | Frame path |
-|-------------|---------|---------------|-----------|------------|
-| `gst/ipc_jp5` | JP5 / L4T 35.x (Xavier) | `NvmmShmCopyHeader` (code = 1) | one POSIX shm segment | producer CPU memcpy → shm → consumer CPU memcpy |
-| `gst/ipc_jp6` | JP6 / L4T 36.x+ (Orin) | `NvmmShmPoolHeader`  (code = 2) | shm header + unix-domain socket (SCM_RIGHTS fd passing) | producer `NvBufSurfaceCopy` into NVMM pool, consumer `NvBufSurfaceImport`s fds and reads GPU memory directly |
+| Wire | Transport | Frame path |
+|------|-----------|------------|
+| `NvmmShmPoolHeader` (proto = 3) | shm header + unix-domain socket (SCM_RIGHTS fd passing) | producer `NvBufSurfaceCopy` into NVMM pool slot, consumer `NvBufSurfaceImport`s the fds and reads GPU memory directly — no further copies |
 
-Both backends implement the same `NvmmIpcProducer` / `NvmmIpcConsumer` C
-interface (see [`gst/common/ipc_backend.h`](gst/common/ipc_backend.h)); the
-`nvmmsink` and `nvmmappsrc` element sources have no `#ifdef` on backend
-choice.
+**Minimum L4T:** R35.3.1 (JetPack 5.1.1, March 2023) on the JP5 line, or
+any JP6. Earlier L4T 35.x (R35.2.1 / JP 5.0.x) does not have
+`NvBufSurfaceImport` and cannot do cross-process NVMM zero-copy at all
+without major workarounds — meson rejects those toolchains at configure
+time.
 
-JetPack detection: meson probes `NvBufSurfaceMapParams` via
-`has_header_symbol`. Present → JP6 backend; absent → JP5 backend. The
-selection prints at configure time:
+Both element sources delegate to one backend in `gst/ipc_pool/ipc_pool.cpp`
+behind a C ABI in [`gst/common/ipc_backend.h`](gst/common/ipc_backend.h).
+No `#ifdef` on JetPack version anywhere in the call path.
 
 ```
-Message: selected IPC backend: jp6 (pool + SCM_RIGHTS)  (JetPack: 6)
+Message: NVMM IPC backend: pool + SCM_RIGHTS  (target: jetson (real NvBufSurface))
 ```
 
 **nvmmsink properties**
@@ -71,7 +69,7 @@ Message: selected IPC backend: jp6 (pool + SCM_RIGHTS)  (JetPack: 6)
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `shm-name` | string | `/nvmm_sink_0` | POSIX shared-memory segment name |
-| `pool-size` | int (4–32) | 8 | NVMM buffer pool size (JP6 backend only; JP5 ignores) |
+| `pool-size` | int (4–32) | 8 | Number of NVMM buffers in the cross-process pool |
 
 **nvmmappsrc properties**
 
@@ -81,21 +79,18 @@ Message: selected IPC backend: jp6 (pool + SCM_RIGHTS)  (JetPack: 6)
 | `is-live` | bool | true | Advertise as live source |
 
 The consumer auto-detects video format, resolution, and plane layout from
-the producer's header on the first frame. JP5 emits plain `video/x-raw`;
-JP6 emits `video/x-raw(memory:NVMM)`.
+the producer's header on the first frame and emits `video/x-raw(memory:NVMM)`.
 
 **External NVMM sources (zedsrc, nvvidconv, nvv4l2decoder)** are accepted
-on both backends. Detection is via the `memory:NVMM` caps feature; the JP5
-backend uses `NvBufSurfaceMap` + per-plane CPU memcpy (with pitch
-stripping) so the consumer sees a standard GstVideoInfo-compatible stride,
-and the JP6 backend uses `NvBufSurfaceCopy` into its own pool.
+via the `memory:NVMM` caps feature; render does a GPU-to-GPU
+`NvBufSurfaceCopy` into the next free pool slot. (True producer-side zero-
+copy via `propose_allocation` is on the follow-up list.)
 
 **Debug categories**
 
 - `nvmmsink` — sink-side element lifecycle
 - `nvmmappsrc` — source-side element lifecycle
-- `nvmmipc.jp5` or `nvmmipc.jp6` — backend-internal producer/consumer logs
-  (LOG level emits one line per frame)
+- `nvmmipc.pool` — backend-internal producer/consumer logs (LOG level emits one line per frame)
 
 ### GstNvmmAllocator
 
@@ -550,13 +545,14 @@ The wire protocol (shared-memory header + unix-socket fd passing) is defined in 
 
 ## JetPack Compatibility
 
-| JetPack | L4T | Jetson | NvBufSurface | NvSciBuf | Status |
-|---------|-----|--------|-------------|----------|--------|
-| 5.1.x | R35.x | Xavier NX | Yes | No | Tested |
-| 6.x | R36.x | Orin NX | Yes | Yes | Tested |
-| N/A | N/A | x86_64 desktop | Mock API | No | Testing only |
+| JetPack | L4T | Jetson | Status |
+|---------|-----|--------|--------|
+| 5.1.1+ | R35.3.1+ | Xavier (NX, AGX) | Tested on R35.6.4 / JP 5.1.6 |
+| 6.x | R36.x | Orin | Builds; not yet hardware-validated by us |
+| 5.0.x | R35.2.1 | — | **Not supported.** No `NvBufSurfaceImport`. Upgrade to JP 5.1.1+. |
+| N/A | N/A | x86_64 desktop | Mock API for unit tests only (`-Dmock=true`) |
 
-The build system auto-detects JetPack version via `/etc/nv_tegra_release` and enables NvSciBuf support on JP6.
+The build probes `nvbufsurface.h` for `NvBufSurfaceImport` and hard-fails at meson configure if absent. A second probe at `producer_start` / `consumer_start` (via `dlsym`) catches deploy-time mismatch where the binary was built against newer headers but ends up running on an older host BSP.
 
 ## Tests
 
@@ -604,8 +600,8 @@ gst-nvmm-cpp/
 ├── tests/                   # 42 unit + integration tests
 ├── benchmarks/              # Throughput benchmarks (CSV output)
 ├── test_output/             # Sample images from Jetson pipeline tests
-├── docker/                  # Dockerfiles for dev, JP5, JP6
-├── meson.build              # Top-level build (auto-detects Jetson)
+├── docker/                  # Dockerfiles: dev (host mock), jetson (universal), jp5, jp6
+├── meson.build              # Top-level build (probes for NvBufSurfaceImport)
 └── README.md
 ```
 

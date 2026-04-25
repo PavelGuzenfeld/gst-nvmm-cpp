@@ -144,15 +144,11 @@ if(EXISTS "/etc/nv_tegra_release")
     endif()
 endif()
 
-# ---- NvSciBuf (JP6+ only) ----
+# NvSciBuf currently unused — the pool+SCM_RIGHTS backend uses
+# NvBufSurfaceImport, not NvSciBuf. Left here for the day NVIDIA exposes
+# the NvSciBuf headers publicly (currently libs ship without headers).
 set(HAVE_NVSCIBUF OFF)
-set(NVSCIBUF_WHERE "skipped (not JP6)")
-if(JETPACK_VERSION STREQUAL "6")
-    _nvmm_find_lib(NVSCIBUF nvscibuf)
-    if(NOT NVSCIBUF_FOUND_VIA STREQUAL "none")
-        set(HAVE_NVSCIBUF ON)
-    endif()
-endif()
+set(NVSCIBUF_WHERE "unused")
 
 # ---- Mock fallback when NVMM libs are missing ----
 if(HAVE_NVBUFSURFACE)

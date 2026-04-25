@@ -1,20 +1,17 @@
 /// IPC backend interface — abstract producer/consumer operations.
 ///
-/// Two implementations live alongside each other; meson picks one at compile
-/// time via has_header_symbol(nvbufsurface.h, NvBufSurfaceMapParams):
+/// Single implementation: gst/ipc_pool/ipc_pool.cpp. Pool + SCM_RIGHTS fd
+/// passing, consumer-side zero-copy via NvBufSurfaceImport. Wire format:
+/// NvmmShmPoolHeader.
 ///
-///   * gst/ipc_jp5/ipc_jp5.cpp
-///       Shared-memory + CPU copy. Wire format: NvmmShmCopyHeader.
-///       Targets JetPack 5 / L4T 35.x where NvBufSurfaceImport is missing.
-///
-///   * gst/ipc_jp6/ipc_jp6.cpp
-///       Pool + SCM_RIGHTS fd passing; consumer-side zero-copy via
-///       NvBufSurfaceImport. Wire format: NvmmShmPoolHeader. Optionally
-///       offers its NVMM pool to upstream via propose_allocation for true
-///       end-to-end zero-copy. Targets JetPack 6 / L4T 36.x+.
+/// Requires the NVMM cross-process import API (NvBufSurfaceImport,
+/// NvBufSurfaceGetMapParams, NvBufSurfaceMapParams). Available on:
+///   * L4T R35.3.1 (JetPack 5.1.1, March 2023) and later for the JP5 line
+///   * L4T R36.0   (JetPack 6.0)               and later for the JP6 line
+/// meson rejects older toolchains at configure time.
 ///
 /// The GStreamer element files (nvmmsink, nvmmappsrc) call only this
-/// interface — they never #ifdef on backend choice.
+/// interface — they have no JetPack-version conditionals.
 #pragma once
 
 #include <gst/gst.h>
@@ -39,8 +36,8 @@ void nvmm_ipc_backend_init_debug(void);
 /* ------------------------------------------------------------------ */
 
 /// Create a producer bound to a POSIX shared-memory segment name.
-/// `pool_size` is advisory — the JP5 (copy) backend ignores it; the JP6 (pool) backend uses it for the NVMM pool
-/// (clamped to backend limits).
+/// `pool_size` is the number of NVMM buffers in the cross-process pool,
+/// clamped to [4, NVMM_POOL_SIZE_MAX].
 NvmmIpcProducer *nvmm_ipc_producer_new(const gchar *shm_name, int pool_size);
 void             nvmm_ipc_producer_free(NvmmIpcProducer *self);
 
@@ -55,16 +52,16 @@ gboolean         nvmm_ipc_producer_set_caps(NvmmIpcProducer *self,
                                             const GstVideoInfo *info,
                                             gboolean            caps_have_nvmm_feature);
 
-/// Optional pool proposal for upstream — the JP6 (pool) backend implements true zero-copy here,
-/// the JP5 (copy) backend no-ops and returns FALSE.
+/// Pool proposal hook for upstream — when implemented, lets upstream
+/// allocate directly into our pool slots so render() can skip the GPU-to-GPU
+/// NvBufSurfaceCopy. Currently returns FALSE; render always copies.
 gboolean         nvmm_ipc_producer_propose_allocation(NvmmIpcProducer *self,
                                                       GstElement       *owner,
                                                       GstQuery         *query);
 
-/// Render a frame. The buffer is borrowed for the duration of the call in the JP5 backend;
-/// the JP6 backend may retain it asynchronously until remote consumers release their
-/// references. Either way the caller hands ownership of the ref to the backend
-/// via gst_buffer_ref — the backend unrefs when done.
+/// Render a frame. The backend may retain the buffer asynchronously until
+/// remote consumers release their references; the caller hands the ref
+/// over and the backend unrefs when done.
 GstFlowReturn    nvmm_ipc_producer_render(NvmmIpcProducer *self,
                                           GstElement       *owner,
                                           GstBuffer        *buffer);
@@ -81,10 +78,8 @@ gboolean         nvmm_ipc_consumer_stop (NvmmIpcConsumer *self, GstElement *owne
 
 /// Block (with 1ms polling) until a new frame is available or the pad becomes
 /// flushing, then return a GstBuffer representing the frame. Caller owns the
-/// returned ref and must gst_buffer_unref when done.
-///
-/// On the JP5 backend the buffer contains a CPU copy of the frame.
-/// On the JP6 backend the buffer wraps an imported NVMM surface (zero-copy).
+/// returned ref and must gst_buffer_unref when done. The buffer wraps an
+/// imported NVMM surface — consumer-side reads are zero-copy from GPU memory.
 GstFlowReturn    nvmm_ipc_consumer_fetch(NvmmIpcConsumer *self,
                                          GstElement       *owner,
                                          GstPad           *src_pad,

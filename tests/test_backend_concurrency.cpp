@@ -12,7 +12,7 @@
 ///   - producer render() and consumer fetch() running on separate
 ///     threads, sharing ready / write_idx / frame_number / slots[].ref_count
 ///     atomically
-///   - accept_thread (JP6 only) concurrent with the main render loop
+///   - accept_thread concurrent with the main render loop
 ///   - teardown ordering
 ///
 /// Under TSan, any data race in the backend code will fail this test.
@@ -53,7 +53,7 @@ static int tests_failed = 0;
 } while (0)
 
 /// Build a GstBuffer carrying an NVMM-allocator-owned GstMemory for a
-/// given video-info. The JP6 producer expects NVMM input.
+/// given video-info. The producer expects NVMM input.
 static GstBuffer *
 make_nvmm_buffer(GstAllocator *alloc, const GstVideoInfo *vi)
 {
@@ -140,7 +140,7 @@ static void test_concurrent_producer_consumer()
 }
 
 /// Start + stop a producer 50 times; exercises the accept_thread
-/// lifecycle (JP6) + shm cleanup (both backends).
+/// lifecycle and shm cleanup.
 static void test_producer_start_stop_churn()
 {
     GstElement *owner = GST_ELEMENT(g_object_new(GST_TYPE_BIN, "name", "owner", NULL));

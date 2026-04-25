@@ -1,10 +1,18 @@
-# Dockerfile for Jetson JetPack 6 (L4T 36.x) — Orin
-# Requires NVIDIA runtime: docker run --runtime nvidia ...
+# Dockerfile for the JetPack 6 line (L4T R36+, Orin).
+#
+# Same backend as the JP5 dockerfile — single pool+SCM_RIGHTS path. The two
+# dockerfiles only differ in the base image, so the multimedia-api headers
+# match the host BSP. Use l4t-jetpack rather than l4t-base because the
+# meson configure step probes for NvBufSurfaceImport in the headers, which
+# only ship in l4t-jetpack.
 #
 # Build on Jetson:
 #   docker build -f docker/Dockerfile.jetson-jp6 -t gst-nvmm-cpp:jp6 .
-
-FROM nvcr.io/nvidia/l4t-base:r36.4.0
+#
+# Run tests (host BSP must be JP6+ so the libnvbufsurface.so mounted by
+# --runtime nvidia exports NvBufSurfaceImport at runtime):
+#   docker run --runtime nvidia --rm gst-nvmm-cpp:jp6
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -29,7 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY . /src/
 
-# Configure — JP6 has NvSciBuf support
 RUN meson setup builddir \
     -Dcpp_std=c++14 \
     -Dbuildtype=debugoptimized

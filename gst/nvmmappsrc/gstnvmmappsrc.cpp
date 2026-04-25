@@ -1,7 +1,7 @@
 /// GstNvmmAppSrc — thin GStreamer element that delegates all IPC to the
-/// compile-time-selected backend (ipc_jp5 on JP5, ipc_jp6 on JP6+).
-/// The element handles property plumbing, caps propagation, and buffer
-/// forwarding; the backend owns the wire format and transport.
+/// pool + SCM_RIGHTS backend (gst/ipc_pool/ipc_pool.cpp). The element
+/// handles property plumbing, caps propagation, and buffer forwarding;
+/// the backend owns the wire format and transport.
 
 #include "gstnvmmappsrc.h"
 #include "ipc_backend.h"
@@ -137,9 +137,10 @@ gst_nvmm_app_src_class_init(GstNvmmAppSrcClass *klass)
     gst_element_class_set_static_metadata(element_class,
         "NVMM IPC Source",
         "Source/Video",
-        "Reads NVMM video frames shared by nvmmsink. Backend selected by "
-        "JetPack version at compile time (JP5 shm-copy / JP6 pool+SCM_RIGHTS).",
-        "Pavel Guzenfeld");
+        "Reads NVMM video frames shared by nvmmsink via an NVMM buffer pool "
+        "and SCM_RIGHTS fd passing. Consumer-side zero-copy "
+        "(NvBufSurfaceImport). Requires JetPack 5.1.1+ or 6.0+.",
+        "Pavel Guzenfeld, Stereolabs");
 
     GstCaps *caps = gst_caps_from_string(
         "video/x-raw(memory:NVMM), "

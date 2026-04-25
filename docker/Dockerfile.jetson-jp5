@@ -1,10 +1,19 @@
-# Dockerfile for Jetson JetPack 5 (L4T 35.x) — Xavier & Orin
-# Requires NVIDIA runtime: docker run --runtime nvidia ...
+# Dockerfile for the JetPack 5 line, L4T R35.3.1+ (JP 5.1.1+).
+#
+# Uses l4t-jetpack (not l4t-base) because we need the
+# nvidia-l4t-jetson-multimedia-api headers including NvBufSurfaceImport,
+# which shipped in R35.3.1. l4t-base only carries runtime libs (no
+# /usr/src/jetson_multimedia_api/include) so the meson configure step
+# would fail the NvBufSurfaceImport symbol check.
 #
 # Build on Jetson:
 #   docker build -f docker/Dockerfile.jetson-jp5 -t gst-nvmm-cpp:jp5 .
-
-FROM nvcr.io/nvidia/l4t-base:r35.4.1
+#
+# Run tests (requires --runtime nvidia AND a host BSP also >= R35.3.1 so
+# the libnvbufsurface.so mounted from the host actually exports
+# NvBufSurfaceImport at runtime):
+#   docker run --runtime nvidia --rm gst-nvmm-cpp:jp5
+FROM nvcr.io/nvidia/l4t-jetpack:r35.4.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 

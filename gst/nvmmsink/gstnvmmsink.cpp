@@ -1,12 +1,12 @@
 /// GstNvmmSink — thin GStreamer element that delegates all IPC to the
-/// compile-time-selected backend (JP5 copy backend on JP5, JP6 pool backend on JP6+).
+/// pool + SCM_RIGHTS backend (ipc_pool).
 ///
 /// Element responsibilities:
 ///   - GObject property plumbing (shm-name, pool-size)
 ///   - caps negotiation and set_caps parsing
 ///   - propose_allocation hand-off to the backend (backend may offer its pool)
 ///   - render() forwards to the backend
-/// Everything IPC-specific lives in gst/common/ipc_v{1,2}.cpp.
+/// IPC implementation lives in gst/ipc_pool/ipc_pool.cpp.
 
 #include "gstnvmmsink.h"
 #include "ipc_backend.h"
@@ -175,16 +175,17 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
 
     g_object_class_install_property(gobject_class, PROP_POOL_SIZE,
         g_param_spec_int("pool-size", "Pool Size",
-            "Number of NVMM buffers in the pool (JP6 backend only)",
+            "Number of NVMM buffers in the cross-process pool",
             MIN_POOL_SIZE, MAX_POOL_SIZE, DEFAULT_POOL_SIZE,
             G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
         "NVMM IPC Sink",
         "Sink/Video",
-        "Shares NVMM video frames with out-of-process consumers "
-        "(JP5: shared-memory copy; JP6: zero-copy pool+SCM_RIGHTS)",
-        "Pavel Guzenfeld");
+        "Shares NVMM video frames with out-of-process consumers via "
+        "an NVMM buffer pool and SCM_RIGHTS fd passing. Consumer-side "
+        "zero-copy (NvBufSurfaceImport). Requires JetPack 5.1.1+ or 6.0+.",
+        "Pavel Guzenfeld, Stereolabs");
 
     GstCaps *caps = gst_caps_from_string(
         "video/x-raw(memory:NVMM), "

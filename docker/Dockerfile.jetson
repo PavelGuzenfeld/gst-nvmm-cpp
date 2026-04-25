@@ -1,4 +1,5 @@
-# Universal Jetson Dockerfile — works on Xavier (JP5) and Orin (JP6).
+# Universal Jetson Dockerfile — works on Xavier (JetPack 5.1.1+ / L4T R35.3.1+)
+# and Orin (JetPack 6+). One backend, no version branching.
 # Uses ubuntu:22.04 base. NVIDIA libs are mounted from host at runtime.
 #
 # Build:
