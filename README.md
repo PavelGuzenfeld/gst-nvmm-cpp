@@ -716,6 +716,13 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra meson test -C builddir --verbos
 ctest --test-dir build-cmake --output-on-failure
 ```
 
+### Out of Scope
+
+| Item | Reason |
+|------|--------|
+| GitHub Actions CI wiring | Out of scope per maintainer |
+| Orin (JP6) end-to-end roundtrip + multi-consumer pipeline test | No hardware in CI |
+
 ## Repository Structure
 
 ```
