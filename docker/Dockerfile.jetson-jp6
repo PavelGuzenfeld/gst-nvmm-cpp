@@ -47,6 +47,12 @@ ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gn
 WORKDIR /src
 COPY . /src/
 
+# Probe: confirm nvbufsurface is linkable before meson runs
+RUN ls -la /usr/lib/aarch64-linux-gnu/nvidia/libnvbufsurface* && \
+    echo "int main(){}" > /tmp/probe.c && \
+    gcc -L/usr/lib/aarch64-linux-gnu/nvidia -lnvbufsurface /tmp/probe.c -o /tmp/probe && \
+    echo "NVMM link probe: OK" || echo "NVMM link probe: FAILED"
+
 RUN meson setup builddir \
     -Dcpp_std=c++14 \
     -Dbuildtype=debugoptimized
