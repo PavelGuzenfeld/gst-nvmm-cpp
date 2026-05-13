@@ -219,23 +219,29 @@ On hosts without Jetson libraries, both build systems automatically detect the a
 
 ## Jetson Hardware Validation
 
-Validated on two Jetson platforms (both in Docker and native):
-- **Jetson Xavier NX** — JetPack 5.1 (L4T R35.2.1), GStreamer 1.16.3
-- **Jetson Orin NX** — JetPack 6 (L4T R36.4.3), GStreamer 1.20.3
+Validated on Jetson hardware (Docker, `--runtime nvidia`):
+
+| Device | L4T | JetPack | GStreamer | Branch |
+|--------|-----|---------|-----------|--------|
+| Jetson Xavier NX | R35.4.1 | 5.1.2 | 1.16.3 | `feature/zero-copy-jp5-jp6` |
+| Jetson Xavier NX | R35.2.1 | 5.0.x | 1.16.3 | legacy (no IPC, no `NvBufSurfaceImport`) |
+| Jetson Orin NX | R36.4.3 | 6.x | 1.20.3 | build-validated |
 
 ### Test Results
 
-All 7 test suites pass on both Xavier NX and Orin NX:
+All 9 test suites pass on Xavier NX (L4T R35.4.1, `docker run --runtime nvidia`):
 
 ```
- 1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
- 2/7 nvmm_transform     OK    6 passed   (scale, crop, convert, flip, null safety)
- 3/7 gst_nvmm_allocator OK    6 passed   (create, alloc, surface map, per-plane, roundtrip)
- 4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
- 5/7 nvmm_appsrc        OK    2 passed   (create, properties)
- 6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
- 7/7 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 7   Fail: 0
+ 1/9 nvmm_buffer          OK   10 passed   (create, map, move, release, export_fd, planes)
+ 2/9 nvmm_transform       OK    6 passed   (scale, crop, convert, flip, null safety)
+ 3/9 gst_nvmm_allocator   OK    8 passed   (create, alloc, surface map, per-plane, roundtrip)
+ 4/9 nvmm_sink            OK    4 passed   (create, properties, state, shm lifecycle)
+ 5/9 nvmm_appsrc          OK    2 passed   (create, properties)
+ 6/9 gstcheck_elements    OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 7/9 integration          OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+ 8/9 backend_concurrency  OK    5 passed   (producer/consumer, churn, fanout, crc_roundtrip, zerocopy)
+ 9/9 fuzz_shm_header      OK    0 crashes  (10 000 random-byte iterations)
+Ok: 9   Fail: 0
 ```
 
 8 pipeline tests also pass via `scripts/jetson-test.sh`:
@@ -291,6 +297,46 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 Orin allocation is **5x faster** than Xavier NX. VIC transform **14-114x faster** depending on resolution.
 
 Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
+
+### Zero-Copy IPC Verification (L4T R35.4.1 / JP 5.1.2)
+
+Verified that `NvBufSurfaceImport`-based zero-copy IPC is the active path on
+this device — not a mock or CPU-copy fallback.
+
+**Build-time evidence** (`config.h` from the Docker image):
+
+```c
+#define HAVE_NVBUFSURFACE 1                          // real lib, not mock
+#define JETPACK_VERSION "jetson (real NvBufSurface)"  // -Dmock not set
+```
+
+**Runtime evidence** (`GST_DEBUG=nvmmipc.pool:6` during `demo_visual_roundtrip`):
+
+```
+nvmmipc.pool ipc_pool.cpp:102  NVMM IPC: NvBufSurfaceImport present in libnvbufsurface
+nvmmipc.pool ipc_pool.cpp:430  handed pool (8 fds) to client fd=16
+nvmmipc.pool ipc_pool.cpp:891  consumer started: pool=8, imported 8 surfaces
+nvmmipc.pool ipc_pool.cpp:754  published frame #1 into slot 1
+nvmmipc.pool ipc_pool.cpp:1045 fetched frame #1 from slot 1
+... (8 frames, one LOG line per frame from each thread)
+```
+
+Line 102 is a `dlsym` probe on the running `libnvbufsurface.so` from the host BSP — not a
+header-only check. Line 430 confirms DMA-buf fds passed via SCM_RIGHTS. Line 891 confirms
+`NvBufSurfaceImport` called 8× (once per pool slot). No `NvBufSurfaceFromFd` (the
+process-local JP 5.0.x fallback) appears anywhere in the trace.
+
+**Visual roundtrip** — 8/8 frames produced and consumed, all pixel-perfect identical
+(`cmp -s tx_frame_NN.ppm rx_frame_NN.ppm` passes for every pair):
+
+| Frame 0 | Frame 3 | Frame 7 |
+|---------|---------|---------|
+| ![frame0](test_output/tx_frame_00.png) | ![frame3](test_output/tx_frame_03.png) | ![frame7](test_output/tx_frame_07.png) |
+
+Each frame carries a vertical RGBA gradient with a top progress bar whose width encodes the
+frame index (narrow at frame 0, full-width at frame 7). The consumer reads each frame
+directly from the imported GPU surface — the byte-level identity with the TX dump confirms
+no intermediate copy corrupted or altered the data.
 
 ### VIC Hardware Accelerator Verification
 
@@ -547,8 +593,9 @@ The wire protocol (shared-memory header + unix-socket fd passing) is defined in 
 
 | JetPack | L4T | Jetson | Status |
 |---------|-----|--------|--------|
-| 5.1.1+ | R35.3.1+ | Xavier (NX, AGX) | Tested on R35.6.4 / JP 5.1.6 |
-| 6.x | R36.x | Orin | Builds; not yet hardware-validated by us |
+| 5.1.2 | R35.4.1 | Xavier NX | **Tested** — 9/9 suites, zero-copy IPC verified (`feature/zero-copy-jp5-jp6`) |
+| 5.1.1+ | R35.3.1+ | Xavier (NX, AGX) | Supported — minimum for `NvBufSurfaceImport` |
+| 6.x | R36.x | Orin | Build-validated (Docker); hardware run pending |
 | 5.0.x | R35.2.1 | — | **Not supported.** No `NvBufSurfaceImport`. Upgrade to JP 5.1.1+. |
 | N/A | N/A | x86_64 desktop | Mock API for unit tests only (`-Dmock=true`) |
 
@@ -556,17 +603,19 @@ The build probes `nvbufsurface.h` for `NvBufSurfaceImport` and hard-fails at mes
 
 ## Tests
 
-40 tests across 7 suites:
+49 tests across 9 suites (plus a 10 000-iteration fuzz run):
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
-| `nvmm_buffer` | 9 | NvmmBuffer RAII: create, map, unmap, move, export_fd, planes (NV12, RGBA, I420) |
+| `nvmm_buffer` | 10 | NvmmBuffer RAII: create, map, unmap, move, export_fd, planes (NV12, RGBA, I420) |
 | `nvmm_transform` | 6 | NvmmTransform: scale, crop_and_scale, format convert, flip, null safety |
-| `gst_nvmm_allocator` | 5 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
+| `gst_nvmm_allocator` | 8 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
 | `nvmm_sink` | 4 | GstNvmmSink: element creation, properties, state transitions, shm lifecycle |
 | `nvmm_appsrc` | 2 | GstNvmmAppSrc: element creation, properties |
 | `gstcheck_elements` | 8 | Element discovery (3), state transitions (2), property validation, pad template caps, pipeline wiring |
 | `integration` | 6 | Multiple shm segments, dynamic properties, pipeline bin, alloc stress, protocol validation, missing-shm error handling |
+| `backend_concurrency` | 5 | Concurrent producer/consumer (200 frames), start/stop churn, multi-consumer fanout, CRC roundtrip, zerocopy path |
+| `fuzz_shm_header` | — | 10 000 random-byte iterations against the shm header parser; 0 crashes |
 
 ```bash
 # Run all tests (Docker, x86_64)
