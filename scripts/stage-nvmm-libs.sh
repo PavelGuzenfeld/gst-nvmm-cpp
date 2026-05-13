@@ -21,11 +21,14 @@ INC_DIR="/usr/src/jetson_multimedia_api/include"
 mkdir -p "$STAGE/lib" "$STAGE/include"
 
 # libnvbufsurface + libnvbufsurftransform and their transitive deps.
-# Identified via: ldd /usr/lib/aarch64-linux-gnu/nvidia/libnvbufsurface.so
+# Identified via:
+#   ldd /usr/lib/aarch64-linux-gnu/nvidia/libnvbufsurface.so
+#   ldd /usr/lib/aarch64-linux-gnu/nvidia/libnvbufsurftransform.so
 for stem in libnvbufsurface libnvbufsurftransform \
             libnvrm_mem libnvrm_surface libnvrm_chip \
-            libnvrm_gpu libnvrm_sync libnvrm_host1x \
-            libnvos libnvbuf_fdmap libnvsciipc libnvsocsys libnvtegrahv; do
+            libnvrm_gpu libnvrm_sync libnvrm_host1x libnvrm_stream \
+            libnvos libnvbuf_fdmap libnvsciipc libnvsocsys libnvtegrahv \
+            libnvvic libnvcolorutil libcuda; do
     cp "$NV_DIR"/${stem}* "$STAGE/lib/" 2>/dev/null || true
 done
 
