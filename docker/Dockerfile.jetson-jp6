@@ -16,6 +16,15 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Add NVIDIA Jetson OTA repo so nvidia-l4t-* packages are resolvable at
+# build time (the base l4t-jetpack image only carries Ubuntu repos).
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
+       -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
+    && echo "deb https://repo.download.nvidia.com/jetson/common r36.4 main" \
+       > /etc/apt/sources.list.d/nvidia-l4t.list \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     g++ \
