@@ -34,10 +34,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pip3 install meson \
     && rm -rf /var/lib/apt/lists/*
 
-# Refresh ldconfig so the linker knows about /usr/lib/aarch64-linux-gnu/nvidia/
-# (l4t-jetpack ships the NVMM libraries there; meson's find_library link-test
-# needs the path in the dynamic linker cache to pass during docker build).
+# Refresh ldconfig so /usr/lib/aarch64-linux-gnu/nvidia is known to the linker.
 RUN ldconfig
+
+# Expose the NVMM library path so meson's find_library link-test can resolve
+# libnvbufsurface's transitive deps (libnvrm_mem, libnvrm_surface, etc.) during
+# docker build. docker build does not use --runtime nvidia, so the linker
+# can't discover them through ld.so.conf alone without an explicit LIBRARY_PATH.
+ENV LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:${LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:${LD_LIBRARY_PATH}"
 
 WORKDIR /src
 COPY . /src/
