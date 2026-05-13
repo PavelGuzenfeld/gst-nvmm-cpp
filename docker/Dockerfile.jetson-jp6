@@ -34,28 +34,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pip3 install meson \
     && rm -rf /var/lib/apt/lists/*
 
-# Refresh ldconfig so /usr/lib/aarch64-linux-gnu/nvidia is known to the linker.
-RUN ldconfig
-
-# Expose the NVMM library path so meson's find_library link-test can resolve
-# libnvbufsurface's transitive deps (libnvrm_mem, libnvrm_surface, etc.) during
-# docker build. docker build does not use --runtime nvidia, so the linker
-# can't discover them through ld.so.conf alone without an explicit LIBRARY_PATH.
-ENV LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:${LIBRARY_PATH}"
-ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:${LD_LIBRARY_PATH}"
-
 WORKDIR /src
 COPY . /src/
 
-# Probe: confirm nvbufsurface is linkable before meson runs
-RUN ls -la /usr/lib/aarch64-linux-gnu/nvidia/libnvbufsurface* && \
-    echo "int main(){}" > /tmp/probe.c && \
-    gcc -L/usr/lib/aarch64-linux-gnu/nvidia -lnvbufsurface /tmp/probe.c -o /tmp/probe && \
-    echo "NVMM link probe: OK" || echo "NVMM link probe: FAILED"
-
-RUN meson setup builddir \
-    -Dcpp_std=c++14 \
-    -Dbuildtype=debugoptimized
+# The NVIDIA Container Runtime injects the host's Tegra libraries (libnvbufsurface,
+# libnvrm_*, etc.) at runtime via bind mounts. During `docker build` those mounts
+# are not active, so the libraries are absent from the container filesystem.
+#
+# Use BuildKit bind mounts to make them available only for the meson configure
+# step (they do NOT get baked into the image layer — the final image still relies
+# on `--runtime nvidia` at run time, as intended).
+#
+# Requires: BuildKit enabled (default in Docker >= 23, or DOCKER_BUILDKIT=1).
+# The host must be a Jetson with JP6 (R36.x) and the standard NVMM paths present.
+RUN --mount=type=bind,source=/usr/lib/aarch64-linux-gnu/nvidia,target=/usr/lib/aarch64-linux-gnu/nvidia,rw=false \
+    --mount=type=bind,source=/usr/lib/aarch64-linux-gnu/tegra,target=/usr/lib/aarch64-linux-gnu/tegra,rw=false \
+    --mount=type=bind,source=/usr/src/jetson_multimedia_api,target=/usr/src/jetson_multimedia_api,rw=false \
+    ldconfig && \
+    meson setup builddir \
+        -Dcpp_std=c++14 \
+        -Dbuildtype=debugoptimized
 
 RUN ninja -C builddir
 
