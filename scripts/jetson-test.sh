@@ -1,6 +1,6 @@
 #!/bin/bash
 # Jetson hardware validation script.
-# Run on a Jetson device with JetPack 5+ and GStreamer installed.
+# Run on a Jetson device with JetPack 5.1.1+ (L4T R35.3.1+) or JetPack 6 and GStreamer installed.
 #
 # Usage:
 #   ./scripts/jetson-test.sh           # full test suite

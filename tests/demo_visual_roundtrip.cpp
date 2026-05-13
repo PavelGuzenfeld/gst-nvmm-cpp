@@ -6,10 +6,9 @@
 /// each frame as a PPM (P6 binary) to /tmp/nvmm-visual/. Convert the
 /// PPMs to PNGs on the host with PIL or ImageMagick to view.
 ///
-/// Bypasses GStreamer's nvvidconv on consumer side because that path
-/// requires a kernel-userspace match (R35.2.1 host kernel + R35.6.4
-/// userspace doesn't satisfy it). The IPC layer itself is independent
-/// of nvvidconv.
+/// Bypasses GStreamer's nvvidconv on consumer side to keep the demo
+/// self-contained — it tests the IPC layer directly, not the full
+/// GStreamer pipeline.
 
 #include "ipc_backend.h"
 #include "gstnvmmallocator.h"

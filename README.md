@@ -278,7 +278,7 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | VIC transform | 1080p -> 720p | **1655** | 1594 | 1826 |
 | VIC transform | 4K -> 1080p | **4002** | 3938 | 4913 |
 
-**Orin NX (JetPack 6)**
+**Orin NX (JetPack 6 / L4T R36.x)**
 
 | Operation | Resolution | Avg (us) | Min (us) | Max (us) |
 |-----------|-----------|----------|----------|----------|
