@@ -44,12 +44,14 @@ constexpr int kFrames = 8;
  * across for frame N). RGBA8 layout. */
 static void render_pattern(uint8_t *rgba, int frame_idx, int total_frames)
 {
+    /* Maximum possible value of the blue numerator — scale to this so the
+     * channel never exceeds 255 and the uint8_t cast never wraps. */
+    const int b_max = (W - 1) + (H - 1) + (total_frames - 1) * 30;
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             uint8_t r = (uint8_t)((x * 255) / (W - 1));
             uint8_t g = (uint8_t)((y * 255) / (H - 1));
-            uint8_t b = (uint8_t)(((x + y + frame_idx * 30) * 255) /
-                                  (W + H));
+            uint8_t b = (uint8_t)(((x + y + frame_idx * 30) * 255) / b_max);
             uint8_t *px = rgba + (y * W + x) * 4;
             px[0] = r; px[1] = g; px[2] = b; px[3] = 0xff;
         }
