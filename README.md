@@ -51,10 +51,8 @@ with consumer-side zero-copy. One backend, supports both JetPacks:
 | `NvmmShmPoolHeader` (proto = 3) | shm header + unix-domain socket (SCM_RIGHTS fd passing) | producer `NvBufSurfaceCopy` into NVMM pool slot, consumer `NvBufSurfaceImport`s the fds and reads GPU memory directly — no further copies |
 
 **Minimum L4T:** R35.3.1 (JetPack 5.1.1, March 2023) on the JP5 line, or
-any JP6. Earlier L4T 35.x (R35.2.1 / JP 5.0.x) does not have
-`NvBufSurfaceImport` and cannot do cross-process NVMM zero-copy at all
-without major workarounds — meson rejects those toolchains at configure
-time.
+any JP6. The build hard-fails at meson configure if `NvBufSurfaceImport` is
+absent from `nvbufsurface.h`.
 
 Both element sources delegate to one backend in `gst/ipc_pool/ipc_pool.cpp`
 behind a C ABI in [`gst/common/ipc_backend.h`](gst/common/ipc_backend.h).
@@ -83,8 +81,8 @@ the producer's header on the first frame and emits `video/x-raw(memory:NVMM)`.
 
 **External NVMM sources (zedsrc, nvvidconv, nvv4l2decoder)** are accepted
 via the `memory:NVMM` caps feature; render does a GPU-to-GPU
-`NvBufSurfaceCopy` into the next free pool slot. (True producer-side zero-
-copy via `propose_allocation` is on the follow-up list.)
+`NvBufSurfaceCopy` into the next free pool slot, or — when upstream accepts
+`propose_allocation` — renders straight into a pool slot with no copy at all.
 
 **Debug categories**
 
@@ -166,7 +164,7 @@ The ABI boundary to GStreamer is C (`plugin_init`, GObject type system). Inside 
 - GStreamer >= 1.16 development libraries
 - Either Meson >= 0.62 + Ninja, **or** CMake >= 3.16
 - C++14 compiler (GCC 7+ or Clang 5+)
-- On Jetson: JetPack 5 (L4T 35.x) or JetPack 6 (L4T 36.x)
+- On Jetson: JetPack 5.1.1+ (L4T R35.3.1+) or JetPack 6 (L4T R36.x) — earlier JP5 (R35.2.1 / 5.0.x) is not supported
 
 ### Docker (recommended for x86_64 host)
 
@@ -221,11 +219,10 @@ On hosts without Jetson libraries, both build systems automatically detect the a
 
 Validated on Jetson hardware (Docker, `--runtime nvidia`):
 
-| Device | L4T | JetPack | GStreamer | Branch |
+| Device | L4T | JetPack | GStreamer | Status |
 |--------|-----|---------|-----------|--------|
-| Jetson Xavier NX | R35.4.1 | 5.1.2 | 1.16.3 | `feature/zero-copy-jp5-jp6` |
-| Jetson Xavier NX | R35.2.1 | 5.0.x | 1.16.3 | legacy (no IPC, no `NvBufSurfaceImport`) |
-| Jetson Orin NX | R36.4.3 | 6.x | 1.20.3 | build-validated |
+| Jetson Xavier NX | R35.4.1 | 5.1.2 | 1.16.3 | **Full test run** — 9/9 suites, zero-copy IPC verified |
+| Jetson Orin NX | R36.4.3 | 6.x | 1.20.3 | Build-validated (Docker) |
 
 ### Test Results
 
@@ -268,7 +265,7 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 
 1000 iterations each. VIC transform includes hardware sync.
 
-**Xavier NX (JetPack 5.1)**
+**Xavier NX (JetPack 5.1.2 / L4T R35.4.1)**
 
 | Operation | Resolution | Avg (us) | Min (us) | Max (us) |
 |-----------|-----------|----------|----------|----------|
@@ -461,14 +458,15 @@ gst-launch-1.0 videotestsrc num-buffers=1 pattern=ball ! \
 Verified inter-process video sharing via POSIX shared memory:
 
 ```bash
-# Producer (background): write SMPTE frames to shm
+# Producer (background): convert test pattern to NVMM, write to shm
 gst-launch-1.0 videotestsrc num-buffers=50 pattern=smpte ! \
   'video/x-raw,width=640,height=480,format=I420,framerate=10/1' ! \
+  nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
   nvmmsink shm-name=/ipc_test sync=true &
 
-# Consumer: read from shm, save JPEG
+# Consumer: read NVMM frames from shm, convert to CPU, save JPEG
 gst-launch-1.0 -e nvmmappsrc shm-name=/ipc_test is-live=true ! \
-  videoconvert ! jpegenc ! filesink location=ipc_480p.jpg
+  nvvidconv ! 'video/x-raw,format=I420' ! jpegenc ! filesink location=ipc_480p.jpg
 ```
 
 IPC consumer output at 480p and 1080p. The full frame path is GPU-resident
@@ -515,7 +513,7 @@ All images generated on Jetson Xavier NX with real NVMM hardware:
 | ![4k_fhd](test_output/4k_to_fhd.jpg) | **4k_to_fhd.jpg** -- 4K scaled to 1080p via NVMM |
 | ![decoded](test_output/decoded_frame.jpg) | **decoded_frame.jpg** -- 640x480 H264 decoded via NVMM |
 | ![ipc480](test_output/ipc_480p.jpg) | **ipc_480p.jpg** -- IPC consumer via nvmmsink->shm->nvmmappsrc |
-| ![ipc1080](test_output/ipc_1080p.jpg) | **ipc_1080p.jpg** -- IPC consumer 1080p (decode->NVMM->CPU->shm) |
+| ![ipc1080](test_output/ipc_1080p.jpg) | **ipc_1080p.jpg** -- IPC consumer 1080p (H264 decode → NVMM → shm → consumer, GPU-resident) |
 | ![shm](test_output/shm_consumer_frame.jpg) | **shm_consumer_frame.jpg** -- Standalone C shm reader (ROS2-style) |
 
 ### Setup for Reproducing on Jetson
@@ -642,13 +640,12 @@ The wire protocol (shared-memory header + unix-socket fd passing) is defined in 
 
 | JetPack | L4T | Jetson | Status |
 |---------|-----|--------|--------|
-| 5.1.2 | R35.4.1 | Xavier NX | **Tested** — 9/9 suites, zero-copy IPC verified (`feature/zero-copy-jp5-jp6`) |
-| 5.1.1+ | R35.3.1+ | Xavier (NX, AGX) | Supported — minimum for `NvBufSurfaceImport` |
+| 5.1.2 | R35.4.1 | Xavier NX | **Tested** — 9/9 suites, zero-copy IPC verified |
+| 5.1.1 | R35.3.1 | Xavier (NX, AGX) | Minimum supported — first release with `NvBufSurfaceImport` |
 | 6.x | R36.x | Orin | Build-validated (Docker); hardware run pending |
-| 5.0.x | R35.2.1 | — | **Not supported.** No `NvBufSurfaceImport`. Upgrade to JP 5.1.1+. |
 | N/A | N/A | x86_64 desktop | Mock API for unit tests only (`-Dmock=true`) |
 
-The build probes `nvbufsurface.h` for `NvBufSurfaceImport` and hard-fails at meson configure if absent. A second probe at `producer_start` / `consumer_start` (via `dlsym`) catches deploy-time mismatch where the binary was built against newer headers but ends up running on an older host BSP.
+The build probes `nvbufsurface.h` for `NvBufSurfaceImport` and hard-fails at meson configure if absent. A second probe at `producer_start` / `consumer_start` (via `dlsym`) catches deploy-time mismatch where the binary was built against newer headers but ends up on an older host BSP.
 
 ## Tests
 
@@ -695,7 +692,7 @@ gst-nvmm-cpp/
 │   ├── nvmmconvert/         # nvmmconvert element plugin
 │   ├── nvmmsink/            # nvmmsink element plugin
 │   └── nvmmappsrc/          # nvmmappsrc element plugin
-├── tests/                   # 42 unit + integration tests
+├── tests/                   # 49 unit + integration tests + fuzz
 ├── benchmarks/              # Throughput benchmarks (CSV output)
 ├── test_output/             # Sample images from Jetson pipeline tests
 ├── docker/                  # Dockerfiles: dev (host mock), jetson (universal), jp5, jp6
