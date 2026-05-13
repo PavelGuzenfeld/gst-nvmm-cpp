@@ -183,7 +183,12 @@ docker run --runtime nvidia --rm gst-nvmm-cpp:jp5
 ```
 
 **Orin (JetPack 6, L4T R36.x)**
+
+Stage the minimal NVMM libraries into the build context first (they are not
+present during `docker build` — the NVIDIA Container Runtime only injects
+them at run time):
 ```bash
+bash scripts/stage-nvmm-libs.sh    # copies stubs to docker/nvmm-stage/ (gitignored)
 docker build --network host -f docker/Dockerfile.jetson-jp6 -t gst-nvmm-cpp:jp6 .
 docker run --runtime nvidia --rm gst-nvmm-cpp:jp6
 ```
