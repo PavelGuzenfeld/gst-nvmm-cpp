@@ -60,7 +60,8 @@ struct ConsumerStats {
 };
 
 static void run_case(BenchMode mode, int n_consumers, int total_frames,
-                     int width, int height)
+                     int width, int height,
+                     GstVideoFormat fmt = GST_VIDEO_FORMAT_RGBA)
 {
     char shm_name[64];
     std::snprintf(shm_name, sizeof(shm_name), "/bench_ipc_%s_n%d",
@@ -77,7 +78,7 @@ static void run_case(BenchMode mode, int n_consumers, int total_frames,
         return;
     }
     GstVideoInfo vi;
-    gst_video_info_set_format(&vi, GST_VIDEO_FORMAT_RGBA, width, height);
+    gst_video_info_set_format(&vi, fmt, width, height);
     if (!nvmm_ipc_producer_set_caps(prod, prod_owner, &vi, TRUE)) {
         std::fprintf(stderr, "set_caps failed\n");
         return;
@@ -230,7 +231,6 @@ int main(int argc, char *argv[])
     nvmm_ipc_backend_init_debug();
 
     int total_frames = 5000;
-    int width = 64, height = 64;
     if (argc >= 2) total_frames = std::atoi(argv[1]);
 
 #ifdef NVMM_MOCK_API
@@ -245,17 +245,23 @@ int main(int argc, char *argv[])
         "      side: 'copy' = upstream allocates separately, render() does\n"
         "      one NvBufSurfaceCopy GPU->GPU into the slot.\n"
         "      'zero-copy' = upstream acquires from our propose_allocation\n"
-        "      pool, render() publishes the slot index without any copy.\n"
-        "      Frame size kept small to expose the IPC sync path rather than\n"
-        "      VIC bandwidth.";
+        "      pool, render() publishes the slot index without any copy.";
 #endif
-    std::printf("=== IPC backend bench (%s, %dx%d RGBA, %d frames) ===\n",
-                backend_kind, width, height, total_frames);
-    std::printf("%s\n\n", note);
 
-    for (int n : {1, 2, 4}) {
-        run_case(MODE_COPY,     n, total_frames, width, height);
-        run_case(MODE_ZEROCOPY, n, total_frames, width, height);
+    struct { int w; int h; GstVideoFormat fmt; const char *label; } sizes[] = {
+        {   64,   64, GST_VIDEO_FORMAT_RGBA, "64x64 RGBA   (IPC sync overhead)" },
+        { 1920, 1080, GST_VIDEO_FORMAT_NV12, "1920x1080 NV12 (real video frame)" },
+    };
+
+    for (auto &sz : sizes) {
+        std::printf("=== IPC backend bench (%s, %s, %d frames) ===\n",
+                    backend_kind, sz.label, total_frames);
+        std::printf("%s\n\n", note);
+        for (int n : {1, 2, 4}) {
+            run_case(MODE_COPY,     n, total_frames, sz.w, sz.h, sz.fmt);
+            run_case(MODE_ZEROCOPY, n, total_frames, sz.w, sz.h, sz.fmt);
+        }
+        std::printf("\n");
     }
     return 0;
 }

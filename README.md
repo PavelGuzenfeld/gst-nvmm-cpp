@@ -296,18 +296,31 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | VIC transform | 1080p -> 480p | **54** | 2 | 50711 |
 | VIC transform | 1080p -> 720p | **3** | 3 | 12 |
 
-**IPC backend: zero-copy vs copy path (64×64 RGBA, 5000 frames)**
+**IPC backend: zero-copy vs copy path (5000 frames, Orin NX L4T R36.4.3)**
+
+*64×64 RGBA — measures IPC synchronization overhead in isolation (no copy):*
 
 | Path | n_consumers | Throughput (fps) | Latency avg | p99 |
 |------|-------------|-----------------|-------------|-----|
-| copy (GPU→GPU NvBufSurfaceCopy) | 1 | 8,706 | 81 µs | 91 µs |
-| **zero-copy** (propose_allocation) | 1 | **705,137** | **1 µs** | **1 µs** |
-| copy | 2 | 8,807 | 81 µs | 92 µs |
-| **zero-copy** | 2 | **629,784** | **1 µs** | **2 µs** |
-| copy | 4 | 8,788 | 82 µs | 98 µs |
-| **zero-copy** | 4 | **313,354** | **1 µs** | **2 µs** |
+| copy (GPU→GPU NvBufSurfaceCopy) | 1 | 8,054 | 87 µs | 129 µs |
+| **zero-copy** (propose_allocation) | 1 | **742,101** | **1 µs** | **1 µs** |
+| copy | 2 | 7,871 | 86 µs | 96 µs |
+| **zero-copy** | 2 | **713,617** | **1 µs** | **1 µs** |
+| copy | 4 | 8,208 | 86 µs | 96 µs |
+| **zero-copy** | 4 | **654,748** | **1 µs** | **2 µs** |
 
-True zero-copy is **81× lower latency** and **81× higher throughput** than the GPU→GPU copy path on Orin.
+*1920×1080 NV12 — real video frame size:*
+
+| Path | n_consumers | Throughput (fps) | Latency avg | p99 |
+|------|-------------|-----------------|-------------|-----|
+| copy (GPU→GPU NvBufSurfaceCopy) | 1 | 448 | 2,124 µs | 2,174 µs |
+| **zero-copy** (propose_allocation) | 1 | **760,361** | **1 µs** | **1 µs** |
+| copy | 2 | 448 | 2,120 µs | 2,177 µs |
+| **zero-copy** | 2 | **703,718** | **1 µs** | **1 µs** |
+| copy | 4 | 465 | 2,067 µs | 2,154 µs |
+| **zero-copy** | 4 | **676,535** | **1 µs** | **2 µs** |
+
+At real video resolution (1080p NV12), zero-copy is **2100× lower latency** and **1600× higher throughput** than the GPU→GPU copy path. The copy path pays ~2 ms per frame to move 3 MB across the GPU; zero-copy pays nothing — only a slot-index notification crosses the IPC boundary.
 
 Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
 

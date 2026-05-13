@@ -127,6 +127,47 @@ run_pipeline "30f-throughput" \
     'video/x-raw(memory:NVMM),width=640,height=480' ! \
     nvvidconv ! 'video/x-raw,format=I420' ! fakesink sync=false
 
+# --- IPC pipeline test (nvmmsink → nvmmappsrc, two processes) ---
+echo ""
+echo "--- IPC Pipeline Test (two-process nvmmsink → nvmmappsrc) ---"
+SHM_NAME="/nvmm_test_e2e_$$"
+
+gst-launch-1.0 -e \
+    videotestsrc num-buffers=30 pattern=ball ! \
+    'video/x-raw,width=640,height=480,format=I420,framerate=30/1' ! \
+    nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+    nvmmsink shm-name="$SHM_NAME" pool-size=8 \
+    2>/dev/null &
+IPC_PROD_PID=$!
+
+# Wait for SHM to appear (nvmmsink creates it on READY→PAUSED)
+for i in $(seq 1 50); do
+    ls /dev/shm 2>/dev/null | grep -qF "${SHM_NAME#/}" && break
+    sleep 0.1
+done
+
+IPC_LOG=$(mktemp)
+export GST_DEBUG="nvmmipc.pool:6"
+export GST_DEBUG_NO_COLOR=1
+timeout 15 gst-launch-1.0 -e \
+    nvmmappsrc shm-name="$SHM_NAME" is-live=true ! \
+    fakesink sync=false \
+    >"$IPC_LOG" 2>&1 || true
+unset GST_DEBUG
+
+kill "$IPC_PROD_PID" 2>/dev/null || true
+wait "$IPC_PROD_PID" 2>/dev/null || true
+
+FRAMES_RX=$(grep -c "fetched frame" "$IPC_LOG" 2>/dev/null | grep -oE "[0-9]+$" || echo 0)
+EOS=$(grep -c "EOS received" "$IPC_LOG" 2>/dev/null | grep -oE "[0-9]+$" || echo 0)
+rm -f "$IPC_LOG"
+
+if [ "$FRAMES_RX" -gt 0 ] && [ "$EOS" -gt 0 ]; then
+    pass "ipc-pipeline (${FRAMES_RX} frames RX cross-process)"
+else
+    fail "ipc-pipeline (frames_rx=${FRAMES_RX} eos=${EOS})"
+fi
+
 echo ""
 
 # --- Benchmarks ---
