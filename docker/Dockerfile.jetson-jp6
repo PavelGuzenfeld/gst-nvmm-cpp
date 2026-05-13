@@ -16,15 +16,6 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Add NVIDIA Jetson OTA repo so nvidia-l4t-* packages are resolvable at
-# build time (the base l4t-jetpack image only carries Ubuntu repos).
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
-       -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
-    && echo "deb https://repo.download.nvidia.com/jetson/common r36.4 main" \
-       > /etc/apt/sources.list.d/nvidia-l4t.list \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     g++ \
@@ -40,10 +31,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-dev \
     cmake \
     git \
-    nvidia-l4t-multimedia-utils \
-    nvidia-l4t-jetson-multimedia-api \
     && pip3 install meson \
     && rm -rf /var/lib/apt/lists/*
+
+# Refresh ldconfig so the linker knows about /usr/lib/aarch64-linux-gnu/nvidia/
+# (l4t-jetpack ships the NVMM libraries there; meson's find_library link-test
+# needs the path in the dynamic linker cache to pass during docker build).
+RUN ldconfig
 
 WORKDIR /src
 COPY . /src/

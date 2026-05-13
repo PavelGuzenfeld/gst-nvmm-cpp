@@ -174,22 +174,24 @@ docker build -f docker/Dockerfile.dev -t gst-nvmm-cpp:dev .
 docker run --rm gst-nvmm-cpp:dev
 ```
 
-### Docker on Jetson (Xavier NX / Orin)
+### Docker on Jetson
 
+**Xavier NX (JetPack 5.1.1+, L4T R35.3.1+)**
 ```bash
-# Build (uses ubuntu:22.04, mounts host NVIDIA libs at runtime)
-docker build --network host -f docker/Dockerfile.jetson -t gst-nvmm-cpp:jetson .
+docker build --network host -f docker/Dockerfile.jetson-jp5 -t gst-nvmm-cpp:jp5 .
+docker run --runtime nvidia --rm gst-nvmm-cpp:jp5
+```
 
-# Run tests + pipelines (mount NVIDIA runtime libs and GStreamer plugins)
-docker run --runtime nvidia --rm --network host --privileged \
-  -v /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro \
-  -v /usr/lib/aarch64-linux-gnu/tegra-egl:/usr/lib/aarch64-linux-gnu/tegra-egl:ro \
-  -v /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro \
-  -v /usr/src/jetson_multimedia_api:/usr/src/jetson_multimedia_api:ro \
-  -v /usr/share/glvnd:/usr/share/glvnd:ro \
-  -v /etc/alternatives:/etc/alternatives:ro \
-  -v /etc/ld.so.conf.d:/etc/ld.so.conf.d:ro \
-  gst-nvmm-cpp:jetson
+**Orin (JetPack 6, L4T R36.x)**
+```bash
+docker build --network host -f docker/Dockerfile.jetson-jp6 -t gst-nvmm-cpp:jp6 .
+docker run --runtime nvidia --rm gst-nvmm-cpp:jp6
+```
+
+**Universal (auto-detect BSP)**
+```bash
+docker build --network host -f docker/Dockerfile.jetson -t gst-nvmm-cpp:jetson .
+docker run --runtime nvidia --rm gst-nvmm-cpp:jetson
 ```
 
 ### Native build (Jetson)
@@ -222,11 +224,11 @@ Validated on Jetson hardware (Docker, `--runtime nvidia`):
 | Device | L4T | JetPack | GStreamer | Status |
 |--------|-----|---------|-----------|--------|
 | Jetson Xavier NX | R35.4.1 | 5.1.2 | 1.16.3 | **Full test run** — 9/9 suites, zero-copy IPC verified |
-| Jetson Orin NX | R36.4.3 | 6.x | 1.20.3 | Build-validated (Docker) |
+| Jetson Orin NX | R36.4.3 | 6.x | 1.20.3 | **Full test run** — 9/9 suites, zero-copy IPC verified |
 
 ### Test Results
 
-All 9 test suites pass on Xavier NX (L4T R35.4.1, `docker run --runtime nvidia`):
+All 9 test suites pass on **both devices** (Xavier NX L4T R35.4.1 and Orin NX L4T R36.4.3):
 
 ```
  1/9 nvmm_buffer          OK   10 passed   (create, map, move, release, export_fd, planes)
@@ -278,22 +280,33 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | VIC transform | 1080p -> 720p | **1655** | 1594 | 1826 |
 | VIC transform | 4K -> 1080p | **4002** | 3938 | 4913 |
 
-**Orin NX (JetPack 6 / L4T R36.x)**
+**Orin NX (JetPack 6 / L4T R36.4.3)**
 
 | Operation | Resolution | Avg (us) | Min (us) | Max (us) |
 |-----------|-----------|----------|----------|----------|
-| alloc/free | NV12 1080p | 117 | 14 | 1551 |
-| alloc/free | RGBA 1080p | 366 | 33 | 1072 |
-| map/unmap | NV12 1080p | 298 | 275 | 374 |
-| map/unmap | NV12 480p | 49 | 39 | 61 |
-| VIC transform | 1080p -> 480p | **35** | 27 | 49 |
-| VIC transform | 1080p -> 720p | **95** | 85 | 114 |
-| VIC transform | 4K -> 1080p | **285** | 217 | 459 |
-| VIC transform | 4K -> 480p | **31** | 26 | 67 |
+| alloc/free | NV12 1080p | 388 | 27 | 5198 |
+| alloc/free | RGBA 1080p | 962 | 61 | 2401 |
+| map/unmap | NV12 1080p | 107 | 104 | 277 |
+| map/unmap | NV12 480p | 23 | 22 | 57 |
+| VIC transform | 1080p -> 480p | **54** | 2 | 50711 |
+| VIC transform | 1080p -> 720p | **3** | 3 | 12 |
 
-Orin allocation is **5x faster** than Xavier NX. VIC transform **14-114x faster** depending on resolution.
+**IPC backend: zero-copy vs copy path (64×64 RGBA, 5000 frames)**
+
+| Path | n_consumers | Throughput (fps) | Latency avg | p99 |
+|------|-------------|-----------------|-------------|-----|
+| copy (GPU→GPU NvBufSurfaceCopy) | 1 | 8,706 | 81 µs | 91 µs |
+| **zero-copy** (propose_allocation) | 1 | **705,137** | **1 µs** | **1 µs** |
+| copy | 2 | 8,807 | 81 µs | 92 µs |
+| **zero-copy** | 2 | **629,784** | **1 µs** | **2 µs** |
+| copy | 4 | 8,788 | 82 µs | 98 µs |
+| **zero-copy** | 4 | **313,354** | **1 µs** | **2 µs** |
+
+True zero-copy is **81× lower latency** and **81× higher throughput** than the GPU→GPU copy path on Orin.
 
 Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
+
+See [Zero-Copy IPC Verification](#zero-copy-ipc-verification-l4t-r3541--jp-512) below for Orin-specific results.
 
 ### Zero-Copy IPC Verification (L4T R35.4.1 / JP 5.1.2)
 
@@ -334,6 +347,30 @@ Each frame carries a vertical RGBA gradient with a top progress bar whose width 
 frame index (narrow at frame 0, full-width at frame 7). The consumer reads each frame
 directly from the imported GPU surface — the byte-level identity with the TX dump confirms
 no intermediate copy corrupted or altered the data.
+
+### Zero-Copy IPC Verification (L4T R36.4.3 / JP 6 / Orin NX)
+
+Same three-layer evidence on the Orin NX (CTI Boson + Orin NX, L4T R36.4.3, GStreamer 1.20.3).
+
+**Build-time evidence** (`config.h` from native build):
+
+```c
+#define HAVE_NVBUFSURFACE 1
+#define JETPACK_VERSION "jetson (real NvBufSurface)"
+```
+
+**Runtime evidence** (`GST_DEBUG=nvmmipc.pool:6`):
+
+```
+nvmmipc.pool ipc_pool.cpp:102  NVMM IPC: NvBufSurfaceImport present in libnvbufsurface
+nvmmipc.pool ipc_pool.cpp:430  handed pool (8 fds) to client fd=16
+nvmmipc.pool ipc_pool.cpp:891  consumer started: pool=8, imported 8 surfaces
+nvmmipc.pool ipc_pool.cpp:754  published frame #1 into slot 1
+nvmmipc.pool ipc_pool.cpp:1045 fetched frame #1 from slot 1
+... (8 frames, 8/8 received)
+```
+
+**Visual roundtrip** — 8/8 frames produced and consumed, all pixel-perfect (`md5` identical for each TX/RX pair). The same RGBA gradient test pattern used on Xavier passes identically on Orin.
 
 ### No-CPU-Path Proof
 
@@ -642,7 +679,7 @@ The wire protocol (shared-memory header + unix-socket fd passing) is defined in 
 |---------|-----|--------|--------|
 | 5.1.2 | R35.4.1 | Xavier NX | **Tested** — 9/9 suites, zero-copy IPC verified |
 | 5.1.1 | R35.3.1 | Xavier (NX, AGX) | Minimum supported — first release with `NvBufSurfaceImport` |
-| 6.x | R36.x | Orin | Build-validated (Docker); hardware run pending |
+| 6.x | R36.x | Orin | **Tested** — 9/9 suites, zero-copy IPC verified (L4T R36.4.3) |
 | N/A | N/A | x86_64 desktop | Mock API for unit tests only (`-Dmock=true`) |
 
 The build probes `nvbufsurface.h` for `NvBufSurfaceImport` and hard-fails at meson configure if absent. A second probe at `producer_start` / `consumer_start` (via `dlsym`) catches deploy-time mismatch where the binary was built against newer headers but ends up on an older host BSP.
