@@ -31,6 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-dev \
     cmake \
     git \
+    nvidia-l4t-multimedia-utils \
+    nvidia-l4t-jetson-multimedia-api \
     && pip3 install meson \
     && rm -rf /var/lib/apt/lists/*
 
