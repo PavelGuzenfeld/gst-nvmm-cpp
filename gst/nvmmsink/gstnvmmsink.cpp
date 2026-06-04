@@ -140,6 +140,10 @@ allocate_pool(GstNvmmSink *self)
             GST_ERROR_OBJECT(self, "Failed to create pool buffer %d", i);
             return FALSE;
         }
+        /* NvBufSurfaceCreate leaves numFilled = 0; set it so NvBufSurfaceCopy
+           (render path) and any transform accept buffer index 0. Mirrors
+           nvmm_buffer.cpp. */
+        surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->pool[i].surface = surf;
         priv->pool[i].fd = (int)surf->surfaceList[0].bufferDesc;
         memset(&priv->pool[i].map_params, 0, sizeof(NvBufSurfaceMapParams));
