@@ -336,6 +336,66 @@ static inline int NvBufSurfaceFromFd(int fd, void** surf_ptr) {
     return -1;  /* not implemented in mock */
 }
 
+/* ---- Mock stubs for the cross-process Import API
+ *      (NvBufSurfaceImport / NvBufSurfaceMapParams / NvBufSurfaceGetMapParams).
+ *      These ship in real L4T R35.3.1+ (JP 5.1.1) and any JP6.            ---- */
+
+typedef struct NvBufSurfaceMapParams {
+    int fd;
+    uint32_t layout;
+    uint32_t colorFormat;
+    uint32_t memType;
+    uint32_t width;
+    uint32_t height;
+    uint32_t num_planes;
+    uint32_t plane_pitch[NVBUF_MAX_PLANES];
+    uint32_t plane_offset[NVBUF_MAX_PLANES];
+    uint32_t plane_psize[NVBUF_MAX_PLANES];
+    uint32_t _reserved[16];
+} NvBufSurfaceMapParams;
+
+static inline int NvBufSurfaceGetMapParams(NvBufSurface* surf, int idx,
+                                           NvBufSurfaceMapParams* out) {
+    if (!surf || !out || !surf->surfaceList) return -1;
+    memset(out, 0, sizeof(*out));
+    NvBufSurfaceParams* p = &surf->surfaceList[idx];
+    out->fd          = (int)p->bufferDesc;
+    out->width       = p->width;
+    out->height      = p->height;
+    out->colorFormat = p->colorFormat;
+    out->memType     = surf->memType;
+    out->num_planes  = p->planeParams.num_planes;
+    for (uint32_t k = 0; k < NVBUF_MAX_PLANES; k++) {
+        out->plane_pitch[k]  = p->planeParams.pitch[k];
+        out->plane_offset[k] = p->planeParams.offset[k];
+        out->plane_psize[k]  = p->planeParams.psize[k];
+    }
+    return 0;
+}
+
+static inline int NvBufSurfaceImport(NvBufSurface** out,
+                                     NvBufSurfaceMapParams* params) {
+    if (!out || !params) return -1;
+    NvBufSurfaceCreateParams cp;
+    memset(&cp, 0, sizeof(cp));
+    cp.width        = params->width;
+    cp.height       = params->height;
+    cp.colorFormat  = (NvBufSurfaceColorFormat)params->colorFormat;
+    cp.memType      = (NvBufSurfaceMemType)params->memType;
+    cp.layout       = NVBUF_LAYOUT_PITCH;
+    cp.isContiguous = 1;
+    return NvBufSurfaceCreate(out, 1, &cp);
+}
+
+static inline int NvBufSurfaceCopy(NvBufSurface* src, NvBufSurface* dst) {
+    if (!src || !dst || !src->surfaceList || !dst->surfaceList) return -1;
+    uint32_t n = src->surfaceList[0].dataSize;
+    if (dst->surfaceList[0].dataSize < n) n = dst->surfaceList[0].dataSize;
+    if (src->surfaceList[0].dataPtr && dst->surfaceList[0].dataPtr)
+        memcpy(dst->surfaceList[0].dataPtr, src->surfaceList[0].dataPtr, n);
+    return 0;
+}
+
 static inline NvBufSurfTransform_Error
 NvBufSurfTransform(NvBufSurface* src, NvBufSurface* dst,
                     NvBufSurfTransformParams* params) {
@@ -347,6 +407,18 @@ NvBufSurfTransform(NvBufSurface* src, NvBufSurface* dst,
         memcpy(dst->surfaceList[i].dataPtr, src->surfaceList[i].dataPtr, copy_size);
     }
     return NvBufSurfTransformError_Success;
+}
+
+/* --- Minimal CUDA runtime stubs ---
+ * The real build includes <cuda_runtime.h>; the mock build pulls these in
+ * instead so gstnvmmsink.cpp's CUDA-stream scaffolding compiles host-side.
+ * No CUDA stream is ever created in mock mode, so the stub is never exercised.
+ */
+typedef void* cudaStream_t;
+
+static inline int cudaStreamDestroy(cudaStream_t stream) {
+    (void)stream;
+    return 0;
 }
 
 #ifdef __cplusplus
