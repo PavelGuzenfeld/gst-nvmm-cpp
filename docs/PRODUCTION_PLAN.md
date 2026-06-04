@@ -17,10 +17,11 @@ Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
 | 3.3 | Stress tests | Done (state x100, 300f longevity, 500f pool) |
 | 3.4 | ThreadSanitizer | Done (22 tests, no races) |
 | 3.5 | AddressSanitizer | Done (22 tests, no errors) |
-| 2.1 | Dynamic shm sizing | Done |
+| 2.1 | DMA-buf fd export in nvmmsink (superseded) | Done |
 | 2.2 | Fix nvmmappsrc polling | Done |
-| 2.3 | Upstream code style (GEnum, atomics, debug category) | Done |
-| 4.1 | DMA-buf fd export in nvmmsink | Pending |
+| 2.3 | Dynamic shm sizing | Done |
+| 2.4 | Upstream code style (GEnum, atomics, debug category) | Done |
+| 4.1 | DMA-buf fd export in nvmmsink (superseded) | Done |
 | 4.2 | BLOCK_LINEAR layout support | Pending |
 | 4.3 | GstVideoMeta with real NVMM strides | Pending |
 | 4.4 | Caps renegotiation (mid-stream resolution change) | Pending |
@@ -365,14 +366,13 @@ Verify output is valid RGBA JPEG with correct colors.
 
 ```
 Phase 1 (done): 1.1-1.6
-Phase 2 (done): 2.1-2.3
+Phase 2 (done): 2.1-2.4
 Phase 3 (done): 3.1-3.5
 Phase 4:
   4.5  COPYING file             → trivial
   4.8  Format conversion test   → pipeline test on Jetson
   4.2  BLOCK_LINEAR layout      → test with real decoder on Jetson
   4.3  GstVideoMeta strides     → test on Jetson
-  4.1  DMA-buf fd export        → test → Jetson
   4.7  Allocator video_info API → test → Docker + Jetson
   4.4  Caps renegotiation       → test → stress on Jetson
   4.6  Jetson CI script         → test

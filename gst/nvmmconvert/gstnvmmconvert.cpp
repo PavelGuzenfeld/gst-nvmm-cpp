@@ -5,21 +5,12 @@
 #include "nvmm_buffer.hpp"
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
+#include "nvmm_caps.h"
 
 #include <atomic>
 
 GST_DEBUG_CATEGORY_STATIC(gst_nvmm_convert_debug);
 #define GST_CAT_DEFAULT gst_nvmm_convert_debug
-
-namespace {
-
-const char* kCapsStr =
-    "video/x-raw(memory:NVMM), "
-    "format=(string){NV12, RGBA, I420, BGRA}, "
-    "width=(int)[1, 8192], height=(int)[1, 8192], "
-    "framerate=(fraction)[0/1, 240/1]";
-
-}  // namespace
 
 #define GST_TYPE_NVMM_FLIP_METHOD (gst_nvmm_flip_method_get_type())
 static GType
@@ -474,7 +465,7 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
         "Crop, scale, and convert video using Tegra VIC (NvBufSurfTransform)",
         "Pavel Guzenfeld");
 
-    GstCaps* caps = gst_caps_from_string(kCapsStr);
+    GstCaps* caps = gst_caps_from_string(NVMM_CAPS_STRING);
     gst_element_class_add_pad_template(element_class,
         gst_pad_template_new("sink", GST_PAD_SINK, GST_PAD_ALWAYS, caps));
     gst_element_class_add_pad_template(element_class,
@@ -494,27 +485,27 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
     transform_class->passthrough_on_same_caps = TRUE;
 }
 
-static gboolean
-gst_nvmm_convert_stop(GstBaseTransform* trans)
+static void
+release_pool(GstNvmmConvert* self)
 {
-    auto* self = GST_NVMM_CONVERT(trans);
     if (self->priv->pool) {
         gst_buffer_pool_set_active(self->priv->pool, FALSE);
         gst_object_unref(self->priv->pool);
         self->priv->pool = NULL;
     }
+}
+
+static gboolean
+gst_nvmm_convert_stop(GstBaseTransform* trans)
+{
+    release_pool(GST_NVMM_CONVERT(trans));
     return TRUE;
 }
 
 static void
 gst_nvmm_convert_finalize(GObject* object)
 {
-    auto* self = GST_NVMM_CONVERT(object);
-    if (self->priv->pool) {
-        gst_buffer_pool_set_active(self->priv->pool, FALSE);
-        gst_object_unref(self->priv->pool);
-        self->priv->pool = NULL;
-    }
+    release_pool(GST_NVMM_CONVERT(object));
     G_OBJECT_CLASS(gst_nvmm_convert_parent_class)->finalize(object);
 }
 

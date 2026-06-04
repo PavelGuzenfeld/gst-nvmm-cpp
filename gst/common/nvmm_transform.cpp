@@ -1,6 +1,10 @@
 #include "nvmm_transform.hpp"
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
 #include <nvbufsurface.h>
 #include <nvbufsurftransform.h>
+#endif
 
 #include <string>
 

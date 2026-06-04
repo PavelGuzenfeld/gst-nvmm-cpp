@@ -409,18 +409,6 @@ NvBufSurfTransform(NvBufSurface* src, NvBufSurface* dst,
     return NvBufSurfTransformError_Success;
 }
 
-/* --- Minimal CUDA runtime stubs ---
- * The real build includes <cuda_runtime.h>; the mock build pulls these in
- * instead so gstnvmmsink.cpp's CUDA-stream scaffolding compiles host-side.
- * No CUDA stream is ever created in mock mode, so the stub is never exercised.
- */
-typedef void* cudaStream_t;
-
-static inline int cudaStreamDestroy(cudaStream_t stream) {
-    (void)stream;
-    return 0;
-}
-
 #ifdef __cplusplus
 }
 #endif

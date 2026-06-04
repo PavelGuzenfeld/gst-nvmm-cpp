@@ -30,6 +30,7 @@
 
 #include "shm_protocol.h"
 #include "fd_ipc.h"
+#include "nvmm_caps.h"
 
 typedef NvmmShmHeader ShmHeader;
 
@@ -461,11 +462,7 @@ gst_nvmm_app_src_class_init(GstNvmmAppSrcClass *klass)
         "Zero-copy NVMM IPC via imported pool buffer fds",
         "Pavel Guzenfeld, Stereolabs");
 
-    GstCaps *caps = gst_caps_from_string(
-        "video/x-raw(memory:NVMM), "
-        "format=(string){NV12, RGBA, I420, BGRA}, "
-        "width=(int)[1, 8192], height=(int)[1, 8192], "
-        "framerate=(fraction)[0/1, 240/1]");
+    GstCaps *caps = gst_caps_from_string(NVMM_CAPS_STRING);
     gst_element_class_add_pad_template(element_class,
         gst_pad_template_new("src", GST_PAD_SRC, GST_PAD_ALWAYS, caps));
     gst_caps_unref(caps);

@@ -16,7 +16,6 @@
 #else
 #include <nvbufsurface.h>
 #include <nvbufsurftransform.h>
-#include <cuda_runtime.h>
 #endif
 
 #include <cstring>
@@ -38,6 +37,7 @@
 
 #include "shm_protocol.h"
 #include "fd_ipc.h"
+#include "nvmm_caps.h"
 
 typedef NvmmShmHeader ShmHeader;
 
@@ -74,10 +74,6 @@ struct _GstNvmmSinkPrivate {
     std::atomic<bool> running;
     std::vector<int> client_fds;
     std::mutex clients_mutex;
-
-    /* Transform session */
-    gboolean transform_initialized;
-    cudaStream_t cuda_stream;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmSink, gst_nvmm_sink, GST_TYPE_BASE_SINK)
@@ -402,13 +398,6 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
         priv->socket_path.clear();
     }
 
-    /* Destroy CUDA stream */
-    if (priv->cuda_stream) {
-        cudaStreamDestroy(priv->cuda_stream);
-        priv->cuda_stream = nullptr;
-    }
-    priv->transform_initialized = FALSE;
-
     /* Destroy pool */
     destroy_pool(self);
 
@@ -518,11 +507,7 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
         "GPU-copy NVMM IPC via buffer pool + SCM_RIGHTS fd passing",
         "Pavel Guzenfeld, Stereolabs");
 
-    GstCaps *caps = gst_caps_from_string(
-        "video/x-raw(memory:NVMM), "
-        "format=(string){NV12, RGBA, I420, BGRA}, "
-        "width=(int)[1, 8192], height=(int)[1, 8192], "
-        "framerate=(fraction)[0/1, 240/1]");
+    GstCaps *caps = gst_caps_from_string(NVMM_CAPS_STRING);
     gst_element_class_add_pad_template(element_class,
         gst_pad_template_new("sink", GST_PAD_SINK, GST_PAD_ALWAYS, caps));
     gst_caps_unref(caps);
@@ -549,8 +534,6 @@ gst_nvmm_sink_init(GstNvmmSink *self)
     self->priv->pool_allocated = FALSE;
     self->priv->listen_fd = -1;
     self->priv->running = false;
-    self->priv->transform_initialized = FALSE;
-    self->priv->cuda_stream = nullptr;
     for (int i = 0; i < NVMM_POOL_SIZE; i++) {
         self->priv->pool[i].surface = nullptr;
         self->priv->pool[i].fd = -1;

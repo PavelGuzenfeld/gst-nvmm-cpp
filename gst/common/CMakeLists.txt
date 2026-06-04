@@ -1,10 +1,6 @@
-if(BUILD_MOCK)
-    set(NVMM_COMMON_SOURCES nvmm_buffer_mock.cpp nvmm_transform_mock.cpp)
-else()
-    set(NVMM_COMMON_SOURCES nvmm_buffer.cpp nvmm_transform.cpp)
-endif()
-
-add_library(nvmm_common STATIC ${NVMM_COMMON_SOURCES})
+# Single source for both modes: the .cpp files pick the mock vs real
+# NvBufSurface header via NVMM_MOCK_API (see their #include guards).
+add_library(nvmm_common STATIC nvmm_buffer.cpp nvmm_transform.cpp)
 
 target_include_directories(nvmm_common
     PUBLIC
