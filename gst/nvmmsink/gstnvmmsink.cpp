@@ -1,49 +1,237 @@
+/// nvmmsink — GPU-copy NVMM IPC sink.
+///
+/// Allocates a pool of NVMM buffers, copies incoming frames via NvBufSurfaceCopy
+/// (GPU-to-GPU, no CPU involvement), and shares the pool buffer DMA-buf fds with
+/// consumers via SCM_RIGHTS over a unix domain socket.
+///
+/// Consumers (nvmmappsrc) import the fds and read directly from GPU memory
+/// (zero-copy on the consumer side). Ref counts in shared memory manage buffer
+/// lifecycle.
+
 #include "gstnvmmsink.h"
 #include "gstnvmmallocator.h"
-#include "nvmm_buffer.hpp"
-#include "nvmm_types.hpp"
 
 #ifdef NVMM_MOCK_API
 #include "nvbufsurface_mock.h"
 #else
 #include <nvbufsurface.h>
+#include <nvbufsurftransform.h>
+#include <cuda_runtime.h>
 #endif
 
 #include <cstring>
 #include <string>
 #include <atomic>
+#include <thread>
+#include <vector>
+#include <mutex>
 
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <poll.h>
 
 #ifndef PACKAGE
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
 #include "shm_protocol.h"
+#include "fd_ipc.h"
 
 typedef NvmmShmHeader ShmHeader;
 
 enum {
     PROP_0,
     PROP_SHM_NAME,
-    PROP_EXPORT_DMABUF,
-    PROP_SYNC,
+    PROP_POOL_SIZE_PROP,
+};
+
+struct PoolBuffer {
+    NvBufSurface *surface;
+    int fd;  /* bufferDesc = DMA-buf fd */
+    NvBufSurfaceMapParams map_params;  /* serializable params for cross-process import */
 };
 
 struct _GstNvmmSinkPrivate {
     std::string shm_name;
-    gboolean export_dmabuf;
     int shm_fd;
     void *shm_ptr;
     gsize shm_size;
     std::atomic<uint64_t> frame_number;
     GstVideoInfo video_info;
+
+    /* Buffer pool */
+    PoolBuffer pool[NVMM_POOL_SIZE];
+    int pool_size;
+    int write_idx;
+    gboolean pool_allocated;
+
+    /* Socket server for fd passing */
+    std::string socket_path;
+    int listen_fd;
+    std::thread accept_thread;
+    std::atomic<bool> running;
+    std::vector<int> client_fds;
+    std::mutex clients_mutex;
+
+    /* Transform session */
+    gboolean transform_initialized;
+    cudaStream_t cuda_stream;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmSink, gst_nvmm_sink, GST_TYPE_BASE_SINK)
+
+/* --- helpers --- */
+
+static NvBufSurface *
+get_nvbufsurface_from_buffer(GstBaseSink *sink, GstBuffer *buffer)
+{
+    /* Check caps for NVMM feature */
+    GstCaps *caps = gst_pad_get_current_caps(GST_BASE_SINK_PAD(sink));
+    if (!caps) return nullptr;
+    GstCapsFeatures *feat = gst_caps_get_features(caps, 0);
+    gboolean is_nvmm = feat && gst_caps_features_contains(feat, "memory:NVMM");
+    gst_caps_unref(caps);
+    if (!is_nvmm) return nullptr;
+
+    /* NVIDIA convention: mapped data = NvBufSurface* */
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ))
+        return nullptr;
+    NvBufSurface *surf = reinterpret_cast<NvBufSurface *>(map.data);
+    gst_buffer_unmap(buffer, &map);
+    return surf;
+}
+
+static gboolean
+allocate_pool(GstNvmmSink *self)
+{
+    auto *priv = self->priv;
+    int w = GST_VIDEO_INFO_WIDTH(&priv->video_info);
+    int h = GST_VIDEO_INFO_HEIGHT(&priv->video_info);
+
+    NvBufSurfaceCreateParams params;
+    memset(&params, 0, sizeof(params));
+    params.gpuId = 0;
+    params.width = w;
+    params.height = h;
+    params.size = 0;
+    params.isContiguous = true;
+    params.layout = NVBUF_LAYOUT_PITCH;
+    params.memType = NVBUF_MEM_SURFACE_ARRAY;
+
+    /* Map GstVideoFormat to NvBufSurfaceColorFormat */
+    GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&priv->video_info);
+    switch (fmt) {
+        case GST_VIDEO_FORMAT_NV12: params.colorFormat = NVBUF_COLOR_FORMAT_NV12; break;
+        case GST_VIDEO_FORMAT_RGBA: params.colorFormat = NVBUF_COLOR_FORMAT_RGBA; break;
+        case GST_VIDEO_FORMAT_BGRA: params.colorFormat = NVBUF_COLOR_FORMAT_BGRA; break;
+        case GST_VIDEO_FORMAT_I420: params.colorFormat = NVBUF_COLOR_FORMAT_YUV420; break;
+        default:
+            GST_ERROR_OBJECT(self, "Unsupported format for pool: %s",
+                             gst_video_format_to_string(fmt));
+            return FALSE;
+    }
+
+    for (int i = 0; i < priv->pool_size; i++) {
+        NvBufSurface *surf = nullptr;
+        if (NvBufSurfaceCreate(&surf, 1, &params) != 0 || !surf) {
+            GST_ERROR_OBJECT(self, "Failed to create pool buffer %d", i);
+            return FALSE;
+        }
+        priv->pool[i].surface = surf;
+        priv->pool[i].fd = (int)surf->surfaceList[0].bufferDesc;
+        memset(&priv->pool[i].map_params, 0, sizeof(NvBufSurfaceMapParams));
+        if (NvBufSurfaceGetMapParams(surf, 0, &priv->pool[i].map_params) != 0) {
+            fprintf(stderr, "[nvmmsink] NvBufSurfaceGetMapParams failed for buffer %d\n", i);
+            return FALSE;
+        }
+    }
+
+    priv->pool_allocated = TRUE;
+    return TRUE;
+}
+
+static void
+destroy_pool(GstNvmmSink *self)
+{
+    auto *priv = self->priv;
+    for (int i = 0; i < priv->pool_size; i++) {
+        if (priv->pool[i].surface) {
+            NvBufSurfaceDestroy(priv->pool[i].surface);
+            priv->pool[i].surface = nullptr;
+            priv->pool[i].fd = -1;
+        }
+    }
+    priv->pool_allocated = FALSE;
+}
+
+static void
+send_fds_to_client(GstNvmmSink *self, int client_fd)
+{
+    auto *priv = self->priv;
+
+    /* Send pool_size first */
+    int ps = priv->pool_size;
+    if (send(client_fd, &ps, sizeof(ps), 0) != sizeof(ps)) {
+        fprintf(stderr, "[nvmmsink] Failed to send pool_size to client\n");
+        close(client_fd);
+        return;
+    }
+
+    /* Send NvBufSurfaceMapParams for each pool buffer (serializable metadata) */
+    for (int i = 0; i < priv->pool_size; i++) {
+        NvBufSurfaceMapParams params = priv->pool[i].map_params;
+        if (send(client_fd, &params, sizeof(params), 0) != sizeof(params)) {
+            fprintf(stderr, "[nvmmsink] Failed to send map_params[%d]\n", i);
+            close(client_fd);
+            return;
+        }
+    }
+
+    /* Send fds via SCM_RIGHTS */
+    int fds[NVMM_POOL_SIZE];
+    for (int i = 0; i < priv->pool_size; i++)
+        fds[i] = priv->pool[i].fd;
+
+    if (nvmm_send_fds(client_fd, fds, priv->pool_size) < 0) {
+        fprintf(stderr, "[nvmmsink] Failed to send fds: %s\n", strerror(errno));
+        close(client_fd);
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(priv->clients_mutex);
+    priv->client_fds.push_back(client_fd);
+}
+
+static void
+accept_loop(GstNvmmSink *self)
+{
+    auto *priv = self->priv;
+
+    while (priv->running.load()) {
+        struct pollfd pfd = { priv->listen_fd, POLLIN, 0 };
+        int ret = poll(&pfd, 1, 200 /* ms */);
+        if (ret <= 0) continue;
+
+        int client = accept(priv->listen_fd, nullptr, nullptr);
+        if (client < 0) continue;
+
+        /* Wait for pool to be allocated before sending fds */
+        while (!priv->pool_allocated && priv->running.load())
+            g_usleep(10000);
+
+        if (!priv->running.load()) {
+            close(client);
+            break;
+        }
+
+        send_fds_to_client(self, client);
+    }
+}
+
+/* --- GstBaseSink vfuncs --- */
 
 static void
 gst_nvmm_sink_set_property(GObject *object, guint prop_id,
@@ -54,11 +242,8 @@ gst_nvmm_sink_set_property(GObject *object, guint prop_id,
         case PROP_SHM_NAME:
             self->priv->shm_name = g_value_get_string(value) ? g_value_get_string(value) : "";
             break;
-        case PROP_EXPORT_DMABUF:
-            self->priv->export_dmabuf = g_value_get_boolean(value);
-            break;
-        case PROP_SYNC:
-            g_object_set(object, "sync", g_value_get_boolean(value), NULL);
+        case PROP_POOL_SIZE_PROP:
+            self->priv->pool_size = CLAMP(g_value_get_int(value), 3, NVMM_POOL_SIZE);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -75,8 +260,8 @@ gst_nvmm_sink_get_property(GObject *object, guint prop_id,
         case PROP_SHM_NAME:
             g_value_set_string(value, self->priv->shm_name.c_str());
             break;
-        case PROP_EXPORT_DMABUF:
-            g_value_set_boolean(value, self->priv->export_dmabuf);
+        case PROP_POOL_SIZE_PROP:
+            g_value_set_int(value, self->priv->pool_size);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -94,33 +279,36 @@ gst_nvmm_sink_set_caps(GstBaseSink *sink, GstCaps *caps)
         return FALSE;
     }
 
-    /* Resize shm to match actual frame size */
-    gsize needed = sizeof(ShmHeader) + GST_VIDEO_INFO_SIZE(&self->priv->video_info);
-    if (self->priv->shm_ptr && needed > self->priv->shm_size) {
-        munmap(self->priv->shm_ptr, self->priv->shm_size);
-        self->priv->shm_ptr = nullptr;
+    /* Allocate the NVMM buffer pool now that we know the format */
+    if (!self->priv->pool_allocated) {
+        if (!allocate_pool(self)) {
+            GST_ERROR_OBJECT(self, "Failed to allocate buffer pool");
+            return FALSE;
+        }
 
-        self->priv->shm_size = needed;
-        if (ftruncate(self->priv->shm_fd, self->priv->shm_size) < 0) {
-            GST_ERROR_OBJECT(self, "ftruncate resize failed");
-            return FALSE;
+        /* Update shm header with pool info */
+        auto *header = static_cast<ShmHeader *>(self->priv->shm_ptr);
+        header->width = GST_VIDEO_INFO_WIDTH(&self->priv->video_info);
+        header->height = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
+        header->format = (uint32_t)GST_VIDEO_INFO_FORMAT(&self->priv->video_info);
+        header->pool_size = self->priv->pool_size;
+        header->num_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
+        /* Store the actual NVMM pitches from pool buffers */
+        for (guint i = 0; i < header->num_planes && i < 4; i++) {
+            header->pitches[i] = self->priv->pool[0].surface->surfaceList[0].planeParams.pitch[i];
+            header->offsets[i] = self->priv->pool[0].surface->surfaceList[0].planeParams.offset[i];
         }
-        self->priv->shm_ptr = mmap(NULL, self->priv->shm_size,
-                                    PROT_READ | PROT_WRITE, MAP_SHARED,
-                                    self->priv->shm_fd, 0);
-        if (self->priv->shm_ptr == MAP_FAILED) {
-            GST_ERROR_OBJECT(self, "mmap resize failed");
-            self->priv->shm_ptr = nullptr;
-            return FALSE;
-        }
+        strncpy(header->socket_path, self->priv->socket_path.c_str(),
+                sizeof(header->socket_path) - 1);
+        __sync_synchronize();
     }
 
-    GST_INFO_OBJECT(self, "Configured: %dx%d format=%s shm=%" G_GSIZE_FORMAT,
+    GST_INFO_OBJECT(self, "Configured: %dx%d format=%s pool=%d",
                     GST_VIDEO_INFO_WIDTH(&self->priv->video_info),
                     GST_VIDEO_INFO_HEIGHT(&self->priv->video_info),
                     gst_video_format_to_string(
                         GST_VIDEO_INFO_FORMAT(&self->priv->video_info)),
-                    self->priv->shm_size);
+                    self->priv->pool_size);
     return TRUE;
 }
 
@@ -128,45 +316,60 @@ static gboolean
 gst_nvmm_sink_start(GstBaseSink *sink)
 {
     auto *self = GST_NVMM_SINK(sink);
+    auto *priv = self->priv;
 
-    if (self->priv->shm_name.empty()) {
-        self->priv->shm_name = "/nvmm_sink_0";
-    }
+    if (priv->shm_name.empty())
+        priv->shm_name = "/nvmm_sink_0";
 
-    /* Initial size: header only. set_caps will resize to match actual frame. */
-    self->priv->shm_size = sizeof(ShmHeader) + (640 * 480 * 4);
-
-    self->priv->shm_fd = shm_open(self->priv->shm_name.c_str(),
-                                   O_CREAT | O_RDWR, 0666);
-    if (self->priv->shm_fd < 0) {
-        GST_ERROR_OBJECT(self, "shm_open(%s) failed: %s",
-                         self->priv->shm_name.c_str(), strerror(errno));
+    /* Shared memory: header only (no frame data — GPU-copy pool) */
+    priv->shm_size = sizeof(ShmHeader);
+    priv->shm_fd = shm_open(priv->shm_name.c_str(), O_CREAT | O_RDWR, 0666);
+    if (priv->shm_fd < 0) {
+        fprintf(stderr, "[nvmmsink] shm_open FAILED: %s\n", strerror(errno));
         return FALSE;
     }
-
-    if (ftruncate(self->priv->shm_fd, self->priv->shm_size) < 0) {
-        GST_ERROR_OBJECT(self, "ftruncate failed: %s", strerror(errno));
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
+    if (ftruncate(priv->shm_fd, priv->shm_size) < 0) {
+        fprintf(stderr, "[nvmmsink] ftruncate FAILED: %s\n", strerror(errno));
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
         return FALSE;
     }
-
-    self->priv->shm_ptr = mmap(NULL, self->priv->shm_size,
-                                PROT_READ | PROT_WRITE, MAP_SHARED,
-                                self->priv->shm_fd, 0);
-    if (self->priv->shm_ptr == MAP_FAILED) {
-        GST_ERROR_OBJECT(self, "mmap failed: %s", strerror(errno));
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
-        self->priv->shm_ptr = nullptr;
+    priv->shm_ptr = mmap(NULL, priv->shm_size, PROT_READ | PROT_WRITE,
+                          MAP_SHARED, priv->shm_fd, 0);
+    if (priv->shm_ptr == MAP_FAILED) {
+        fprintf(stderr, "[nvmmsink] mmap FAILED: %s\n", strerror(errno));
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
+        priv->shm_ptr = nullptr;
         return FALSE;
     }
+    auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
+    memset(header, 0, sizeof(ShmHeader));
+    header->magic = NVMM_SHM_MAGIC;
+    header->version = NVMM_SHM_VERSION;
+    header->ready = 0;
+    for (int i = 0; i < NVMM_POOL_SIZE; i++)
+        header->ref_counts[i] = 0;
 
-    memset(self->priv->shm_ptr, 0, self->priv->shm_size);
-    self->priv->frame_number = 0;
+    /* Unix socket for fd passing — path derived from shm name */
+    /* Socket path: /tmp/nvmm_<name>.sock (flatten the shm name to avoid subdirectories) */
+    std::string flat_name = priv->shm_name;
+    for (auto &c : flat_name) { if (c == '/') c = '_'; }
+    priv->socket_path = std::string("/tmp/nvmm") + flat_name + ".sock";
+    priv->listen_fd = nvmm_server_listen(priv->socket_path.c_str());
+    if (priv->listen_fd < 0) {
+        fprintf(stderr, "[nvmmsink] socket listen FAILED: %s\n", strerror(errno));
+        return FALSE;
+    }
+    /* Start accept thread */
+    priv->running = true;
+    priv->accept_thread = std::thread(accept_loop, self);
 
-    GST_INFO_OBJECT(self, "Shared memory '%s' created (%" G_GSIZE_FORMAT " bytes)",
-                    self->priv->shm_name.c_str(), self->priv->shm_size);
+    priv->frame_number = 0;
+    priv->write_idx = 0;
+
+    GST_INFO_OBJECT(self, "Started: shm='%s' socket='%s'",
+                    priv->shm_name.c_str(), priv->socket_path.c_str());
     return TRUE;
 }
 
@@ -174,21 +377,53 @@ static gboolean
 gst_nvmm_sink_stop(GstBaseSink *sink)
 {
     auto *self = GST_NVMM_SINK(sink);
+    auto *priv = self->priv;
 
-    if (self->priv->shm_ptr && self->priv->shm_ptr != MAP_FAILED) {
-        munmap(self->priv->shm_ptr, self->priv->shm_size);
-        self->priv->shm_ptr = nullptr;
+    /* Stop accept thread */
+    priv->running = false;
+    if (priv->accept_thread.joinable())
+        priv->accept_thread.join();
+
+    /* Close client connections */
+    {
+        std::lock_guard<std::mutex> lock(priv->clients_mutex);
+        for (int fd : priv->client_fds)
+            close(fd);
+        priv->client_fds.clear();
     }
 
-    if (self->priv->shm_fd >= 0) {
-        close(self->priv->shm_fd);
-        self->priv->shm_fd = -1;
+    /* Close listen socket */
+    if (priv->listen_fd >= 0) {
+        close(priv->listen_fd);
+        priv->listen_fd = -1;
+    }
+    if (!priv->socket_path.empty()) {
+        unlink(priv->socket_path.c_str());
+        priv->socket_path.clear();
     }
 
-    shm_unlink(self->priv->shm_name.c_str());
+    /* Destroy CUDA stream */
+    if (priv->cuda_stream) {
+        cudaStreamDestroy(priv->cuda_stream);
+        priv->cuda_stream = nullptr;
+    }
+    priv->transform_initialized = FALSE;
 
-    GST_INFO_OBJECT(self, "Shared memory '%s' destroyed",
-                    self->priv->shm_name.c_str());
+    /* Destroy pool */
+    destroy_pool(self);
+
+    /* Clean up shm */
+    if (priv->shm_ptr && priv->shm_ptr != MAP_FAILED) {
+        munmap(priv->shm_ptr, priv->shm_size);
+        priv->shm_ptr = nullptr;
+    }
+    if (priv->shm_fd >= 0) {
+        close(priv->shm_fd);
+        priv->shm_fd = -1;
+    }
+    shm_unlink(priv->shm_name.c_str());
+
+    GST_INFO_OBJECT(self, "Stopped");
     return TRUE;
 }
 
@@ -196,113 +431,51 @@ static GstFlowReturn
 gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
 {
     auto *self = GST_NVMM_SINK(sink);
-    auto *header = static_cast<ShmHeader *>(self->priv->shm_ptr);
-    auto *frame_data = static_cast<uint8_t *>(self->priv->shm_ptr) + sizeof(ShmHeader);
-    GstMemory *mem;
-    GstMapInfo map_info;
+    auto *priv = self->priv;
+    auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
 
-    if (!self->priv->shm_ptr) {
-        GST_ERROR_OBJECT(self, "Shared memory not initialized");
+    if (!priv->shm_ptr || !priv->pool_allocated)
+        return GST_FLOW_ERROR;
+
+    /* Get NvBufSurface from incoming buffer */
+    NvBufSurface *src_surf = get_nvbufsurface_from_buffer(sink, buffer);
+    if (!src_surf) {
+        GST_WARNING_OBJECT(self, "Buffer is not NVMM — GPU-copy requires NVMM input");
         return GST_FLOW_ERROR;
     }
 
-    mem = gst_buffer_peek_memory(buffer, 0);
+    /* Find and claim next free pool buffer.
+       Use CAS to atomically set ref_count from 0 to -1 (writer lock).
+       -1 means "being written" — consumers will skip this buffer.
+       After writing, set ref_count back to 0 and update write_idx. */
+    int target = -1;
+    for (int i = 0; i < priv->pool_size; i++) {
+        int idx = (priv->write_idx + 1 + i) % priv->pool_size;
+        if (__sync_bool_compare_and_swap(&header->ref_counts[idx], 0, -1)) {
+            target = idx;
+            break;
+        }
+    }
 
-    /* Mark frame as not ready while writing */
-    header->ready = 0;
+    if (target < 0) {
+        fprintf(stderr, "[nvmmsink] All pool buffers busy, dropping frame\n");
+        return GST_FLOW_OK;
+    }
+
+    /* GPU copy: incoming → pool[target] via NvBufSurfaceCopy (synchronous) */
+    if (NvBufSurfaceCopy(src_surf, priv->pool[target].surface) != 0) {
+        fprintf(stderr, "[nvmmsink] NvBufSurfaceCopy failed for pool buffer %d\n", target);
+        /* Release writer lock on failure */
+        __sync_lock_test_and_set(&header->ref_counts[target], 0);
+        return GST_FLOW_ERROR;
+    }
+
+    /* Release writer lock (set ref_count from -1 back to 0) and publish */
+    __sync_lock_test_and_set(&header->ref_counts[target], 0);
     __sync_synchronize();
-
-    /* Fill header */
-    header->magic = NVMM_SHM_MAGIC;
-    header->version = NVMM_SHM_VERSION;
-    header->width = GST_VIDEO_INFO_WIDTH(&self->priv->video_info);
-    header->height = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
-    header->format = static_cast<uint32_t>(
-        GST_VIDEO_INFO_FORMAT(&self->priv->video_info));
-    header->frame_number = self->priv->frame_number.fetch_add(1);
+    header->write_idx = target;
     header->timestamp_ns = GST_BUFFER_PTS(buffer);
-    header->dmabuf_fd = -1;
-
-    /* Export DMA-buf fd if requested.
-       On Jetson, bufferDesc contains the DMA-buf fd for SURFACE_ARRAY memory.
-       Only attempt this for NVMM buffers — check both our allocator
-       and the negotiated caps feature. */
-    if (self->priv->export_dmabuf) {
-        gboolean is_nvmm = gst_is_nvmm_memory(mem);
-
-        /* Check caps feature for external NVMM (nvvidconv, nvv4l2) */
-        if (!is_nvmm) {
-            GstCaps *pad_caps = gst_pad_get_current_caps(
-                GST_BASE_SINK_PAD(sink));
-            if (pad_caps) {
-                GstCapsFeatures *feat = gst_caps_get_features(pad_caps, 0);
-                is_nvmm = feat && gst_caps_features_contains(feat, "memory:NVMM");
-                gst_caps_unref(pad_caps);
-            }
-        }
-
-        if (is_nvmm) {
-            NvBufSurface *nvsurf = nullptr;
-            if (gst_is_nvmm_memory(mem)) {
-                nvsurf = static_cast<NvBufSurface *>(
-                    gst_nvmm_memory_get_surface(mem));
-            } else {
-                /* NVIDIA convention: mapped data = NvBufSurface* */
-                GstMapInfo dma_map;
-                if (gst_buffer_map(buffer, &dma_map, GST_MAP_READ)) {
-                    nvsurf = reinterpret_cast<NvBufSurface *>(dma_map.data);
-                    gst_buffer_unmap(buffer, &dma_map);
-                }
-            }
-            if (nvsurf && nvsurf->surfaceList) {
-                int32_t fd = static_cast<int32_t>(
-                    nvsurf->surfaceList[0].bufferDesc);
-                if (fd > 0) header->dmabuf_fd = fd;
-            }
-        }
-    }
-
-    header->num_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
-    for (guint i = 0; i < header->num_planes && i < 4; i++) {
-        header->pitches[i] = GST_VIDEO_INFO_PLANE_STRIDE(&self->priv->video_info, i);
-        header->offsets[i] = GST_VIDEO_INFO_PLANE_OFFSET(&self->priv->video_info, i);
-    }
-
-    /* Copy frame data to shared memory.
-       Try per-plane NVMM map first, fall back to gst_buffer_map for CPU buffers. */
-    gsize available = self->priv->shm_size - sizeof(ShmHeader);
-    gsize total_copied = 0;
-
-    if (gst_is_nvmm_memory(mem)) {
-        /* NVMM: map each plane individually (planes aren't contiguous) */
-        for (guint p = 0; p < header->num_planes && p < 4; p++) {
-            guint8 *plane_data = nullptr;
-            gsize plane_size = 0;
-            if (gst_nvmm_memory_map_plane(mem, p, GST_MAP_READ,
-                                           &plane_data, &plane_size)) {
-                gsize copy_size = plane_size;
-                if (total_copied + copy_size > available)
-                    copy_size = available - total_copied;
-                memcpy(frame_data + total_copied, plane_data, copy_size);
-                total_copied += copy_size;
-            }
-        }
-        gst_nvmm_memory_unmap_plane(mem);
-    } else {
-        /* CPU memory: standard flat map */
-        if (gst_buffer_map(buffer, &map_info, GST_MAP_READ)) {
-            gsize copy_size = map_info.size;
-            if (copy_size > available) copy_size = available;
-            memcpy(frame_data, map_info.data, copy_size);
-            total_copied = copy_size;
-            gst_buffer_unmap(buffer, &map_info);
-        } else {
-            GST_WARNING_OBJECT(self, "Failed to map buffer");
-        }
-    }
-    header->data_size = static_cast<uint32_t>(total_copied);
-
-    /* Signal frame is ready */
+    header->frame_number = priv->frame_number.fetch_add(1);
     __sync_synchronize();
     header->ready = 1;
 
@@ -330,26 +503,23 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
 
     g_object_class_install_property(gobject_class, PROP_SHM_NAME,
         g_param_spec_string("shm-name", "Shared Memory Name",
-            "POSIX shared memory segment name (e.g., /nvmm_sink_0)",
+            "POSIX shared memory segment name (e.g., /cam1)",
             "/nvmm_sink_0", G_PARAM_READWRITE));
 
-    g_object_class_install_property(gobject_class, PROP_EXPORT_DMABUF,
-        g_param_spec_boolean("export-dmabuf", "Export DMA-buf",
-            "Export NVMM buffer as DMA-buf fd in shared memory header",
-            FALSE, G_PARAM_READWRITE));
+    g_object_class_install_property(gobject_class, PROP_POOL_SIZE_PROP,
+        g_param_spec_int("pool-size", "Pool Size",
+            "Number of NVMM buffers in the pool (3-8)",
+            3, NVMM_POOL_SIZE, NVMM_POOL_SIZE,
+            G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
-        "NVMM Shared Memory Sink",
+        "NVMM GPU-Copy IPC Sink",
         "Sink/Video",
-        "Exports NVMM video frames via POSIX shared memory for zero-copy IPC",
-        "Pavel Guzenfeld");
+        "GPU-copy NVMM IPC via buffer pool + SCM_RIGHTS fd passing",
+        "Pavel Guzenfeld, Stereolabs");
 
     GstCaps *caps = gst_caps_from_string(
         "video/x-raw(memory:NVMM), "
-        "format=(string){NV12, RGBA, I420, BGRA}, "
-        "width=(int)[1, 8192], height=(int)[1, 8192], "
-        "framerate=(fraction)[0/1, 240/1]; "
-        "video/x-raw, "
         "format=(string){NV12, RGBA, I420, BGRA}, "
         "width=(int)[1, 8192], height=(int)[1, 8192], "
         "framerate=(fraction)[0/1, 240/1]");
@@ -370,11 +540,21 @@ gst_nvmm_sink_init(GstNvmmSink *self)
         gst_nvmm_sink_get_instance_private(self));
     new (self->priv) GstNvmmSinkPrivate();
     self->priv->shm_name = "/nvmm_sink_0";
-    self->priv->export_dmabuf = FALSE;
     self->priv->shm_fd = -1;
     self->priv->shm_ptr = nullptr;
     self->priv->shm_size = 0;
     self->priv->frame_number = 0;
+    self->priv->pool_size = NVMM_POOL_SIZE;
+    self->priv->write_idx = 0;
+    self->priv->pool_allocated = FALSE;
+    self->priv->listen_fd = -1;
+    self->priv->running = false;
+    self->priv->transform_initialized = FALSE;
+    self->priv->cuda_stream = nullptr;
+    for (int i = 0; i < NVMM_POOL_SIZE; i++) {
+        self->priv->pool[i].surface = nullptr;
+        self->priv->pool[i].fd = -1;
+    }
 }
 
 /* Plugin registration */
@@ -389,9 +569,9 @@ GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     nvmmsink,
-    "NVMM shared memory sink for zero-copy IPC",
+    "NVMM GPU-copy IPC sink",
     plugin_init,
-    "1.0.1",
+    "1.1.0",
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

@@ -4,9 +4,7 @@
 
 #include "gstnvmmsink.h"
 
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -28,10 +26,6 @@ static int tests_failed = 0;
 #define ASSERT_NOT_NULL(ptr) ASSERT_TRUE((ptr) != NULL)
 
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
-
-/// Shared memory header must match the one in gstnvmmsink.cpp
-#include "shm_protocol.h"
-typedef NvmmShmHeader ShmHeader;
 
 static void test_sink_creates() {
     GstElement *sink = gst_element_factory_make("nvmmsink", "test-sink");

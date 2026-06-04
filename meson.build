@@ -21,11 +21,19 @@ gst_allocators_dep = dependency('gstreamer-allocators-1.0', version : '>= 1.16.0
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
+nvmm_lib_dirs = [
+  '/usr/lib/aarch64-linux-gnu/tegra',
+  '/usr/lib/aarch64-linux-gnu/nvidia',
+  '/opt/nvidia/deepstream/deepstream/lib',
+  '/usr/lib/nvidia',
+  '/usr/lib/aarch64-linux-gnu',
+]
+
 nvbufsurface_dep = dependency('nvbufsurface', required : false)
 if not nvbufsurface_dep.found()
   # Fallback: search standard Jetson paths
   nvbufsurface_lib = cc.find_library('nvbufsurface',
-    dirs : ['/usr/lib/aarch64-linux-gnu/tegra', '/usr/lib/aarch64-linux-gnu'],
+    dirs : nvmm_lib_dirs,
     required : false,
   )
   if nvbufsurface_lib.found()
@@ -54,7 +62,7 @@ endif
 nvbufsurftransform_dep = dependency('nvbufsurftransform', required : false)
 if not nvbufsurftransform_dep.found()
   nvbufsurftransform_lib = cc.find_library('nvbufsurftransform',
-    dirs : ['/usr/lib/aarch64-linux-gnu/tegra', '/usr/lib/aarch64-linux-gnu'],
+    dirs : nvmm_lib_dirs,
     required : false,
   )
   if nvbufsurftransform_lib.found()
@@ -88,7 +96,7 @@ have_nvscibuf = false
 if jetpack_version == '6'
   nvscibuf_dep = dependency('nvscibuf', required : false)
   if not nvscibuf_dep.found()
-    nvscibuf_lib = cc.find_library('nvscibuf', required : false)
+    nvscibuf_lib = cc.find_library('nvscibuf', dirs : nvmm_lib_dirs, required : false)
     if nvscibuf_lib.found()
       nvscibuf_dep = declare_dependency(dependencies : nvscibuf_lib)
       have_nvscibuf = true

@@ -144,15 +144,13 @@ implementation for both mock and real — only the header include differs.
 
 ## Phase 2 — Upstream polish
 
-### 2.1 Implement DMA-buf fd export in nvmmsink
+### 2.1 ~~Implement DMA-buf fd export in nvmmsink~~ — DONE (superseded)
 
-**Problem:** `export-dmabuf` property is stubbed. Sink always memcpy's to shm,
-defeating zero-copy for IPC.
-
-**Fix:** When `export-dmabuf=true`, write `bufferDesc` fd into ShmHeader.
-Consumer uses the fd to `mmap` or import the DMA-buf directly.
-
-**Test:** Producer exports fd, consumer opens fd, reads valid frame data.
+Shipped in commit 52b3e94 via a different mechanism: `nvmmsink` now GPU-copies
+incoming frames into a pool of NVMM buffers and passes the pool's DMA-buf fds
+to consumers over a unix-domain socket (SCM_RIGHTS). The original
+`export-dmabuf` property and in-header `dmabuf_fd` field are gone; the socket
++ pool handshake replaces them. Consumers import fds via `NvBufSurfaceImport`.
 
 ---
 
@@ -272,18 +270,12 @@ Build with `-fsanitize=address` and run:
 
 ## Phase 4 — Production hardening
 
-### 4.1 DMA-buf fd export in nvmmsink
+### 4.1 ~~DMA-buf fd export in nvmmsink~~ — DONE (superseded)
 
-**Problem:** `export-dmabuf` property is stubbed — always writes -1. The "zero-copy
-IPC" claim requires fd sharing so consumers can import the DMA-buf without memcpy.
-
-**Fix:** When `export-dmabuf=true` and buffer is NVMM, write `bufferDesc` (the
-DMA-buf fd) into ShmHeader. Consumer uses the fd to mmap or import directly.
-For non-NVMM buffers, fall back to memcpy as currently.
-
-**Test:** Producer exports fd, standalone C consumer opens fd, verifies non-negative
-and readable. Pipeline test: producer with `export-dmabuf=true`, consumer verifies
-`header->dmabuf_fd >= 0`.
+See section 2.1. Shipped in commit 52b3e94 as GPU-copy-into-pool + SCM_RIGHTS
+fd passing. Note the shipped design is GPU-copy, not true zero-copy: fd-only
+sharing of the incoming buffer wasn't viable, so the producer copies frames
+into a pool of its own NVMM buffers and shares those fds instead.
 
 ---
 
