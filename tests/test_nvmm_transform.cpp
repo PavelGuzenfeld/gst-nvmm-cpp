@@ -113,6 +113,19 @@ TEST(transform_rotate270) {
     ASSERT_TRUE(result.has_value());
 }
 
+TEST(transform_with_interpolation) {
+    // Non-default interpolation should be accepted on a scaling transform.
+    auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
+    auto dst = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
+    ASSERT_TRUE(src.has_value());
+    ASSERT_TRUE(dst.has_value());
+
+    nvmm::TransformParams params;
+    params.interpolation = nvmm::Interpolation::k5Tap;
+    auto result = nvmm::NvmmTransform::transform(src.value(), dst.value(), params);
+    ASSERT_TRUE(result.has_value());
+}
+
 TEST(transform_with_crop_and_flip) {
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(320, 240, nvmm::ColorFormat::kNV12);

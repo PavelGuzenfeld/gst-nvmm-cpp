@@ -97,6 +97,10 @@ typedef enum {
 typedef enum {
     NvBufSurfTransformInter_Nearest = 0,
     NvBufSurfTransformInter_Bilinear,
+    NvBufSurfTransformInter_Algo1,    /* 5-tap */
+    NvBufSurfTransformInter_Algo2,    /* 10-tap */
+    NvBufSurfTransformInter_Algo3,    /* Smart */
+    NvBufSurfTransformInter_Algo4,    /* Nicest */
     NvBufSurfTransformInter_Default = 6
 } NvBufSurfTransform_Inter;
 

@@ -213,6 +213,18 @@ enum class FlipMethod : int {
     kFlipUpperLeftToLowerRight = 7,
 };
 
+/// Interpolation/filter used when the VIC scales a surface. Maps to
+/// NvBufSurfTransformInter_*; kDefault lets the VIC pick.
+enum class Interpolation : int {
+    kNearest = 0,   // NvBufSurfTransformInter_Nearest
+    kBilinear = 1,  // NvBufSurfTransformInter_Bilinear
+    k5Tap = 2,      // NvBufSurfTransformInter_Algo1
+    k10Tap = 3,     // NvBufSurfTransformInter_Algo2
+    kSmart = 4,     // NvBufSurfTransformInter_Algo3
+    kNicest = 5,    // NvBufSurfTransformInter_Algo4
+    kDefault = 6,   // NvBufSurfTransformInter_Default
+};
+
 /// Crop rectangle
 struct CropRect {
     uint32_t x = 0;
@@ -230,6 +242,7 @@ struct TransformParams {
     CropRect src_crop;
     CropRect dst_crop;
     FlipMethod flip = FlipMethod::kNone;
+    Interpolation interpolation = Interpolation::kDefault;
 };
 
 }  // namespace nvmm
