@@ -282,6 +282,12 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
                     i, fds[i]);
             return FALSE;
         }
+        /* NvBufSurfaceImport leaves numFilled = 0. NvBufSurfTransform (called by
+           any downstream nvvidconv/nvmmconvert) rejects a surface with no filled
+           buffers and returns -3, so the consumer pipeline dies with
+           "NvBufSurfTransform Failed". Mark the single imported buffer as filled,
+           mirroring what nvmm_buffer.cpp does after NvBufSurfaceCreate. */
+        surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->imported_surfaces[i] = surf;
     }
 

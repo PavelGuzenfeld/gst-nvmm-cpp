@@ -1,8 +1,10 @@
 /// nvmmsink — GPU-copy NVMM IPC sink.
 ///
-/// Allocates a pool of NVMM buffers, copies incoming frames via NvBufSurfaceCopy
-/// (GPU-to-GPU, no CPU involvement), and shares the pool buffer DMA-buf fds with
-/// consumers via SCM_RIGHTS over a unix domain socket.
+/// Allocates a pool of NVMM buffers, copies incoming frames into them via
+/// NvBufSurfTransform (VIC, GPU-to-GPU, no CPU involvement; handles the
+/// BLOCK_LINEAR -> PITCH_LINEAR conversion upstream NVMM producers need), and
+/// shares the pool buffer DMA-buf fds with consumers via SCM_RIGHTS over a unix
+/// domain socket.
 ///
 /// Consumers (nvmmappsrc) import the fds and read directly from GPU memory
 /// (zero-copy on the consumer side). Ref counts in shared memory manage buffer
@@ -140,6 +142,10 @@ allocate_pool(GstNvmmSink *self)
             GST_ERROR_OBJECT(self, "Failed to create pool buffer %d", i);
             return FALSE;
         }
+        /* NvBufSurfaceCreate leaves numFilled = 0; set it so NvBufSurfTransform
+           (render path) accepts buffer index 0 as a valid destination. Mirrors
+           nvmm_buffer.cpp. */
+        surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->pool[i].surface = surf;
         priv->pool[i].fd = (int)surf->surfaceList[0].bufferDesc;
         memset(&priv->pool[i].map_params, 0, sizeof(NvBufSurfaceMapParams));
@@ -462,9 +468,20 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
         return GST_FLOW_OK;
     }
 
-    /* GPU copy: incoming → pool[target] via NvBufSurfaceCopy (synchronous) */
-    if (NvBufSurfaceCopy(src_surf, priv->pool[target].surface) != 0) {
-        fprintf(stderr, "[nvmmsink] NvBufSurfaceCopy failed for pool buffer %d\n", target);
+    /* GPU copy: incoming → pool[target].
+     *
+     * Use NvBufSurfTransform (VIC), NOT NvBufSurfaceCopy. Upstream NVMM
+     * producers (e.g. nvvidconv, nvv4l2decoder) hand us BLOCK_LINEAR tiled
+     * surfaces, while the pool is allocated PITCH_LINEAR. NvBufSurfaceCopy is a
+     * raw memory copy that does not de-tile, so a block-linear -> pitch-linear
+     * copy scrambles the image. NvBufSurfTransform runs through VIC and converts
+     * layout (and, if ever needed, format/size) correctly. */
+    NvBufSurfTransformParams xform;
+    memset(&xform, 0, sizeof(xform));
+    xform.transform_flag = 0;  /* full-surface convert; no crop/flip/scale */
+    if (NvBufSurfTransform(src_surf, priv->pool[target].surface, &xform)
+            != NvBufSurfTransformError_Success) {
+        fprintf(stderr, "[nvmmsink] NvBufSurfTransform failed for pool buffer %d\n", target);
         /* Release writer lock on failure */
         __sync_lock_test_and_set(&header->ref_counts[target], 0);
         return GST_FLOW_ERROR;
