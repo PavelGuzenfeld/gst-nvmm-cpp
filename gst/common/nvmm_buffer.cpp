@@ -1,5 +1,9 @@
 #include "nvmm_buffer.hpp"
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
 #include <nvbufsurface.h>
+#endif
 
 #include <string>
 

@@ -204,7 +204,7 @@ All 7 test suites pass on both Xavier NX and Orin NX:
 ```
  1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
  2/7 nvmm_transform     OK    6 passed   (scale, crop, convert, flip, null safety)
- 3/7 gst_nvmm_allocator OK    6 passed   (create, alloc, surface map, per-plane, roundtrip)
+ 3/7 gst_nvmm_allocator OK    8 passed   (create, alloc, surface map, per-plane, roundtrip)
  4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
  5/7 nvmm_appsrc        OK    2 passed   (create, properties)
  6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
@@ -262,7 +262,7 @@ passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throu
 | VIC transform | 4K -> 1080p | **285** | 217 | 459 |
 | VIC transform | 4K -> 480p | **31** | 26 | 67 |
 
-Orin allocation is **5x faster** than Xavier NX. VIC transform **14-114x faster** depending on resolution.
+Orin allocation is **5x faster** than Xavier NX. VIC transform **14-56x faster** depending on resolution (e.g. 1080p->480p: 1947 us -> 35 us).
 
 Both platforms pass: passthrough, flip, scale, crop, format convert, 500f stress, tee, decoder pipelines.
 
@@ -272,7 +272,7 @@ Evidence that the Tegra VIC (Video Image Compositor) hardware engine is engaged:
 
 1. **NvBufSurfTransform defaults to VIC compute on Jetson** — the API selects `NvBufSurfTransformCompute_Default` which maps to VIC on Tegra (not GPU or CPU).
 
-2. **Transform latency confirms hardware acceleration** — 21 us per 1080p-to-480p scale operation. A CPU-based scale at 1080p would take several milliseconds. The ~47,000 FPS throughput is only achievable via dedicated hardware.
+2. **Transform latency confirms hardware acceleration** — 35 us per 1080p-to-480p scale operation on Orin NX (see table above). A CPU-based scale at 1080p would take several milliseconds. The ~28,500 FPS throughput is only achievable via dedicated hardware.
 
 3. **NVMM SURFACE_ARRAY memory type confirms DMA-coherent allocation** — tests use `NVBUF_MEM_DEFAULT` which resolves to `NVBUF_MEM_SURFACE_ARRAY` on Jetson. This memory type is physically contiguous and managed by the VIC/NVDEC hardware engines. Tests FAIL when using `NVBUF_MEM_SYSTEM` (malloc'd memory) for operations that require hardware access, proving the hardware path is in use.
 
@@ -529,13 +529,13 @@ The build system auto-detects JetPack version via `/etc/nv_tegra_release` and en
 
 ## Tests
 
-40 tests across 7 suites:
+44 tests across 7 suites:
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
-| `nvmm_buffer` | 9 | NvmmBuffer RAII: create, map, unmap, move, export_fd, planes (NV12, RGBA, I420) |
+| `nvmm_buffer` | 10 | NvmmBuffer RAII: create, map, unmap, move, export_fd, planes (NV12, RGBA, I420) |
 | `nvmm_transform` | 6 | NvmmTransform: scale, crop_and_scale, format convert, flip, null safety |
-| `gst_nvmm_allocator` | 5 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
+| `gst_nvmm_allocator` | 8 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
 | `nvmm_sink` | 4 | GstNvmmSink: element creation, properties, state transitions, shm lifecycle |
 | `nvmm_appsrc` | 2 | GstNvmmAppSrc: element creation, properties |
 | `gstcheck_elements` | 8 | Element discovery (3), state transitions (2), property validation, pad template caps, pipeline wiring |
@@ -561,16 +561,15 @@ gst-nvmm-cpp/
 │   │   ├── nvmm_types.hpp   # Result<T>, ByteSpan, enums, error codes
 │   │   ├── nvmm_buffer.hpp  # NvmmBuffer -- RAII wrapper for NvBufSurface
 │   │   ├── nvmm_transform.hpp # NvmmTransform -- NvBufSurfTransform wrapper
-│   │   ├── nvmm_buffer.cpp  # Jetson implementation
-│   │   ├── nvmm_transform.cpp # Jetson implementation
+│   │   ├── nvmm_buffer.cpp  # Impl (mock vs Jetson header via NVMM_MOCK_API)
+│   │   ├── nvmm_transform.cpp # Impl (mock vs Jetson header via NVMM_MOCK_API)
 │   │   ├── nvbufsurface_mock.h # Mock API for x86_64 host builds
-│   │   ├── *_mock.cpp       # Mock implementations
 │   │   └── meson.build
 │   ├── nvmmalloc/           # GstNvmmAllocator plugin
 │   ├── nvmmconvert/         # nvmmconvert element plugin
 │   ├── nvmmsink/            # nvmmsink element plugin
 │   └── nvmmappsrc/          # nvmmappsrc element plugin
-├── tests/                   # 42 unit + integration tests
+├── tests/                   # 44 unit + integration tests
 ├── benchmarks/              # Throughput benchmarks (CSV output)
 ├── test_output/             # Sample images from Jetson pipeline tests
 ├── docker/                  # Dockerfiles for dev, JP5, JP6
