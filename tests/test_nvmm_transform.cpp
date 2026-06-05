@@ -88,6 +88,31 @@ TEST(transform_with_flip) {
     ASSERT_TRUE(result.has_value());
 }
 
+TEST(transform_rotate90) {
+    // 90-degree rotation swaps width and height in the destination.
+    auto src = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
+    auto dst = make_buffer(480, 640, nvmm::ColorFormat::kNV12);
+    ASSERT_TRUE(src.has_value());
+    ASSERT_TRUE(dst.has_value());
+
+    nvmm::TransformParams params;
+    params.flip = nvmm::FlipMethod::kRotate90CW;
+    auto result = nvmm::NvmmTransform::transform(src.value(), dst.value(), params);
+    ASSERT_TRUE(result.has_value());
+}
+
+TEST(transform_rotate270) {
+    auto src = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
+    auto dst = make_buffer(480, 640, nvmm::ColorFormat::kNV12);
+    ASSERT_TRUE(src.has_value());
+    ASSERT_TRUE(dst.has_value());
+
+    nvmm::TransformParams params;
+    params.flip = nvmm::FlipMethod::kRotate90CCW;
+    auto result = nvmm::NvmmTransform::transform(src.value(), dst.value(), params);
+    ASSERT_TRUE(result.has_value());
+}
+
 TEST(transform_with_crop_and_flip) {
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(320, 240, nvmm::ColorFormat::kNV12);

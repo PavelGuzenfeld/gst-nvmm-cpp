@@ -71,6 +71,25 @@ run_pipeline "flip-180" \
     nvvidconv ! 'video/x-raw,format=I420' ! nvjpegenc ! \
     filesink location="$OUT/ci_flip180.jpg"
 
+# rotate-90 / rotate-270 swap width and height (640x480 -> 480x640).
+run_pipeline "rotate-90" \
+    videotestsrc num-buffers=1 pattern=smpte ! \
+    'video/x-raw,width=640,height=480,format=I420' ! \
+    nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+    nvmmconvert flip-method=rotate-90 ! \
+    'video/x-raw(memory:NVMM),width=480,height=640' ! \
+    nvvidconv ! 'video/x-raw,format=I420' ! nvjpegenc ! \
+    filesink location="$OUT/ci_rotate90.jpg"
+
+run_pipeline "rotate-270" \
+    videotestsrc num-buffers=1 pattern=smpte ! \
+    'video/x-raw,width=640,height=480,format=I420' ! \
+    nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+    nvmmconvert flip-method=rotate-270 ! \
+    'video/x-raw(memory:NVMM),width=480,height=640' ! \
+    nvvidconv ! 'video/x-raw,format=I420' ! nvjpegenc ! \
+    filesink location="$OUT/ci_rotate270.jpg"
+
 run_pipeline "scale-1080p-480p" \
     videotestsrc num-buffers=1 pattern=smpte ! \
     'video/x-raw,width=1920,height=1080,format=I420' ! \

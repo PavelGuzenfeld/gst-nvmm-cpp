@@ -27,7 +27,7 @@ Video crop, scale, and color format conversion using the **Tegra VIC** (Video Im
 | `crop-y` | uint | 0 | Source crop Y offset (pixels) |
 | `crop-w` | uint | 0 | Source crop width (0 = full width) |
 | `crop-h` | uint | 0 | Source crop height (0 = full height) |
-| `flip-method` | int | 0 | 0=none, 1=90CW, 2=180, 3=90CCW, 4=flipH, 5=transpose, 6=flipV, 7=inv-transpose |
+| `flip-method` | enum | 0 | 0=none, 1=rotate-90 (CW), 2=rotate-180, 3=rotate-270 (CCW), 4=horizontal-flip, 6=vertical-flip |
 
 **Supported formats:** NV12, RGBA, I420, BGRA
 
@@ -203,7 +203,7 @@ All 7 test suites pass on both Xavier NX and Orin NX:
 
 ```
  1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
- 2/7 nvmm_transform     OK    6 passed   (scale, crop, convert, flip, null safety)
+ 2/7 nvmm_transform     OK    8 passed   (scale, crop, convert, flip, rotate 90/270, null safety)
  3/7 gst_nvmm_allocator OK    8 passed   (create, alloc, surface map, per-plane, roundtrip)
  4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
  5/7 nvmm_appsrc        OK    2 passed   (create, properties)
@@ -212,8 +212,8 @@ All 7 test suites pass on both Xavier NX and Orin NX:
 Ok: 7   Fail: 0
 ```
 
-8 pipeline tests also pass via `scripts/jetson-test.sh`:
-passthrough, flip-180, scale, crop, format-convert, decoder, tee-2way, 30f-throughput.
+10 pipeline tests also pass via `scripts/jetson-test.sh`:
+passthrough, flip-180, rotate-90, rotate-270, scale, crop, format-convert, decoder, tee-2way, 30f-throughput.
 
 ### Stress Tests
 
@@ -386,6 +386,8 @@ All operations verified via `gst-launch-1.0` on Jetson Xavier NX:
 |-----------|--------|
 | Passthrough | ![passthrough](test_output/convert_passthrough.jpg) |
 | Flip 180° | ![flip180](test_output/convert_flip180.jpg) |
+| Rotate 90° CW (640×480→480×640) | ![rotate90](test_output/convert_rotate90.jpg) |
+| Rotate 270° CCW (640×480→480×640) | ![rotate270](test_output/convert_rotate270.jpg) |
 | Flip horizontal | ![flipH](test_output/convert_flipH.jpg) |
 | Scale 1080p→480p | ![scale](test_output/convert_scale.jpg) |
 | Crop (100,50,800,600) | ![crop](test_output/convert_crop.jpg) |
@@ -539,12 +541,12 @@ The build system auto-detects JetPack version via `/etc/nv_tegra_release` and en
 
 ## Tests
 
-44 tests across 7 suites:
+46 tests across 7 suites:
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
 | `nvmm_buffer` | 10 | NvmmBuffer RAII: create, map, unmap, move, export_fd, planes (NV12, RGBA, I420) |
-| `nvmm_transform` | 6 | NvmmTransform: scale, crop_and_scale, format convert, flip, null safety |
+| `nvmm_transform` | 8 | NvmmTransform: scale, crop_and_scale, format convert, flip, rotate 90/270 (dimension swap), null safety |
 | `gst_nvmm_allocator` | 8 | GstNvmmAllocator: create, alloc/free, map/unmap, write/read round-trip, non-NVMM rejection |
 | `nvmm_sink` | 4 | GstNvmmSink: element creation, properties, state transitions, shm lifecycle |
 | `nvmm_appsrc` | 2 | GstNvmmAppSrc: element creation, properties |
@@ -579,7 +581,7 @@ gst-nvmm-cpp/
 │   ├── nvmmconvert/         # nvmmconvert element plugin
 │   ├── nvmmsink/            # nvmmsink element plugin
 │   └── nvmmappsrc/          # nvmmappsrc element plugin
-├── tests/                   # 44 unit + integration tests
+├── tests/                   # 46 unit + integration tests
 ├── benchmarks/              # Throughput benchmarks (CSV output)
 ├── test_output/             # Sample images from Jetson pipeline tests
 ├── docker/                  # Dockerfiles for dev, JP5, JP6
