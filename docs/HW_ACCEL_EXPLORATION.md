@@ -34,6 +34,71 @@ Target hardware (verified box: Jetson Xavier NX, JP5.1.2; also Orin NX):
 
 ---
 
+## Reality check — what NVIDIA already ships (build vs. reuse)
+
+Before building anything, map each idea against what NVIDIA already provides.
+There are three off-the-shelf sources:
+
+- **L4T "Accelerated GStreamer"** — free, ships with JetPack
+  (`apt install nvidia-l4t-gstreamer`), upstream-ish GStreamer elements:
+  `nvvidconv`, `nvv4l2decoder`, `nvv4l2h264enc`/`h265enc`, `nvjpegenc`/`nvjpegdec`,
+  `nvarguscamerasrc`.
+- **DeepStream SDK** — free to use but **heavyweight**: large install, its own
+  `NvDsBatchMeta` metadata model, redistribution licensing, and version lock-step
+  with specific JetPacks. Elements: `nvstreammux` (batch), `nvmultistreamtiler`
+  (tiling/mosaic), `nvdsosd` (overlay/OSD), `nvinfer` (TensorRT incl. DLA),
+  `nvof` (optical flow), `nvvideoconvert`, `nvdspreprocess` (ROI + normalize),
+  `nvtracker`.
+- **VPI** — a **library** (not GStreamer): OFA optical flow, PVA stereo/KLT, etc.
+  No stock GStreamer element — you wrap it yourself.
+
+### Mapping
+
+| Capability | NVIDIA off-the-shelf | Verdict for this project |
+|---|---|---|
+| 2D scale/crop/convert/flip (VIC) | `nvvidconv` (L4T, free) | **Parity** — `nvmmconvert` overlaps it; our edge is open-source + integration with our NVMM pool/IPC, not new 2D features |
+| Scaling interpolation filter | `nvvidconv interpolation-method` | **Parity** — our Phase-1 `interpolation` matches it; no new ground |
+| JPEG encode/decode (NVJPG) | `nvjpegenc` / `nvjpegdec` (L4T, free) | **PASS** — reuse; only build NVMM-native variant if a zero-copy gap is *measured* |
+| Video decode (NVDEC) | `nvv4l2decoder` (L4T, free) | **PASS** — reuse |
+| Video encode (NVENC) | `nvv4l2h264enc` (L4T, free; Xavier only) | **PASS** — reuse |
+| Camera / ISP | `nvarguscamerasrc` (L4T, free) | **PASS** — reuse |
+| Tiling / mosaic | `nvmultistreamtiler` (DeepStream) | **BUILD only if avoiding DeepStream** — else pass |
+| Overlay / blend (OSD) | `nvdsosd` (DeepStream) | **BUILD only if avoiding DeepStream** — else pass |
+| Inference (DLA/GPU) | `nvinfer` (DeepStream/TensorRT) | **PASS** for DeepStream users; niche = lightweight no-DS element |
+| Optical flow (OFA) | `nvof` (DeepStream) + VPI (lib) | **THIN-WRAP VPI** if open-source/no-DS wanted; else pass |
+| Normalize for inference | `nvdspreprocess` (DeepStream) | VIC `NORMALIZE` (Part A.4) is the no-DS equivalent |
+| **Cross-process zero-copy NVMM IPC** | **nothing** (DeepStream batches *within one process*; `nvstreammux` is not cross-process) | **BUILD — this is our unique value** |
+
+### Conclusion that re-centers the plan
+
+Single-engine wrapping is **mostly a solved problem** off-the-shelf. The honest
+differentiated value of gst-nvmm-cpp is the combination NVIDIA does *not* ship:
+
+1. **Cross-process, zero-copy NVMM sharing** (`nvmmsink`/`nvmmappsrc`) — share GPU
+   frames between *independent* processes without DeepStream and without a CPU copy
+   on the consumer. DeepStream is single-process; there is no stock element pair
+   for this.
+2. **Lightweight, open-source (LGPL), upstream-able** elements with a real
+   `GstAllocator` for `NvBufSurface` — no SDK install, no metadata-model lock-in,
+   no licensing friction.
+3. **No DeepStream dependency** — for teams (ROS2 nodes, custom inference servers)
+   that want NVMM interop but can't or won't pull in DeepStream.
+
+**So prioritise the niche, not the wrappers:**
+- **Do build:** anything that extends the cross-process IPC story (multi-consumer,
+  metadata/timestamp sidechannel, ROS2-native consumer), and *small* open-source
+  elements only where the no-DeepStream angle is the point.
+- **Thin-wrap (only if no-DS matters):** OFA/PVA via VPI, a minimal DLA inference
+  element.
+- **Pass (reuse NVIDIA's):** JPEG, encode, decode, camera/ISP — document the
+  recommended stock element instead of reimplementing.
+- **Re-scope Part B accordingly:** `nvmmjpegenc`/`nvmmenc` drop to "only if a
+  measured zero-copy gap" (likely PASS); `nvmmcompositor`/`nvmminfer`/`nvmmofa`
+  become "no-DeepStream alternatives," explicitly positioned against their
+  DeepStream equivalents.
+
+---
+
 ## Part A — VIC capabilities we do NOT use yet
 
 `nvmmconvert` exposes only: src-crop, scale, color-convert, and flip/rotate
