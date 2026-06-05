@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(gst-nvmm-cpp
-    VERSION 1.0.1
+    VERSION 1.1.0
     LANGUAGES C CXX
 )
 
