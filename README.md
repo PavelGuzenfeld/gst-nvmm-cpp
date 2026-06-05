@@ -35,7 +35,7 @@ Video crop, scale, and color format conversion using the **Tegra VIC** (Video Im
 
 ### nvmmsink
 
-Shares NVMM video frames across processes via a **GPU-copy pool**: incoming buffers are copied GPU-to-GPU (via `NvBufSurfaceCopy`) into a fixed pool of NVMM buffers, whose DMA-buf fds are handed to consumers over a unix-domain socket (SCM_RIGHTS). Consumers (ROS2 nodes, inference engines, visualization tools) import the fds and read directly from GPU memory — no further copies, no CPU in the data path.
+Shares NVMM video frames across processes via a **GPU-copy pool**: incoming buffers are copied GPU-to-GPU (via `NvBufSurfTransform` on the VIC, which also de-tiles BLOCK_LINEAR input into the pool's PITCH_LINEAR layout) into a fixed pool of NVMM buffers, whose DMA-buf fds are handed to consumers over a unix-domain socket (SCM_RIGHTS). Consumers (ROS2 nodes, inference engines, visualization tools) import the fds and read directly from GPU memory — no further copies, no CPU in the data path.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -348,18 +348,26 @@ gst-launch-1.0 videotestsrc num-buffers=1 pattern=ball ! \
 
 Verified inter-process video sharing via POSIX shared memory:
 
+`nvmmsink` only accepts `video/x-raw(memory:NVMM)`, and `nvmmappsrc` emits
+`video/x-raw(memory:NVMM)`, so both ends use `nvvidconv` (VIC) to cross the
+NVMM boundary — never `videoconvert`, which is CPU-only and cannot consume NVMM:
+
 ```bash
-# Producer (background): write SMPTE frames to shm
+# Producer (background): SMPTE frames -> NVMM -> shm
 gst-launch-1.0 videotestsrc num-buffers=50 pattern=smpte ! \
   'video/x-raw,width=640,height=480,format=I420,framerate=10/1' ! \
+  nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
   nvmmsink shm-name=/ipc_test sync=true &
 
-# Consumer: read from shm, save JPEG
+# Consumer: import from shm, NVMM -> system memory -> JPEG
 gst-launch-1.0 -e nvmmappsrc shm-name=/ipc_test is-live=true ! \
-  videoconvert ! jpegenc ! filesink location=ipc_480p.jpg
+  'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
+  nvjpegenc ! filesink location=ipc_480p.jpg
 ```
 
-IPC consumer output at 480p and 1080p (H264 decode → NVMM → CPU → shm → consumer):
+The producer makes one GPU-side copy (VIC) of each incoming frame into the
+shared pool; the consumer imports the pool buffer's DMA-buf fd and reads it in
+place (no further copy). IPC consumer output at 480p and 1080p:
 
 ![IPC 480p](test_output/ipc_480p.jpg)
 ![IPC 1080p](test_output/ipc_1080p.jpg)
@@ -458,16 +466,18 @@ gst-launch-1.0 ... ! nvmmconvert flip-method=4 ! ...
 
 ### Inter-process video sharing
 
-**Process A** (producer):
+**Process A** (producer — `nvv4l2decoder` outputs NVMM, which `nvmmsink` takes directly):
 ```bash
 gst-launch-1.0 \
-  nvv4l2decoder ! nvmmsink shm-name=/video_feed
+  ... ! nvv4l2decoder ! 'video/x-raw(memory:NVMM)' ! nvmmsink shm-name=/video_feed
 ```
 
-**Process B** (consumer):
+**Process B** (consumer — `nvvidconv` brings NVMM to system memory for display;
+a hardware-encoder consumer like `nvv4l2h264enc` can read the NVMM buffer in
+place with no `nvvidconv`, see the fan-out example below):
 ```bash
 gst-launch-1.0 \
-  nvmmappsrc shm-name=/video_feed ! videoconvert ! autovideosink
+  nvmmappsrc shm-name=/video_feed ! nvvidconv ! videoconvert ! autovideosink
 ```
 
 ### Multi-camera fan-out to multiple consumers
