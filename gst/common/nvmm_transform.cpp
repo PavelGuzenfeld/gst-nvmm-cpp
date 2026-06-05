@@ -26,6 +26,19 @@ NvBufSurfTransform_Flip to_nv_flip(FlipMethod flip) {
     return NvBufSurfTransform_None;
 }
 
+NvBufSurfTransform_Inter to_nv_inter(Interpolation interp) {
+    switch (interp) {
+        case Interpolation::kNearest:  return NvBufSurfTransformInter_Nearest;
+        case Interpolation::kBilinear: return NvBufSurfTransformInter_Bilinear;
+        case Interpolation::k5Tap:     return NvBufSurfTransformInter_Algo1;
+        case Interpolation::k10Tap:    return NvBufSurfTransformInter_Algo2;
+        case Interpolation::kSmart:    return NvBufSurfTransformInter_Algo3;
+        case Interpolation::kNicest:   return NvBufSurfTransformInter_Algo4;
+        case Interpolation::kDefault:  return NvBufSurfTransformInter_Default;
+    }
+    return NvBufSurfTransformInter_Default;
+}
+
 }  // namespace
 
 Result<void> NvmmTransform::transform(
@@ -60,6 +73,13 @@ Result<void> NvmmTransform::transform(
 
     if (params.flip != FlipMethod::kNone) {
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FLIP;
+    }
+
+    // Only request an explicit filter when the caller overrides the default,
+    // so default behaviour is unchanged from before this knob existed.
+    if (params.interpolation != Interpolation::kDefault) {
+        xform.transform_filter = to_nv_inter(params.interpolation);
+        xform.transform_flag |= NVBUFSURF_TRANSFORM_FILTER;
     }
 
     NvBufSurfTransform_Error ret = NvBufSurfTransform(src.raw(), dst.raw(), &xform);
