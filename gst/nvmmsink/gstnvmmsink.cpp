@@ -514,7 +514,7 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
 
     g_object_class_install_property(gobject_class, PROP_POOL_SIZE_PROP,
         g_param_spec_int("pool-size", "Pool Size",
-            "Number of NVMM buffers in the pool (3-8)",
+            "Number of NVMM buffers in the pool (3-16)",
             3, NVMM_POOL_SIZE, NVMM_POOL_SIZE,
             G_PARAM_READWRITE));
 
