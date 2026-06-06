@@ -23,7 +23,7 @@ Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
 | 2.4 | Upstream code style (GEnum, atomics, debug category) | Done |
 | 4.1 | DMA-buf fd export in nvmmsink (superseded) | Done |
 | 4.2 | BLOCK_LINEAR layout support | Done (decoder→nvmmconvert pipeline; nvmmsink de-tiles via NvBufSurfTransform) |
-| 4.3 | GstVideoMeta with real NVMM strides | Pending (meta is attached, but with GstVideoInfo strides, not planeParams pitches) |
+| 4.3 | GstVideoMeta with real NVMM strides | Done (pool stamps meta from planeParams.pitch/offset; regression-tested on Jetson) |
 | 4.4 | Caps renegotiation (mid-stream resolution change) | Done (stress-tested, 4 resolution changes) |
 | 4.5 | LGPL-2.1 COPYING file | Done |
 | 4.6 | Jetson CI script | Done (scripts/jetson-test.sh) |
@@ -295,17 +295,21 @@ produces correct output with no garbling. Compare with `nvvidconv` baseline.
 
 ---
 
-### 4.3 GstVideoMeta with real NVMM strides
+### 4.3 GstVideoMeta with real NVMM strides — DONE
 
 **Problem:** Buffer pool attaches `GstVideoMeta` using `GstVideoInfo` strides, but
 NVMM surfaces may have different actual strides (alignment, padding). Downstream
 elements that use the meta get wrong plane offsets.
 
-**Fix:** After `NvBufSurfaceCreate`, read actual strides from `planeParams.pitch[]`
-and `planeParams.offset[]`, use those in `gst_buffer_add_video_meta_full()`.
+**Fix (done):** `GstNvmmBufferPool::alloc_buffer` reads the surface's actual
+`planeParams.pitch[]` / `planeParams.offset[]` and stamps them via
+`gst_buffer_add_video_meta_full()` (GstVideoInfo only as fallback when no
+surface).
 
-**Test:** Verify `GstVideoMeta` strides match `NvBufSurface` planeParams on Jetson
-for NV12 1080p and RGBA 720p.
+**Test (done):** `test_gst_nvmm_allocator` → `pool_video_meta_real_strides`
+acquires a pooled buffer and asserts `vmeta->stride[i] == planeParams.pitch[i]`
+(and offsets). Passes in mock and on Jetson Xavier NX, where the real pitch is
+hardware-aligned and differs from the GstVideoInfo stride.
 
 ---
 
@@ -368,13 +372,11 @@ Verify output is valid RGBA JPEG with correct colors.
 Phase 1 (done): 1.1-1.6
 Phase 2 (done): 2.1-2.4
 Phase 3 (done): 3.1-3.5
-Phase 4 (done): 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.8
-Phase 4 (remaining):
-  4.3  GstVideoMeta real strides → use planeParams.pitch/offset, not GstVideoInfo
+Phase 4 (done): 4.1-4.8
 ```
 
-Each item: implement → unit test → integration test → Jetson validation.
-No item is complete until all pass.
+**All planned items are complete**, each through implement → unit test →
+integration test → Jetson validation.
 
 > **Beyond this plan.** Subsequent hardware-validated work (the v1.1.x line):
 > the nvmmconvert `interpolation` property, rotate-90/270 coverage, the
