@@ -3,6 +3,7 @@
 #include <gst/gst.h>
 
 #include "gstnvmmsink.h"
+#include "shm_protocol.h"
 
 #include <cstdio>
 
@@ -45,6 +46,30 @@ static void test_sink_properties() {
     g_object_get(sink, "shm-name", &name, NULL);
     ASSERT_TRUE(g_strcmp0(name, "/test_nvmm_sink") == 0);
     g_free(name);
+
+    gst_object_unref(sink);
+    PASS();
+}
+
+/* pool-size is guarded to [13, 16]: a smaller pool starves the producer because
+   the consumer holds up to RELEASE_DELAY (12) in-flight buffers. GObject enforces
+   the param-spec range (rejecting out-of-range sets), so < 13 can't be configured. */
+static void test_sink_pool_size_guarded() {
+    GstElement *sink = gst_element_factory_make("nvmmsink", NULL);
+    ASSERT_NOT_NULL(sink);
+
+    GParamSpec *pspec =
+        g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "pool-size");
+    ASSERT_NOT_NULL(pspec);
+    GParamSpecInt *ispec = G_PARAM_SPEC_INT(pspec);
+    ASSERT_TRUE(ispec->minimum == NVMM_MIN_POOL_SIZE);  /* 13 */
+    ASSERT_TRUE(ispec->maximum == NVMM_POOL_SIZE);      /* 16 */
+
+    /* A value inside the safe range round-trips. */
+    gint ps = 0;
+    g_object_set(sink, "pool-size", 14, NULL);
+    g_object_get(sink, "pool-size", &ps, NULL);
+    ASSERT_TRUE(ps == 14);
 
     gst_object_unref(sink);
     PASS();
@@ -105,6 +130,7 @@ int main(int argc, char *argv[]) {
 
     RUN_TEST(sink_creates);
     RUN_TEST(sink_properties);
+    RUN_TEST(sink_pool_size_guarded);
     RUN_TEST(sink_state_transition);
     RUN_TEST(sink_shm_created);
 
