@@ -141,36 +141,83 @@ These are the cheapest wins — same engine, same buffers, mostly new properties
 Each reuses the existing `NvBufSurface` allocator + buffer-pool plumbing, so
 input/output stay zero-copy on the GPU.
 
-### B1. `nvmmjpegenc` / `nvmmjpegdec` — NVJPG (both chips)
-Hardware JPEG straight from/to NVMM, no CPU bounce. `nvjpegenc` exists upstream
-but goes through system memory; an NVMM-native variant keeps the surface on-GPU
-end-to-end (camera → ISP → NVMM → NVJPG → file/socket). Low risk, both SoCs.
+### B1. `nvmmjpegenc` / `nvmmjpegdec` — NVJPG (both chips) — ✅ PASS (reuse stock), measured 2026-06-07
+Hardware JPEG straight from/to NVMM. **Measured, dual-host:** the assumption that
+stock `nvjpegenc` "goes through system memory" is **wrong** — on both Xavier (JP5)
+and Orin (JP6), `gst-inspect-1.0 nvjpegenc`/`nvjpegdec` advertise
+`video/x-raw(memory:NVMM)` on the relevant pad, and
+`videotestsrc ! nvvidconv ! 'video/x-raw(memory:NVMM),NV12' ! nvjpegenc ! filesink`
+runs rc=0 with valid output (~670 KB) and **no** system-memory conversion in the
+path. There is no zero-copy gap, so per the re-scope this stays **PASS** — document
+the stock `nvjpegenc`/`nvjpegdec` recommendation instead of building a variant.
 
-### B2. `nvmmcompositor` — VIC composite/blend (both chips)
-Multi-pad mixer using `NvBufSurfTransformMultiInputBufCompositeBlend`: N NVMM
-inputs → one tiled/blended NVMM output. Headline use case: multi-camera fan-in to
-a single mosaic, or OSD/mask overlay. Pairs naturally with the existing
-multi-camera `nvmmsink` fan-out.
+### B2. `nvmmcompositor` — VIC composite/blend (both chips) — ✅ DONE (v1.2.0)
+Multi-pad mixer: N NVMM inputs → one tiled NVMM output. Headline use case:
+multi-camera fan-in to a single mosaic, or OSD/mask overlay. Pairs naturally with
+the existing multi-camera `nvmmsink` fan-out.
+
+**Shipped:** `GstAggregator`-based element with request `sink_%u` pads, each
+carrying `xpos`/`ypos`/`width`/`height` placement; element `width`/`height` set
+the output size. Each pad is blitted into its rectangle via `NvBufSurfTransform`
+with `CROP_DST` (one VIC transform per pad) — simpler than the batched
+`NvBufSurfTransformMultiInputBufCompositeBlend` and sufficient for opaque
+mosaic/PiP. Built on `GstAggregator` because `GstVideoAggregator`'s
+`GstVideoFrame` mapping does not understand NVMM memory.
+
+**Validated dual-host:** 4 mock unit tests (create/props/request-pads/placement,
+ASan+UBSan clean with `libasan` preload); 2-input composite run on Xavier
+(JP5, Docker) and Orin (JP6, native), side-by-side placement visually confirmed
+on Orin; sustained 600-frame 2×1080p throughput **~68 fps Xavier / ~164 fps
+Orin**, rc=0. Docs: [`nvmmcompositor`](elements/nvmmcompositor.md) element page +
+[compositing pipeline example](pipelines.md#multi-input-compositing-mosaic-pip).
+See [Validation](validation.md).
+
+**Future enhancement (not blocking):** the output buffer is not cleared, so
+layouts must tile the full frame (or use a background pad); alpha blend / true
+`CompositeBlend` and a clear/background option are deferred.
 
 ### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**)
 Dense/semi-dense optical flow between consecutive NVMM frames, output as a motion-
 vector surface. VPI exposes OFA with zero-copy NvBufSurface wrapping. Gated to
 Orin (Xavier has no dedicated OFA) — build-time / runtime capability check.
 
+**Phase-0 verdict (2026-06-07): VIABLE, deferred.** Orin ships **VPI 3** with
+`OpticalFlowDense.h`, and VPI's image API exposes `VPI_IMAGE_BUFFER_NVBUFFER`
+("on Tegra platforms only") — i.e. VPI wraps an externally-allocated NvBuffer/
+NvBufSurface **zero-copy**, no VPIImage copy. So the prerequisite holds; this is a
+real thin-wrap, Orin-gated. Not built yet — it's a new VPI dependency (Phase 3)
+and a multi-day element; surface to the user before starting.
+
 ### B4. `nvmmcv` — PVA vision ops via VPI (both chips)
 Wrap selected VPI algorithms that run on PVA (e.g. stereo disparity, KLT feature
 tracking, box/Gaussian filtering, remap/undistort) as GStreamer transform
 elements. PVA keeps GPU/CPU free for other work. PVA v2 on Orin, 2× PVA on Xavier.
+
+**Phase-0 verdict (2026-06-07): VIABLE, deferred.** Same VPI-3 zero-copy NvBuffer
+wrap as B3; `StereoDisparity.h`/`OpticalFlowPyrLK.h` present on Orin. Viable thin-
+wrap on both SoCs. Larger Phase-3 build sharing B3's VPI plumbing; deferred pending
+user go-ahead.
 
 ### B5. `nvmminfer` — DLA/GPU inference via TensorRT (both chips)
 Run a TensorRT engine on a DLA core (fallback GPU) directly on NVMM input, with
 the VIC `NORMALIZE` preprocessing (Part A.4) folded in. Output tensors/meta on the
 GStreamer bus. The most ambitious; depends on Part A.4 + a tensor-meta design.
 
-### B6. `nvmmenc` — NVENC (**Xavier only; document Orin gap**)
-NVMM-native H.264/H.265 encode. Must detect NVENC absence on Orin NX and either
-fail with a clear message or fall back to a GPU/CPU encoder. Lower priority given
-the portability footgun.
+**Phase-0 verdict (2026-06-07): VIABLE, deferred (largest scope).** Orin ships
+**TensorRT 10.3** (`NvInfer.h` + `libnvinfer-dev`). TensorRT binds raw CUDA device
+pointers, and an NvBufSurface exposes a device pointer per surface, so input
+binding without a copy is achievable. But this is the largest item (tensor-meta
+design + DLA engine build + Part A.4 NORMALIZE) — **explicitly surface to the user
+before committing the multi-day build.**
+
+### B6. `nvmmenc` — NVENC (**Xavier only; document Orin gap**) — ✅ PASS (reuse stock), measured 2026-06-07
+NVMM-native H.264/H.265 encode. **Measured, dual-host:** stock `nvv4l2h264enc`
+advertises `video/x-raw(memory:NVMM)` sink caps and encodes straight from an NVMM
+buffer (`… ! 'video/x-raw(memory:NVMM),NV12' ! nvv4l2h264enc ! h264parse ! filesink`,
+rc=0, valid bitstream) on both Xavier and Orin — no system-memory bounce. No
+zero-copy gap → **PASS**; recommend the stock `nvv4l2{h264,h265}enc`. (V4L2 encode
+is also present on Orin NX here, so the original "Xavier-only" caveat is moot for
+the reuse recommendation.)
 
 ---
 
@@ -188,7 +235,7 @@ property, dst-crop/letterbox, transpose/inv-transpose enum values, and (optional
 already trust; unit-testable in mock + pipeline-testable on hardware.
 
 **Phase 2 — NVJPG + Compositor productionized (B1, B2).** Highest value/lowest
-risk, both SoCs.
+risk, both SoCs. **B2 `nvmmcompositor` done (v1.2.0)**; B1 NVJPG next.
 
 **Phase 3 — VPI engines (B3 OFA Orin, B4 PVA).** New dependency (VPI); gate by
 SoC capability.
@@ -201,7 +248,28 @@ for CI (extend `nvbufsurface_mock.h` with the new API stubs), real verification 
 the Jetson, README + tests, then a version bump + tag.
 
 ## Open questions for Phase 0
-- Does VPI wrap an externally-allocated `NvBufSurface` zero-copy, or require its
-  own `VPIImage` allocation (a copy)? Determines B3/B4 viability.
-- TensorRT DLA: input binding from an `NvBufSurface` device pointer without a copy?
+- ~~Does VPI wrap an externally-allocated `NvBufSurface` zero-copy, or require its
+  own `VPIImage` allocation (a copy)? Determines B3/B4 viability.~~ **Answered
+  2026-06-07:** yes — VPI 3 (installed on Orin) exposes `VPI_IMAGE_BUFFER_NVBUFFER`
+  ("on Tegra platforms only"), the zero-copy NvBuffer/NvBufSurface wrap path.
+  B3/B4 viable.
+- ~~TensorRT DLA: input binding from an `NvBufSurface` device pointer without a
+  copy?~~ **Likely yes** — TensorRT 10.3 (installed on Orin) binds raw CUDA device
+  pointers and NvBufSurface exposes a per-surface device pointer; full reproducer
+  deferred with the B5 build.
 - Mock strategy for VPI/TensorRT in CI (stub vs. skip-on-host).
+
+## Status summary (2026-06-07)
+| Item | Verdict | Evidence |
+|------|---------|----------|
+| Part A (nvmmconvert) | ✅ DONE | interpolation, dst-crop, flip/rotate, compute-mode shipped |
+| B1 nvmmjpegenc/dec | ✅ PASS (reuse stock) | stock `nvjpegenc`/`nvjpegdec` do NVMM zero-copy, measured both hosts |
+| B2 nvmmcompositor | ✅ DONE (v1.2.0) | element shipped + dual-host validated (PR #25) |
+| B6 nvmmenc | ✅ PASS (reuse stock) | stock `nvv4l2h264enc` encodes from NVMM, measured both hosts |
+| B3 nvmmofa (OFA) | 🟡 VIABLE, deferred | VPI 3 zero-copy NvBuffer wrap + OFA on Orin; Phase 3 |
+| B4 nvmmcv (PVA) | 🟡 VIABLE, deferred | VPI 3 + Stereo/PyrLK on PVA; Phase 3 |
+| B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
+
+Phases 1–2 are complete and the "reuse stock" items (B1/B6) are measured-closed.
+What remains (B3/B4/B5) is new-dependency, multi-day work to be picked up per the
+phasing above with user sign-off.

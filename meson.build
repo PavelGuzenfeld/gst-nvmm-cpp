@@ -131,6 +131,7 @@ endif
 subdir('gst/common')
 subdir('gst/nvmmalloc')
 subdir('gst/nvmmconvert')
+subdir('gst/nvmmcompositor')
 subdir('gst/nvmmsink')
 subdir('gst/nvmmappsrc')
 subdir('tests')
