@@ -39,6 +39,15 @@ NvBufSurfTransform_Inter to_nv_inter(Interpolation interp) {
     return NvBufSurfTransformInter_Default;
 }
 
+NvBufSurfTransform_Compute to_nv_compute(ComputeMode m) {
+    switch (m) {
+        case ComputeMode::kGpu: return NvBufSurfTransformCompute_GPU;
+        case ComputeMode::kVic: return NvBufSurfTransformCompute_VIC;
+        case ComputeMode::kDefault: return NvBufSurfTransformCompute_Default;
+    }
+    return NvBufSurfTransformCompute_Default;
+}
+
 }  // namespace
 
 Result<void> NvmmTransform::transform(
@@ -80,6 +89,16 @@ Result<void> NvmmTransform::transform(
     if (params.interpolation != Interpolation::kDefault) {
         xform.transform_filter = to_nv_inter(params.interpolation);
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FILTER;
+    }
+
+    // Select the compute engine (VIC vs GPU) when the caller overrides the
+    // default. Session params are process-global, so only touch them on override.
+    if (params.compute != ComputeMode::kDefault) {
+        NvBufSurfTransformConfigParams cfg{};
+        cfg.compute_mode = to_nv_compute(params.compute);
+        cfg.gpu_id = 0;
+        cfg.cuda_stream = nullptr;
+        NvBufSurfTransformSetSessionParams(&cfg);
     }
 
     NvBufSurfTransform_Error ret = NvBufSurfTransform(src.raw(), dst.raw(), &xform);

@@ -225,6 +225,14 @@ enum class Interpolation : int {
     kDefault = 6,   // NvBufSurfTransformInter_Default
 };
 
+/// Which compute engine performs the transform. kDefault lets the driver pick
+/// (VIC on Tegra). Maps to NvBufSurfTransformCompute_*.
+enum class ComputeMode : int {
+    kDefault = 0,
+    kGpu = 1,
+    kVic = 2,
+};
+
 /// Crop rectangle
 struct CropRect {
     uint32_t x = 0;
@@ -243,6 +251,7 @@ struct TransformParams {
     CropRect dst_crop;
     FlipMethod flip = FlipMethod::kNone;
     Interpolation interpolation = Interpolation::kDefault;
+    ComputeMode compute = ComputeMode::kDefault;
 };
 
 }  // namespace nvmm

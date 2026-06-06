@@ -126,6 +126,19 @@ TEST(transform_with_interpolation) {
     ASSERT_TRUE(result.has_value());
 }
 
+TEST(transform_with_compute_mode) {
+    // Selecting the VIC compute engine explicitly must still succeed.
+    auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
+    auto dst = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
+    ASSERT_TRUE(src.has_value());
+    ASSERT_TRUE(dst.has_value());
+
+    nvmm::TransformParams params;
+    params.compute = nvmm::ComputeMode::kVic;
+    auto result = nvmm::NvmmTransform::transform(src.value(), dst.value(), params);
+    ASSERT_TRUE(result.has_value());
+}
+
 TEST(transform_with_crop_and_flip) {
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(320, 240, nvmm::ColorFormat::kNV12);
