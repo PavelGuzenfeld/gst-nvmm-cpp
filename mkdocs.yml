@@ -43,6 +43,7 @@ nav:
   - Getting started: getting-started.md
   - Elements:
       - nvmmconvert: elements/nvmmconvert.md
+      - nvmmcompositor: elements/nvmmcompositor.md
       - nvmmsink: elements/nvmmsink.md
       - nvmmappsrc: elements/nvmmappsrc.md
       - nvmmalloc: elements/nvmmalloc.md

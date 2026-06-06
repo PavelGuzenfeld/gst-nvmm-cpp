@@ -67,6 +67,20 @@ test_gstcheck = executable('test_gstcheck_elements',
 plugin_path_with_convert = plugin_path + ':' + \
     meson.current_build_dir() / '..' / 'gst' / 'nvmmconvert'
 
+compositor_plugin_path = meson.current_build_dir() / '..' / 'gst' / 'nvmmcompositor' \
+    + ':' + meson.current_build_dir() / '..' / 'gst' / 'nvmmalloc'
+
+test_compositor = executable('test_nvmm_compositor',
+  'test_nvmm_compositor.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [gst_dep, gst_base_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+test('nvmm_compositor', test_compositor, protocol : 'exitcode',
+  is_parallel : false,
+  env : ['GST_PLUGIN_PATH=' + compositor_plugin_path])
+
 test('nvmm_sink', test_sink, protocol : 'exitcode',
   is_parallel : false,
   env : ['GST_PLUGIN_PATH=' + plugin_path])

@@ -35,6 +35,7 @@ elements.
 | Element | Role |
 |---|---|
 | [`nvmmconvert`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip on the VIC |
+| [`nvmmcompositor`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmcompositor/) | Composite multiple NVMM inputs into one frame (mosaic / PiP) on the VIC |
 | [`nvmmsink`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsink/) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
 | [`nvmmappsrc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmappsrc/) | Import a producer's pool fds and read GPU memory in place |
 | [`nvmmalloc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface` |
@@ -62,7 +63,7 @@ in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
 ## Status
 
 Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and native:
-**50 unit/integration tests + 11 on-hardware pipeline tests**, AddressSanitizer
+**54 unit/integration tests + 13 on-hardware pipeline tests**, AddressSanitizer
 and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
 [Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 
@@ -80,6 +81,7 @@ gst-nvmm-cpp/
 │   ├── common/      # Shared C++ types, RAII NvBufSurface wrappers, mock API
 │   ├── nvmmalloc/   # GstNvmmAllocator plugin
 │   ├── nvmmconvert/ # nvmmconvert element
+│   ├── nvmmcompositor/ # nvmmcompositor element
 │   ├── nvmmsink/    # nvmmsink element
 │   └── nvmmappsrc/  # nvmmappsrc element
 ├── tests/           # unit + integration tests

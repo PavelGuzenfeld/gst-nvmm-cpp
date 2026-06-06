@@ -7,23 +7,33 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 7 test suites pass on both Xavier NX and Orin NX:
+All 8 test suites pass on both Xavier NX and Orin NX:
 
 ```
- 1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
- 2/7 nvmm_transform     OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
- 3/7 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
- 4/7 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
- 5/7 nvmm_appsrc        OK    2 passed   (create, properties)
- 6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
- 7/7 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 7   Fail: 0
+ 1/8 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
+ 2/8 nvmm_transform     OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
+ 3/8 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
+ 4/8 nvmm_compositor    OK    4 passed   (create, output props, request pads, pad placement props)
+ 5/8 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
+ 6/8 nvmm_appsrc        OK    2 passed   (create, properties)
+ 7/8 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 8/8 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+Ok: 8   Fail: 0
 ```
 
 11 pipeline tests also pass via `scripts/jetson-test.sh`:
 passthrough, flip-180, rotate-90, rotate-270, scale, crop, format-convert,
 decoder, tee-2way, 30f-throughput, and the two-process IPC pipeline
 (`nvmmsink` → `nvmmappsrc`, verified frames cross the process boundary).
+
+The compositor logic (`aggregate()` → `NvBufSurfTransform` `CROP_DST`) needs real
+NVMM buffers to run, so it is covered on-hardware rather than in the mock unit
+test: a 2-input composite was run on **both** hosts (`videotestsrc` smpte + ball
+→ `nvmmcompositor` → JPEG, rc=0). On Orin a side-by-side layout was visually
+confirmed — smpte in the left tile (`sink_0`, xpos=0), ball in the right
+(`sink_1`, xpos=640); on Xavier the default-fill composite was visually confirmed
+(VIC-scaled input). These two runs are the +2 on-hardware pipeline tests over the
+jetson-test.sh set.
 
 ## Stress tests
 
@@ -52,12 +62,33 @@ The GPU engine is faster than the VIC for this downscale on both platforms; pick
 `compute-mode=vic` instead to keep the GPU free for other work. Orin is ~1.4×
 Xavier across the board.
 
+## Throughput / sustained-load (nvmmcompositor)
+
+600 frames of a 2-input composite (two 960×1080 inputs → one 1920×1080 NVMM
+frame, VIC `CROP_DST` per pad) in one run, `fakesink sync=false`. Both runs
+completed rc=0 — no crash, stall, or leak.
+
+| Host | inputs → output | 600 frames | Throughput |
+|------|-----------------|------------|------------|
+| Xavier NX (JP5.1.2, Docker) | 2×960×1080 → 1920×1080 | 8.8 s | ~68 fps |
+| Orin NX (JP6, native) | 2×960×1080 → 1920×1080 | 3.7 s | ~164 fps |
+
+Two VIC transforms per output frame; Orin sustains real-time 1080p compositing of
+two streams with headroom to spare.
+
 ## Sanitizer results
 
 | Sanitizer | Tests | Result |
 |-----------|-------|--------|
 | AddressSanitizer | 22 (buffer + transform + allocator) | Clean |
 | ThreadSanitizer | 22 (buffer + transform + allocator) | Clean |
+
+The element tests (`nvmm_compositor`, `nvmm_sink`, `gstcheck_elements`,
+`integration`) load plugins via `dlopen`, which trips ASan's *"runtime does not
+come first"* check unless `libasan` is `LD_PRELOAD`ed. With the preload all four
+`nvmm_compositor` subtests pass clean under ASan+UBSan; the leak is in the
+GStreamer plugin loader, not this code. The compositor's data path reuses the
+already-sanitized `NvBufSurfTransform` wrapper (covered by `nvmm_transform`).
 
 ## Benchmark results
 

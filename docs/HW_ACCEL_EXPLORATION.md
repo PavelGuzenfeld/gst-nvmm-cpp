@@ -146,11 +146,30 @@ Hardware JPEG straight from/to NVMM, no CPU bounce. `nvjpegenc` exists upstream
 but goes through system memory; an NVMM-native variant keeps the surface on-GPU
 end-to-end (camera → ISP → NVMM → NVJPG → file/socket). Low risk, both SoCs.
 
-### B2. `nvmmcompositor` — VIC composite/blend (both chips)
-Multi-pad mixer using `NvBufSurfTransformMultiInputBufCompositeBlend`: N NVMM
-inputs → one tiled/blended NVMM output. Headline use case: multi-camera fan-in to
-a single mosaic, or OSD/mask overlay. Pairs naturally with the existing
-multi-camera `nvmmsink` fan-out.
+### B2. `nvmmcompositor` — VIC composite/blend (both chips) — ✅ DONE (v1.2.0)
+Multi-pad mixer: N NVMM inputs → one tiled NVMM output. Headline use case:
+multi-camera fan-in to a single mosaic, or OSD/mask overlay. Pairs naturally with
+the existing multi-camera `nvmmsink` fan-out.
+
+**Shipped:** `GstAggregator`-based element with request `sink_%u` pads, each
+carrying `xpos`/`ypos`/`width`/`height` placement; element `width`/`height` set
+the output size. Each pad is blitted into its rectangle via `NvBufSurfTransform`
+with `CROP_DST` (one VIC transform per pad) — simpler than the batched
+`NvBufSurfTransformMultiInputBufCompositeBlend` and sufficient for opaque
+mosaic/PiP. Built on `GstAggregator` because `GstVideoAggregator`'s
+`GstVideoFrame` mapping does not understand NVMM memory.
+
+**Validated dual-host:** 4 mock unit tests (create/props/request-pads/placement,
+ASan+UBSan clean with `libasan` preload); 2-input composite run on Xavier
+(JP5, Docker) and Orin (JP6, native), side-by-side placement visually confirmed
+on Orin; sustained 600-frame 2×1080p throughput **~68 fps Xavier / ~164 fps
+Orin**, rc=0. Docs: [`nvmmcompositor`](elements/nvmmcompositor.md) element page +
+[compositing pipeline example](pipelines.md#multi-input-compositing-mosaic-pip).
+See [Validation](validation.md).
+
+**Future enhancement (not blocking):** the output buffer is not cleared, so
+layouts must tile the full frame (or use a background pad); alpha blend / true
+`CompositeBlend` and a clear/background option are deferred.
 
 ### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**)
 Dense/semi-dense optical flow between consecutive NVMM frames, output as a motion-
@@ -188,7 +207,7 @@ property, dst-crop/letterbox, transpose/inv-transpose enum values, and (optional
 already trust; unit-testable in mock + pipeline-testable on hardware.
 
 **Phase 2 — NVJPG + Compositor productionized (B1, B2).** Highest value/lowest
-risk, both SoCs.
+risk, both SoCs. **B2 `nvmmcompositor` done (v1.2.0)**; B1 NVJPG next.
 
 **Phase 3 — VPI engines (B3 OFA Orin, B4 PVA).** New dependency (VPI); gate by
 SoC capability.

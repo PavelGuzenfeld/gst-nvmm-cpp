@@ -93,6 +93,31 @@ The pool's per-slot `ref_counts` handle the fan-out: each consumer atomically
 increments its slot's count on read and decrements when done; the producer reuses
 a slot only once its count is back to 0. Buffers stay GPU-resident end to end.
 
+## Multi-input compositing (mosaic / PiP)
+
+Combine several NVMM streams into one frame on the VIC — a 2-up side-by-side, a
+2×2 quad, or a picture-in-picture — without DeepStream. Each input is scaled and
+blitted into its rectangle; the output stays NVMM and zero-copy into encoders,
+`nvmmsink`, or the IPC pool. See [`nvmmcompositor`](elements/nvmmcompositor.md)
+for the pad-placement properties and a Python snippet that sets them.
+
+```bash
+# 2x2 quad of four cameras into a 1280x720 NVMM frame, encoded to file.
+# (Tile sizes/positions are pad properties — set them from code; gst-launch
+#  links the pads positionally.)
+gst-launch-1.0 -e \
+  nvmmcompositor name=c width=1280 height=720 \
+  c. ! 'video/x-raw(memory:NVMM)' ! nvv4l2h264enc ! h264parse ! qtmux \
+     ! filesink location=/tmp/quad.mp4 \
+  nvmmappsrc shm-name=/cam1 ! 'video/x-raw(memory:NVMM),format=NV12' ! c.sink_0 \
+  nvmmappsrc shm-name=/cam2 ! 'video/x-raw(memory:NVMM),format=NV12' ! c.sink_1 \
+  nvmmappsrc shm-name=/cam3 ! 'video/x-raw(memory:NVMM),format=NV12' ! c.sink_2 \
+  nvmmappsrc shm-name=/cam4 ! 'video/x-raw(memory:NVMM),format=NV12' ! c.sink_3
+```
+
+Pair it with the multi-camera producer above to composite live camera feeds into
+a single monitoring view, all GPU-resident.
+
 ## ROS2 / non-GStreamer bridge
 
 See [Zero-copy IPC](ipc.md#ros2-non-gstreamer-consumers) for the wire protocol and
