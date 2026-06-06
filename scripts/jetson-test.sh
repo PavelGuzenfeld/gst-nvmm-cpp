@@ -157,20 +157,30 @@ echo "--- IPC Pipeline Test (two-process nvmmsink -> nvmmappsrc) ---"
 SHM_NAME="/nvmm_test_e2e_$$"
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-# Producer: ~6.6s of frames at 30fps so it stays alive while the consumer pulls.
+# Producer: a LIVE source paced at 30fps (is-live=true) so it stays alive ~10s
+# while the consumer connects and pulls — an un-paced source blasts its frames
+# and tears down the shm/socket before the consumer can read them.
+#
+# Use the default pool-size (16). It MUST exceed the consumer's delayed-release
+# depth (RELEASE_DELAY=12): a consumer holds a ref on up to that many in-flight
+# buffers, so a smaller pool (e.g. 8) starves the producer of free slots and the
+# stream stalls after pool-size frames.
 gst-launch-1.0 -e \
-    videotestsrc num-buffers=200 pattern=ball ! \
+    videotestsrc is-live=true num-buffers=300 pattern=ball ! \
     'video/x-raw,width=640,height=480,format=I420,framerate=30/1' ! \
     nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
-    nvmmsink shm-name="$SHM_NAME" pool-size=8 >/dev/null 2>&1 &
+    nvmmsink shm-name="$SHM_NAME" sync=true >/dev/null 2>&1 &
 IPC_PROD_PID=$!
 
 # Wait for the producer to create the shm segment.
 for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
 
-# Consumer (separate process): import the pool and pull 10 frames cross-process.
+# Consumer (separate process): import the pool and pull 20 frames cross-process.
+# Pass on a clear majority (>=15) — the first frame(s) during the connect/preroll
+# handshake aren't always counted, so we allow startup slack rather than demand
+# an exact count. The point is that frames demonstrably cross the boundary.
 IPC_RX=$(timeout 20 gst-launch-1.0 -e \
-    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers=10 ! \
+    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers=20 ! \
     'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
     fakesink silent=false -v 2>/dev/null | grep -c "chain")
 
@@ -178,7 +188,7 @@ kill "$IPC_PROD_PID" 2>/dev/null || true
 wait "$IPC_PROD_PID" 2>/dev/null || true
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-if [ "${IPC_RX:-0}" -ge 10 ]; then
+if [ "${IPC_RX:-0}" -ge 15 ]; then
     pass "ipc-pipeline (${IPC_RX} frames RX cross-process)"
 else
     fail "ipc-pipeline (frames_rx=${IPC_RX:-0})"
