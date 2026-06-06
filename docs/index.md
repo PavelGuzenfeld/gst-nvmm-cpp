@@ -30,7 +30,7 @@ for. See [Zero-copy IPC](ipc.md).
 
 ## Status
 
-Validated on Jetson Xavier NX (JP5.1.2) and Orin NX (JP6): 49 unit/integration
+Validated on Jetson Xavier NX (JP5.1.2) and Orin NX (JP6): 50 unit/integration
 tests + 11 on-hardware pipeline tests (incl. the two-process IPC test) — see
 [Validation & benchmarks](validation.md).
 What's next is tracked on the [Roadmap](PRODUCTION_PLAN.md).
