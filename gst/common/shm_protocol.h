@@ -18,6 +18,10 @@ extern "C" {
 #define NVMM_SHM_VERSION 2           /* bump on wire-layout changes */
 
 #define NVMM_POOL_SIZE 16  /* number of buffers in the GPU-copy pool */
+/* Minimum pool size. A consumer (nvmmappsrc) holds a ref on up to its
+   RELEASE_DELAY (12) most-recent in-flight buffers, so the pool must have at
+   least RELEASE_DELAY + 1 slots or a steady consumer starves the producer. */
+#define NVMM_MIN_POOL_SIZE 13
 
 typedef struct NvmmShmHeader {
     uint32_t magic;           /* NVMM_SHM_MAGIC */

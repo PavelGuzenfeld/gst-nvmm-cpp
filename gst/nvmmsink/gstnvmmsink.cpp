@@ -245,7 +245,11 @@ gst_nvmm_sink_set_property(GObject *object, guint prop_id,
             self->priv->shm_name = g_value_get_string(value) ? g_value_get_string(value) : "";
             break;
         case PROP_POOL_SIZE_PROP:
-            self->priv->pool_size = CLAMP(g_value_get_int(value), 3, NVMM_POOL_SIZE);
+            /* Min NVMM_MIN_POOL_SIZE: a consumer (nvmmappsrc) holds a ref on up
+               to RELEASE_DELAY (12) in-flight buffers, so a smaller pool lets a
+               steady consumer hold every slot and starve the producer. */
+            self->priv->pool_size =
+                CLAMP(g_value_get_int(value), NVMM_MIN_POOL_SIZE, NVMM_POOL_SIZE);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -514,8 +518,9 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
 
     g_object_class_install_property(gobject_class, PROP_POOL_SIZE_PROP,
         g_param_spec_int("pool-size", "Pool Size",
-            "Number of NVMM buffers in the pool (3-16)",
-            3, NVMM_POOL_SIZE, NVMM_POOL_SIZE,
+            "Number of NVMM buffers in the pool (13-16). Must exceed the "
+            "consumer's RELEASE_DELAY (12) or a steady consumer starves the producer.",
+            NVMM_MIN_POOL_SIZE, NVMM_POOL_SIZE, NVMM_POOL_SIZE,
             G_PARAM_READWRITE));
 
     gst_element_class_set_static_metadata(element_class,
