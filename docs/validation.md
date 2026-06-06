@@ -35,6 +35,23 @@ decoder, tee-2way, 30f-throughput, and the two-process IPC pipeline
 | tee x3 with different transforms | PASS |
 | Caps renegotiation (4 resolution changes) | PASS |
 
+## Throughput / sustained-load (nvmmconvert, compute-mode)
+
+1000 frames 1080p→480p through `nvmmconvert` in one run (sustained-load stress +
+per-engine throughput), `fakesink sync=false`. All runs completed with rc=0 — no
+crash, stall, or leak over the run.
+
+| Host | compute-mode | 1000 frames | Throughput |
+|------|--------------|-------------|------------|
+| Xavier NX (JP5.1.2) | vic | 26.4 s | ~38 fps |
+| Xavier NX (JP5.1.2) | gpu | 20.2 s | ~50 fps |
+| Orin NX (JP6) | vic | 18.0 s | ~56 fps |
+| Orin NX (JP6) | gpu | 14.4 s | ~69 fps |
+
+The GPU engine is faster than the VIC for this downscale on both platforms; pick
+`compute-mode=vic` instead to keep the GPU free for other work. Orin is ~1.4×
+Xavier across the board.
+
 ## Sanitizer results
 
 | Sanitizer | Tests | Result |
