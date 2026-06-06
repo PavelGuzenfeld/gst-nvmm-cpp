@@ -13,7 +13,7 @@ All 7 test suites pass on both Xavier NX and Orin NX:
  1/7 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
  2/7 nvmm_transform     OK    9 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, null safety)
  3/7 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
- 4/7 nvmm_sink          OK    4 passed   (create, properties, state, shm lifecycle)
+ 4/7 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
  5/7 nvmm_appsrc        OK    2 passed   (create, properties)
  6/7 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
  7/7 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
