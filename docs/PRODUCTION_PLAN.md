@@ -1,6 +1,11 @@
 # Production Readiness Plan
 
-Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
+**Status: ✅ Complete.** All phases (1–4) are implemented, tested, and
+Jetson-validated — this document is now a record of the work done. Forward-looking
+work continues in the [hardware-acceleration plan](HW_ACCEL_EXPLORATION.md).
+
+Original goal: prioritized work to make gst-nvmm-cpp production-ready and
+upstream-viable.
 
 ## Status
 
