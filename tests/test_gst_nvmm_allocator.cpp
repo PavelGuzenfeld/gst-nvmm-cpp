@@ -5,6 +5,13 @@
 #include <gst/video/video.h>
 
 #include "gstnvmmallocator.h"
+#include "gstnvmmbufferpool.h"
+
+#ifdef NVMM_MOCK_API
+#include "nvbufsurface_mock.h"
+#else
+#include <nvbufsurface.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -150,6 +157,50 @@ static void test_alloc_video_invalid() {
     PASS();
 }
 
+/* The buffer pool must stamp GstVideoMeta with the surface's REAL NVMM strides
+   (planeParams.pitch/offset), not the GstVideoInfo defaults — hardware alignment
+   makes them differ on Jetson (e.g. 640-wide NV12 -> 768 pitch). Production plan 4.3. */
+static void test_pool_video_meta_real_strides() {
+    GstBufferPool* pool = gst_nvmm_buffer_pool_new();
+    ASSERT_NOT_NULL(pool);
+
+    GstCaps* caps = gst_caps_from_string(
+        "video/x-raw(memory:NVMM), format=(string)NV12, "
+        "width=(int)1920, height=(int)1080");
+    GstVideoInfo vinfo;
+    ASSERT_TRUE(gst_video_info_from_caps(&vinfo, caps));
+
+    GstStructure* config = gst_buffer_pool_get_config(pool);
+    gst_buffer_pool_config_set_params(config, caps,
+        (guint)GST_VIDEO_INFO_SIZE(&vinfo), 2, 4);
+    ASSERT_TRUE(gst_buffer_pool_set_config(pool, config));
+    ASSERT_TRUE(gst_buffer_pool_set_active(pool, TRUE));
+
+    GstBuffer* buf = NULL;
+    ASSERT_TRUE(gst_buffer_pool_acquire_buffer(pool, &buf, NULL) == GST_FLOW_OK);
+    ASSERT_NOT_NULL(buf);
+
+    GstVideoMeta* vmeta = gst_buffer_get_video_meta(buf);
+    ASSERT_NOT_NULL(vmeta);
+
+    void* surface = gst_nvmm_memory_get_surface(gst_buffer_peek_memory(buf, 0));
+    ASSERT_NOT_NULL(surface);
+    NvBufSurface* nvsurf = static_cast<NvBufSurface*>(surface);
+    NvBufSurfacePlaneParams& pp = nvsurf->surfaceList[0].planeParams;
+
+    /* GstVideoMeta strides/offsets must match the surface's planeParams. */
+    for (guint i = 0; i < vmeta->n_planes; i++) {
+        ASSERT_TRUE(vmeta->stride[i] == (gint)pp.pitch[i]);
+        ASSERT_TRUE(vmeta->offset[i] == (gsize)pp.offset[i]);
+    }
+
+    gst_buffer_unref(buf);
+    gst_buffer_pool_set_active(pool, FALSE);
+    gst_object_unref(pool);
+    gst_caps_unref(caps);
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     gst_init(&argc, &argv);
     printf("=== GstNvmmAllocator Tests ===\n");
@@ -162,6 +213,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(per_plane_map);
     RUN_TEST(per_plane_write_read_roundtrip);
     RUN_TEST(non_nvmm_memory_rejected);
+    RUN_TEST(pool_video_meta_real_strides);
 
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     gst_deinit();
