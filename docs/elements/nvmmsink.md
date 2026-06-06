@@ -16,6 +16,13 @@ Sink caps: `video/x-raw(memory:NVMM)`, `{NV12, RGBA, I420, BGRA}`.
 | `shm-name` | string | `/nvmm_sink_0` | POSIX shared-memory segment name (e.g. `/cam1`) |
 | `pool-size` | int (3–16) | 16 | Number of NVMM buffers in the shared pool |
 
+!!! warning "Keep pool-size above the consumer's hold depth"
+    `nvmmappsrc` holds a reference on up to `RELEASE_DELAY` (12) in-flight
+    buffers (to cover the consumer's hardware-encoder pipeline depth). If
+    `pool-size` ≤ 12, a steady consumer can hold every slot, starving the
+    producer — the stream then stalls after ~`pool-size` frames. Keep the
+    **default (16)**, or set `pool-size` ≥ 13 when a consumer is attached.
+
 ## Example (producer)
 
 ```bash

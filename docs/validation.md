@@ -20,9 +20,10 @@ All 7 test suites pass on both Xavier NX and Orin NX:
 Ok: 7   Fail: 0
 ```
 
-10 pipeline tests also pass via `scripts/jetson-test.sh`:
+11 pipeline tests also pass via `scripts/jetson-test.sh`:
 passthrough, flip-180, rotate-90, rotate-270, scale, crop, format-convert,
-decoder, tee-2way, 30f-throughput.
+decoder, tee-2way, 30f-throughput, and the two-process IPC pipeline
+(`nvmmsink` → `nvmmappsrc`, verified frames cross the process boundary).
 
 ## Stress tests
 

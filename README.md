@@ -62,7 +62,7 @@ in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
 ## Status
 
 Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and native:
-**47 unit/integration tests + 10 on-hardware pipeline tests**, AddressSanitizer
+**47 unit/integration tests + 11 on-hardware pipeline tests**, AddressSanitizer
 and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
 [Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 

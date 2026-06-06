@@ -22,13 +22,13 @@ Prioritized work to make gst-nvmm-cpp production-ready and upstream-viable.
 | 2.3 | Dynamic shm sizing | Done |
 | 2.4 | Upstream code style (GEnum, atomics, debug category) | Done |
 | 4.1 | DMA-buf fd export in nvmmsink (superseded) | Done |
-| 4.2 | BLOCK_LINEAR layout support | Pending |
-| 4.3 | GstVideoMeta with real NVMM strides | Pending |
-| 4.4 | Caps renegotiation (mid-stream resolution change) | Pending |
-| 4.5 | LGPL-2.1 COPYING file | Pending |
-| 4.6 | Jetson CI script | Pending |
-| 4.7 | Fix allocator dimension heuristic | Pending |
-| 4.8 | Format conversion pipeline test (NV12→RGBA) | Pending |
+| 4.2 | BLOCK_LINEAR layout support | Done (decoder→nvmmconvert pipeline; nvmmsink de-tiles via NvBufSurfTransform) |
+| 4.3 | GstVideoMeta with real NVMM strides | Pending (meta is attached, but with GstVideoInfo strides, not planeParams pitches) |
+| 4.4 | Caps renegotiation (mid-stream resolution change) | Done (stress-tested, 4 resolution changes) |
+| 4.5 | LGPL-2.1 COPYING file | Done |
+| 4.6 | Jetson CI script | Done (scripts/jetson-test.sh) |
+| 4.7 | Fix allocator dimension heuristic | Done (gst_nvmm_allocator_alloc_video(); byte-heuristic alloc removed) |
+| 4.8 | Format conversion pipeline test (NV12→RGBA) | Done (jetson-test.sh format-convert-NV12-RGBA) |
 
 ## Phase 1 — Make it actually work
 
@@ -280,7 +280,7 @@ into a pool of its own NVMM buffers and shares those fds instead.
 
 ---
 
-### 4.2 BLOCK_LINEAR layout support
+### 4.2 BLOCK_LINEAR layout support — DONE
 
 **Problem:** `NvBufSurfaceCreate` hardcodes `NVBUF_LAYOUT_PITCH`. NVIDIA decoders
 (`nvv4l2decoder`) output `NVBUF_LAYOUT_BLOCK_LINEAR` surfaces. Passing block-linear
@@ -309,7 +309,7 @@ for NV12 1080p and RGBA 720p.
 
 ---
 
-### 4.4 Caps renegotiation (mid-stream resolution change)
+### 4.4 Caps renegotiation (mid-stream resolution change) — DONE
 
 **Problem:** If upstream changes resolution, `set_caps` recreates the buffer pool
 but doesn't drain outstanding buffers. Can crash or leak.
@@ -323,13 +323,13 @@ thread while buffers are in-flight.
 
 ---
 
-### 4.5 LGPL-2.1 COPYING file
+### 4.5 LGPL-2.1 COPYING file — DONE
 
 Add `COPYING` with LGPL-2.1-or-later text. Update `meson.build` license field.
 
 ---
 
-### 4.6 Jetson CI script
+### 4.6 Jetson CI script — DONE
 
 Create `scripts/jetson-test.sh` that:
 1. Builds on Jetson
@@ -342,7 +342,7 @@ Document SSH-based invocation from GitHub Actions or local.
 
 ---
 
-### 4.7 Fix allocator dimension heuristic
+### 4.7 Fix allocator dimension heuristic — DONE
 
 **Problem:** `gst_allocator_alloc(alloc, size, NULL)` guesses dimensions from byte
 count assuming NV12. Wrong for RGBA. Wrong for non-standard resolutions.
@@ -352,7 +352,7 @@ count assuming NV12. Wrong for RGBA. Wrong for non-standard resolutions.
 
 ---
 
-### 4.8 Format conversion pipeline test (NV12→RGBA)
+### 4.8 Format conversion pipeline test (NV12→RGBA) — DONE
 
 Test `nvmmconvert` doing color space conversion in a real pipeline:
 ```
@@ -368,15 +368,16 @@ Verify output is valid RGBA JPEG with correct colors.
 Phase 1 (done): 1.1-1.6
 Phase 2 (done): 2.1-2.4
 Phase 3 (done): 3.1-3.5
-Phase 4:
-  4.5  COPYING file             → trivial
-  4.8  Format conversion test   → pipeline test on Jetson
-  4.2  BLOCK_LINEAR layout      → test with real decoder on Jetson
-  4.3  GstVideoMeta strides     → test on Jetson
-  4.7  Allocator video_info API → test → Docker + Jetson
-  4.4  Caps renegotiation       → test → stress on Jetson
-  4.6  Jetson CI script         → test
+Phase 4 (done): 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.8
+Phase 4 (remaining):
+  4.3  GstVideoMeta real strides → use planeParams.pitch/offset, not GstVideoInfo
 ```
 
 Each item: implement → unit test → integration test → Jetson validation.
 No item is complete until all pass.
+
+> **Beyond this plan.** Subsequent hardware-validated work (the v1.1.x line):
+> the nvmmconvert `interpolation` property, rotate-90/270 coverage, the
+> two-process IPC pipeline test, and the IPC correctness fix (numFilled on
+> imported surfaces + NvBufSurfTransform de-tiling in nvmmsink). Future
+> engine work is tracked in the [hardware-acceleration plan](HW_ACCEL_EXPLORATION.md).
