@@ -58,6 +58,25 @@ gst_nvmm_interpolation_get_type(void)
     return type;
 }
 
+#define GST_TYPE_NVMM_COMPUTE_MODE (gst_nvmm_compute_mode_get_type())
+static GType
+gst_nvmm_compute_mode_get_type(void)
+{
+    static GType type = 0;
+    if (g_once_init_enter(&type)) {
+        /* Values match nvmm::ComputeMode / NvBufSurfTransformCompute_*. */
+        static const GEnumValue values[] = {
+            {0, "Default (driver picks; VIC on Tegra)", "default"},
+            {1, "GPU", "gpu"},
+            {2, "VIC", "vic"},
+            {0, NULL, NULL}
+        };
+        GType tmp = g_enum_register_static("GstNvmmComputeMode", values);
+        g_once_init_leave(&type, tmp);
+    }
+    return type;
+}
+
 enum {
     PROP_0,
     PROP_CROP_X,
@@ -66,6 +85,7 @@ enum {
     PROP_CROP_H,
     PROP_FLIP_METHOD,
     PROP_INTERPOLATION,
+    PROP_COMPUTE_MODE,
 };
 
 struct _GstNvmmConvertPrivate {
@@ -75,6 +95,7 @@ struct _GstNvmmConvertPrivate {
     std::atomic<uint32_t> crop_h;
     std::atomic<int> flip;
     std::atomic<int> interpolation;
+    std::atomic<int> compute;
     GstVideoInfo sink_info;
     GstVideoInfo src_info;
     GstBufferPool* pool;
@@ -94,6 +115,9 @@ static void gst_nvmm_convert_set_property(GObject* object, guint prop_id,
         case PROP_CROP_Y: self->priv->crop_y.store(g_value_get_uint(value)); break;
         case PROP_CROP_W: self->priv->crop_w.store(g_value_get_uint(value)); break;
         case PROP_CROP_H: self->priv->crop_h.store(g_value_get_uint(value)); break;
+        case PROP_COMPUTE_MODE:
+            self->priv->compute.store(g_value_get_enum(value));
+            break;
         case PROP_INTERPOLATION:
             self->priv->interpolation.store(g_value_get_enum(value));
             break;
@@ -112,6 +136,9 @@ static void gst_nvmm_convert_get_property(GObject* object, guint prop_id,
         case PROP_CROP_Y: g_value_set_uint(value, self->priv->crop_y.load()); break;
         case PROP_CROP_W: g_value_set_uint(value, self->priv->crop_w.load()); break;
         case PROP_CROP_H: g_value_set_uint(value, self->priv->crop_h.load()); break;
+        case PROP_COMPUTE_MODE:
+            g_value_set_enum(value, self->priv->compute.load());
+            break;
         case PROP_INTERPOLATION:
             g_value_set_enum(value, self->priv->interpolation.load());
             break;
@@ -352,6 +379,8 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
     params.flip = static_cast<nvmm::FlipMethod>(self->priv->flip.load());
     params.interpolation =
         static_cast<nvmm::Interpolation>(self->priv->interpolation.load());
+    params.compute =
+        static_cast<nvmm::ComputeMode>(self->priv->compute.load());
 
     auto result = nvmm::NvmmTransform::transform(src_buf, dst_buf, params);
 
@@ -494,6 +523,12 @@ static void gst_nvmm_convert_class_init(GstNvmmConvertClass* klass) {
                           GST_TYPE_NVMM_INTERPOLATION, 6,
                           static_cast<GParamFlags>(G_PARAM_READWRITE |
                               G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(gobject_class, PROP_COMPUTE_MODE,
+        g_param_spec_enum("compute-mode", "Compute Mode",
+                          "Engine that performs the transform (default/gpu/vic)",
+                          GST_TYPE_NVMM_COMPUTE_MODE, 0,
+                          static_cast<GParamFlags>(G_PARAM_READWRITE |
+                              G_PARAM_STATIC_STRINGS)));
 
     GST_DEBUG_CATEGORY_INIT(gst_nvmm_convert_debug, "nvmmconvert", 0,
                             "NVMM video converter");
@@ -557,5 +592,6 @@ static void gst_nvmm_convert_init(GstNvmmConvert* self) {
     self->priv->crop_h = 0;
     self->priv->flip = 0;
     self->priv->interpolation = 6;  /* NvBufSurfTransformInter_Default */
+    self->priv->compute = 0;        /* NvBufSurfTransformCompute_Default */
     self->priv->pool = NULL;
 }

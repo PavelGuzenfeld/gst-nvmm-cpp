@@ -126,10 +126,10 @@ considerably more, all on the VIC we already drive:
    segmentation mask) onto video. No element today.
 7. **Batch transforms** (`batchSize > 1`) — transform an array of surfaces in one
    VIC call. We always run batch=1; batching raises throughput for multi-stream.
-8. **Async + explicit compute mode / CUDA stream** (`NvBufSurfTransformConfigParams`
-   + `*Async`) — we run synchronous, `Compute_Default`. We could (a) pin to
-   `Compute_VIC` to keep the GPU free, or `Compute_GPU` when VIC is saturated, and
-   (b) pipeline via async + sync objects.
+8. **Explicit compute mode** (`NvBufSurfTransformConfigParams`) — **DONE** (v1.1.x):
+   `nvmmconvert` has a `compute-mode` property (`default`/`gpu`/`vic`) — pin to VIC
+   to keep the GPU free, or GPU when the VIC is saturated. Validated on Xavier +
+   Orin. **Remaining:** async pipelining via `*Async` + sync objects.
 
 These are the cheapest wins — same engine, same buffers, mostly new properties on
 `nvmmconvert` or one new `nvmmcompositor` element.

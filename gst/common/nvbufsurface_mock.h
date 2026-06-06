@@ -104,6 +104,25 @@ typedef enum {
     NvBufSurfTransformInter_Default = 6
 } NvBufSurfTransform_Inter;
 
+typedef enum {
+    NvBufSurfTransformCompute_Default = 0,
+    NvBufSurfTransformCompute_GPU,
+    NvBufSurfTransformCompute_VIC
+} NvBufSurfTransform_Compute;
+
+typedef struct {
+    NvBufSurfTransform_Compute compute_mode;
+    int32_t gpu_id;
+    void* cuda_stream;  /* real type is cudaStream_t; opaque in the mock */
+} NvBufSurfTransformConfigParams;
+
+/* Session config is process-global in the real API; the mock just records it. */
+static inline NvBufSurfTransform_Error
+NvBufSurfTransformSetSessionParams(NvBufSurfTransformConfigParams* params) {
+    (void)params;
+    return NvBufSurfTransformError_Success;
+}
+
 typedef struct {
     uint32_t top;
     uint32_t left;
