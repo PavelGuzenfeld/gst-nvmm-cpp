@@ -8,7 +8,7 @@ elements — hardware-accelerated crop, scale, format conversion, rotate/flip, a
 Built with **C++14** internals and a **C-ABI** boundary to GStreamer. LGPL,
 no DeepStream dependency.
 
-> 📖 **Full documentation:** <https://pavelguzenfeld.github.io/gst-nvmm-cpp/>
+> 📖 **Full documentation:** <https://pavelguzenfeld.com/gst-nvmm-cpp/>
 > — elements & properties, getting started, the zero-copy IPC design, pipeline
 > examples, and hardware validation/benchmarks.
 
@@ -34,15 +34,15 @@ elements.
 
 | Element | Role |
 |---|---|
-| [`nvmmconvert`](https://pavelguzenfeld.github.io/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip on the VIC |
-| [`nvmmsink`](https://pavelguzenfeld.github.io/gst-nvmm-cpp/elements/nvmmsink/) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
-| [`nvmmappsrc`](https://pavelguzenfeld.github.io/gst-nvmm-cpp/elements/nvmmappsrc/) | Import a producer's pool fds and read GPU memory in place |
-| [`nvmmalloc`](https://pavelguzenfeld.github.io/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface` |
+| [`nvmmconvert`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip on the VIC |
+| [`nvmmsink`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsink/) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
+| [`nvmmappsrc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmappsrc/) | Import a producer's pool fds and read GPU memory in place |
+| [`nvmmalloc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface` |
 
 The headline capability NVIDIA ships no stock element for: **cross-process,
 zero-copy NVMM sharing** (`nvmmsink` → `nvmmappsrc`) — single GPU-side copy on
 the producer, zero-copy import on every consumer. See the
-[Zero-copy IPC](https://pavelguzenfeld.github.io/gst-nvmm-cpp/ipc/) docs.
+[Zero-copy IPC](https://pavelguzenfeld.com/gst-nvmm-cpp/ipc/) docs.
 
 ## Quick start
 
@@ -57,14 +57,14 @@ ninja -C builddir
 ```
 
 Full build/install/run instructions, pipeline examples, and the IPC design are
-in the [documentation site](https://pavelguzenfeld.github.io/gst-nvmm-cpp/).
+in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
 
 ## Status
 
 Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and native:
 **47 unit/integration tests + 10 on-hardware pipeline tests**, AddressSanitizer
 and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
-[Validation & benchmarks](https://pavelguzenfeld.github.io/gst-nvmm-cpp/validation/).
+[Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 
 | JetPack | L4T | Jetson | NvBufSurface | Status |
 |---------|-----|--------|--------------|--------|

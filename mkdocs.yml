@@ -2,7 +2,7 @@ site_name: gst-nvmm-cpp
 site_description: >-
   Zero-copy NVMM-native GStreamer elements for NVIDIA Jetson — open-source,
   lightweight, no DeepStream.
-site_url: https://pavelguzenfeld.github.io/gst-nvmm-cpp/
+site_url: https://pavelguzenfeld.com/gst-nvmm-cpp/
 repo_url: https://github.com/PavelGuzenfeld/gst-nvmm-cpp
 repo_name: PavelGuzenfeld/gst-nvmm-cpp
 edit_uri: edit/main/docs/
