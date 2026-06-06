@@ -5,3 +5,6 @@ build/
 *.so
 *.a
 compile_commands.json
+
+# MkDocs build output
+/site/
