@@ -148,6 +148,44 @@ run_pipeline "30f-throughput" \
 
 echo ""
 
+# --- IPC pipeline test (two-process nvmmsink -> nvmmappsrc) ---
+# Verifies frames actually cross the process boundary: a background producer
+# publishes NVMM frames to a shared pool; a separate consumer process imports
+# the pool fds and pulls a fixed number of frames. Implementation-agnostic —
+# counts buffers that reach the consumer's sink, no reliance on debug logging.
+echo "--- IPC Pipeline Test (two-process nvmmsink -> nvmmappsrc) ---"
+SHM_NAME="/nvmm_test_e2e_$$"
+rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
+
+# Producer: ~6.6s of frames at 30fps so it stays alive while the consumer pulls.
+gst-launch-1.0 -e \
+    videotestsrc num-buffers=200 pattern=ball ! \
+    'video/x-raw,width=640,height=480,format=I420,framerate=30/1' ! \
+    nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
+    nvmmsink shm-name="$SHM_NAME" pool-size=8 >/dev/null 2>&1 &
+IPC_PROD_PID=$!
+
+# Wait for the producer to create the shm segment.
+for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
+
+# Consumer (separate process): import the pool and pull 10 frames cross-process.
+IPC_RX=$(timeout 20 gst-launch-1.0 -e \
+    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers=10 ! \
+    'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
+    fakesink silent=false -v 2>/dev/null | grep -c "chain")
+
+kill "$IPC_PROD_PID" 2>/dev/null || true
+wait "$IPC_PROD_PID" 2>/dev/null || true
+rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
+
+if [ "${IPC_RX:-0}" -ge 10 ]; then
+    pass "ipc-pipeline (${IPC_RX} frames RX cross-process)"
+else
+    fail "ipc-pipeline (frames_rx=${IPC_RX:-0})"
+fi
+
+echo ""
+
 # --- Benchmarks ---
 echo "--- Benchmarks ---"
 "$BUILD/benchmarks/bench_nvmm" 2>/dev/null | grep -E '^(benchmark|alloc|map|transform)'
