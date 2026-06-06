@@ -49,4 +49,6 @@ nav:
   - Zero-copy IPC: ipc.md
   - Pipeline examples: pipelines.md
   - Validation & benchmarks: validation.md
-  - Roadmap: PRODUCTION_PLAN.md
+  - Roadmap:
+      - Hardware-acceleration plan: HW_ACCEL_EXPLORATION.md
+      - Production plan: PRODUCTION_PLAN.md
