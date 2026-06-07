@@ -44,6 +44,7 @@ nav:
   - Elements:
       - nvmmconvert: elements/nvmmconvert.md
       - nvmmcompositor: elements/nvmmcompositor.md
+      - nvmmofa: elements/nvmmofa.md
       - nvmmsink: elements/nvmmsink.md
       - nvmmappsrc: elements/nvmmappsrc.md
       - nvmmalloc: elements/nvmmalloc.md

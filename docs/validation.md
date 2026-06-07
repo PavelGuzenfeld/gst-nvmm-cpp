@@ -80,6 +80,38 @@ completed rc=0 — no crash, stall, or leak.
 Two VIC transforms per output frame; Orin sustains real-time 1080p compositing of
 two streams with headroom to spare.
 
+## Optical flow (nvmmofa, OFA — Orin only)
+
+`nvmmofa` runs VPI dense optical flow on the Orin **OFA** engine from zero-copy
+NVMM, attaching the motion-vector field as `NvmmOpticalFlowMeta`. Xavier has no
+OFA hardware (documented N/A, like NVENC). Validated end-to-end on Orin NX (JP6):
+
+- **Produce → consume:** `videotestsrc → nvvidconv → NVMM NV12 → nvmmofa →
+  nvmmflowstats`. The consumer read a `160×120` grid-4 flow field per frame; the
+  first frame has no predecessor and correctly carries no flow (19/20 frames with
+  flow). `grid-size=1` produces a dense per-pixel `640×480` field.
+- **Responds to scene motion** — mean field magnitude over the same pipeline with
+  three patterns (15 frames each):
+
+    | pattern | motion | avg mean magnitude |
+    |---|---|---|
+    | `smpte` | ~static (small animated patch) | 4.59 px |
+    | `ball`  | a translating ball | 5.12 px |
+    | `snow`  | full-frame random noise | 6.93 px |
+
+    Magnitude rises monotonically with scene motion, confirming the element runs
+    OFA on the right frames and the field tracks real content. The non-zero
+    *static* baseline (4.59 px) is the dense-flow artifact expected of OFA in
+    textureless/low-texture regions (aperture problem) — i.e. this validates that
+    a flow field is produced and is motion-responsive, **not** that every cell is
+    an accurate vector. Treat the field as approximate; threshold/smooth for
+    analytics.
+- **Throughput:** 300 frames 720p, `grid-size=4`, sustained **~46 fps**, rc=0.
+
+There is no mock/CI unit test for `nvmmofa`: it is VPI-gated and OFA is Orin-only,
+so it is exercised on-device (the documented exception, like the NVENC Xavier
+gap). The OFA `(format, backend)` gate is recorded by `probes/vpi_ofa_probe.cpp`.
+
 ## Sanitizer results
 
 Run with `./scripts/run-sanitizers.sh` (mock build in the dev container).

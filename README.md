@@ -36,6 +36,7 @@ elements.
 |---|---|
 | [`nvmmconvert`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip on the VIC |
 | [`nvmmcompositor`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmcompositor/) | Composite multiple NVMM inputs into one frame (mosaic / PiP) on the VIC |
+| [`nvmmofa`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmofa/) | Dense optical flow on the Orin OFA engine; flow rides as metadata (Orin only) |
 | [`nvmmsink`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsink/) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
 | [`nvmmappsrc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmappsrc/) | Import a producer's pool fds and read GPU memory in place |
 | [`nvmmalloc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface` |

@@ -29,6 +29,13 @@ test_fuzz_shm = executable('fuzz_shm_header',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+test_ofa_meta = executable('test_optical_flow_meta',
+  'test_optical_flow_meta.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [nvmm_common_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
 rt_dep = cpp.find_library('rt', required : true)
 
 test_sink = executable('test_nvmm_sink',
@@ -50,6 +57,7 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 # a clean exit under ASan/UBSan is the pass. Not in the 'plugin' suite, so it
 # also runs under TSan (see scripts/run-sanitizers.sh).
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
+test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test_appsrc = executable('test_nvmm_appsrc',
   'test_nvmm_appsrc.cpp',
   include_directories : [
