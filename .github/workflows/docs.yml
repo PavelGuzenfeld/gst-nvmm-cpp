@@ -7,12 +7,14 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
-  # Rebuild when a release is published so mkdocs-material re-queries the GitHub
-  # API and bakes the new latest-release version into the site header. Without
-  # this, a release created after the last docs push leaves the site showing the
-  # previous version.
-  release:
-    types: [published]
+    # Also rebuild on version tags so mkdocs-material re-queries the GitHub API
+    # and bakes the new latest-release version into the site header (the site
+    # is built before the release exists otherwise, leaving the old version).
+    # A `release: published` trigger does NOT work here: that release is created
+    # by release.yml using GITHUB_TOKEN, and GITHUB_TOKEN-triggered events don't
+    # start new workflow runs. The tag push (this v* tag) does trigger.
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
