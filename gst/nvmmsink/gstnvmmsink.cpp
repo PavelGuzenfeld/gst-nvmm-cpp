@@ -42,6 +42,11 @@
 #include "shm_protocol.h"
 #include "fd_ipc.h"
 #include "nvmm_caps.h"
+#include "nvmm_det_meta.h"
+
+#ifdef NVMM_DEEPSTREAM_META
+#include <gstnvdsmeta.h>
+#endif
 
 typedef NvmmShmHeader ShmHeader;
 
@@ -49,6 +54,7 @@ enum {
     PROP_0,
     PROP_SHM_NAME,
     PROP_POOL_SIZE_PROP,
+    PROP_EXPORT_METADATA,
 };
 
 struct PoolBuffer {
@@ -64,6 +70,8 @@ struct _GstNvmmSinkPrivate {
     gsize shm_size;
     std::atomic<uint64_t> frame_number;
     GstVideoInfo video_info;
+    gboolean export_metadata;  /* serialize NvDsBatchMeta into the side-channel */
+    gboolean meta_active;      /* export_metadata AND build supports it */
 
     /* Buffer pool */
     PoolBuffer pool[NVMM_POOL_SIZE];
@@ -253,6 +261,9 @@ gst_nvmm_sink_set_property(GObject *object, guint prop_id,
             self->priv->pool_size =
                 CLAMP(g_value_get_int(value), NVMM_MIN_POOL_SIZE, NVMM_POOL_SIZE);
             break;
+        case PROP_EXPORT_METADATA:
+            self->priv->export_metadata = g_value_get_boolean(value);
+            break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
             break;
@@ -270,6 +281,9 @@ gst_nvmm_sink_get_property(GObject *object, guint prop_id,
             break;
         case PROP_POOL_SIZE_PROP:
             g_value_set_int(value, self->priv->pool_size);
+            break;
+        case PROP_EXPORT_METADATA:
+            g_value_set_boolean(value, self->priv->export_metadata);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -329,8 +343,22 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     if (priv->shm_name.empty())
         priv->shm_name = "/nvmm_sink_0";
 
-    /* Shared memory: header only (no frame data — GPU-copy pool) */
-    priv->shm_size = sizeof(ShmHeader);
+    /* Resolve whether the metadata side-channel is actually usable: it requires
+       the optional DeepStream bridge to extract NvDsBatchMeta. Without it the
+       property is honored as a no-op (warn once) so pipelines stay portable. */
+    priv->meta_active = priv->export_metadata;
+#ifndef NVMM_DEEPSTREAM_META
+    if (priv->export_metadata) {
+        fprintf(stderr, "[nvmmsink] export-metadata=true but built without "
+                "DeepStream metadata support (-Denable_deepstream_meta); "
+                "no metadata will be published\n");
+        priv->meta_active = FALSE;
+    }
+#endif
+
+    /* Shared memory: header (+ optional per-frame metadata region). The pixel
+       data never lives here — it stays in the GPU-copy pool. */
+    priv->shm_size = nvmm_shm_segment_size(priv->meta_active);
     priv->shm_fd = shm_open(priv->shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (priv->shm_fd < 0) {
         fprintf(stderr, "[nvmmsink] shm_open FAILED: %s\n", strerror(errno));
@@ -356,6 +384,8 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     header->magic = NVMM_SHM_MAGIC;
     header->version = NVMM_SHM_VERSION;
     header->ready = 0;
+    header->meta_enabled = priv->meta_active ? 1u : 0u;
+    header->meta_max_objects = NVMM_META_MAX_OBJECTS;
     for (int i = 0; i < NVMM_POOL_SIZE; i++)
         header->ref_counts[i] = 0;
 
@@ -485,9 +515,28 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     /* Release writer lock (set ref_count from -1 back to 0) and publish */
     __sync_lock_test_and_set(&header->ref_counts[target], 0);
     __sync_synchronize();
+
+    /* Serialize this frame's detections into the metadata slot for `target`
+       BEFORE publishing write_idx/frame_number, so a consumer that observes the
+       new frame_number (past the barrier below) also sees the metadata. Slot
+       `target` is protected by the same ref_counts[target] as the pixels, so the
+       producer won't overwrite it while a consumer is still reading. */
+#ifdef NVMM_DEEPSTREAM_META
+    if (priv->meta_active) {
+        uint64_t fn = priv->frame_number.load(std::memory_order_relaxed);
+        NvmmFrameMeta *slot = nvmm_shm_meta(priv->shm_ptr, (uint32_t)target);
+        NvDsBatchMeta *bmeta = gst_buffer_get_nvds_batch_meta(buffer);
+        nvmm_frame_meta_from_nvds(
+            bmeta, /*frame_index=*/0,
+            (uint32_t)GST_VIDEO_INFO_WIDTH(&priv->video_info),
+            (uint32_t)GST_VIDEO_INFO_HEIGHT(&priv->video_info),
+            fn, slot);
+    }
+#endif
+
     header->write_idx = target;
     header->timestamp_ns = GST_BUFFER_PTS(buffer);
-    header->frame_number = priv->frame_number.fetch_add(1);
+    header->frame_number = priv->frame_number.fetch_add(1);  /* publishes fn */
     __sync_synchronize();
     header->ready = 1;
 
@@ -525,6 +574,15 @@ gst_nvmm_sink_class_init(GstNvmmSinkClass *klass)
             NVMM_MIN_POOL_SIZE, NVMM_POOL_SIZE, NVMM_POOL_SIZE,
             G_PARAM_READWRITE));
 
+    g_object_class_install_property(gobject_class, PROP_EXPORT_METADATA,
+        g_param_spec_boolean("export-metadata", "Export Metadata",
+            "Serialize DeepStream object detections (NvDsBatchMeta) into the IPC "
+            "side-channel so consumers can recover them. Only pixels-plus-flat-"
+            "detections cross; requires the -Denable_deepstream_meta build. "
+            "Assumes a single stream (batch index 0) and bboxes in the published "
+            "surface's coordinate space.",
+            FALSE, G_PARAM_READWRITE));
+
     gst_element_class_set_static_metadata(element_class,
         "NVMM GPU-Copy IPC Sink",
         "Sink/Video",
@@ -556,6 +614,8 @@ gst_nvmm_sink_init(GstNvmmSink *self)
     self->priv->pool_size = NVMM_POOL_SIZE;
     self->priv->write_idx = 0;
     self->priv->pool_allocated = FALSE;
+    self->priv->export_metadata = FALSE;
+    self->priv->meta_active = FALSE;
     self->priv->listen_fd = -1;
     self->priv->running = false;
     for (int i = 0; i < NVMM_POOL_SIZE; i++) {

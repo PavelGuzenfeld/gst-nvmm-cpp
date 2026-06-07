@@ -21,6 +21,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(WERROR "Treat compiler warnings as errors (matches meson's werror=true default)" ON)
+option(ENABLE_DEEPSTREAM_META "Build the optional DeepStream metadata bridge (links libnvds_meta/libnvdsgst_meta) so nvmmsink can serialize NvDsBatchMeta detections into the IPC side-channel. The flat wire format stays DeepStream-free regardless." OFF)
 
 add_compile_options(-Wall -Wextra)
 if(WERROR)
@@ -154,6 +155,20 @@ if(JETPACK_VERSION STREQUAL "6")
     if(NOT NVSCIBUF_FOUND_VIA STREQUAL "none")
         set(HAVE_NVSCIBUF ON)
     endif()
+endif()
+
+# ---- Optional DeepStream metadata bridge ----
+set(HAVE_DEEPSTREAM_META OFF)
+if(ENABLE_DEEPSTREAM_META)
+    _nvmm_find_lib(NVDS_META nvds_meta)
+    _nvmm_find_lib(NVDSGST_META nvdsgst_meta)
+    if(NVDS_META_FOUND_VIA STREQUAL "none" OR NVDSGST_META_FOUND_VIA STREQUAL "none" OR NOT NVMM_INC_DIRS)
+        message(FATAL_ERROR "ENABLE_DEEPSTREAM_META=ON but libnvds_meta/libnvdsgst_meta or DeepStream includes not found")
+    endif()
+    add_library(nvmm::nvds_meta INTERFACE IMPORTED)
+    target_link_libraries(nvmm::nvds_meta INTERFACE "${NVDS_META_LIB}" "${NVDSGST_META_LIB}")
+    target_include_directories(nvmm::nvds_meta SYSTEM INTERFACE ${NVMM_INC_DIRS})
+    set(HAVE_DEEPSTREAM_META ON)
 endif()
 
 # ---- Mock fallback when NVMM libs are missing ----

@@ -49,6 +49,7 @@ nav:
       - nvmmappsrc: elements/nvmmappsrc.md
       - nvmmalloc: elements/nvmmalloc.md
   - Zero-copy IPC: ipc.md
+  - Metadata over IPC: metadata-ipc.md
   - Pipeline examples: pipelines.md
   - Validation & benchmarks: validation.md
   - Roadmap:

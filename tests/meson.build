@@ -50,6 +50,13 @@ test_sink = executable('test_nvmm_sink',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+test_det_meta = executable('test_nvmm_det_meta',
+  'test_nvmm_det_meta.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [nvmm_common_dep, gst_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
 test('nvmm_buffer', test_buffer, protocol : 'exitcode')
 test('nvmm_transform', test_transform, protocol : 'exitcode')
 test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
@@ -58,6 +65,7 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 # also runs under TSan (see scripts/run-sanitizers.sh).
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
+test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test_appsrc = executable('test_nvmm_appsrc',
   'test_nvmm_appsrc.cpp',
   include_directories : [
