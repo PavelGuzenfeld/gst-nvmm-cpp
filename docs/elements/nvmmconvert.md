@@ -44,3 +44,45 @@ Output dimensions come from the downstream caps. `rotate-90`/`270` and
 `nvmmconvert` overlaps NVIDIA's stock `nvvidconv`; the value here is being
 open-source and integrated with this suite's NVMM allocator/IPC pool — not new 2D
 capability.
+
+## DeepStream interop
+
+`nvmmconvert` emits `video/x-raw(memory:NVMM)` backed by `NvBufSurface` (NV12 /
+RGBA), the same memory DeepStream consumes — so it drops in as an **open-source
+preprocessing stage** (crop / scale / rotate on the VIC) ahead of inference. You
+*can* feed DeepStream; you aren't *required* to.
+
+Put it **before** `nvstreammux` — `nvinfer` runs on the batched mux output, so any
+per-stream ROI crop or resize happens upstream of the mux:
+
+!!! success "Verified on Orin"
+    Run on Jetson Orin NX, JetPack 6 (L4T R36.4.3), inside the
+    `nvcr.io/nvidia/deepstream:7.1-samples` container — the elements built against
+    DeepStream's own `NvBufSurface`, all four `nvmm*` plugins co-registered with
+    `nvinfer`/`nvstreammux`/`nvdsosd`. The pipeline below (TrafficCamNet detector)
+    ran end-to-end to EOS with real inference (headless test terminated in
+    `fakesink` in place of `nv3dsink`). `nvstreammux` property names and the
+    `nvinfer` config layout vary by DS release — adjust `config-file-path` to your
+    install.
+
+```bash
+# Crop a region of interest + scale, then batch and infer
+gst-launch-1.0 \
+  filesrc location=video.mp4 ! qtdemux ! h264parse ! nvv4l2decoder \
+  ! 'video/x-raw(memory:NVMM)' \
+  ! nvmmconvert crop-x=320 crop-y=180 crop-w=1280 crop-h=720 \
+  ! 'video/x-raw(memory:NVMM),width=640,height=640,format=NV12' \
+  ! nvstreammux batch-size=1 width=640 height=640 \
+  ! nvinfer config-file-path=pgie.txt batch-size=1 \
+  ! nvvideoconvert ! nvdsosd ! nv3dsink
+```
+
+!!! tip "Set `nvinfer batch-size=1` for a single stream"
+    The stock DeepStream `config_infer_primary.txt` defaults to a **batch-30** INT8
+    engine (built for the multi-stream `deepstream-app`). Building that engine needs
+    far more GPU memory than one stream warrants and can OOM on an 8 GB Orin NX.
+    Overriding `nvinfer batch-size=1` builds a small single-batch engine instead.
+
+`nvmmconvert` is interchangeable with `nvvideoconvert` for this 2D step; the value
+is that it shares this suite's NVMM allocator/IPC pool, so a cropped frame can be
+published over [IPC](../ipc.md) without leaving the GPU.
