@@ -2,8 +2,7 @@ gstnvmmofa = library('gstnvmmofa',
   files(
     'gstnvmmofa.cpp',
     'gstnvmmflowstats.cpp',
-    'nvmm_optical_flow_meta.cpp',
-  ),
+  ),  # nvmm_optical_flow_meta.cpp lives in gst/common (CI-built + tested)
   include_directories : [
     config_inc,
     common_inc,

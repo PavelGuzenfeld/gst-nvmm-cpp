@@ -200,11 +200,15 @@ NVMM surface is rejected), so the small field (e.g. 160×120 → ~75 KB) is
 copied out to host metadata. The meta is also **in-process only** (does not cross
 the nvmmsink→nvmmappsrc IPC boundary).
 
-**Validated on Orin** (probe `probes/vpi_ofa_probe.cpp` + end-to-end): moving-ball
-→ `nvmmofa` → `nvmmflowstats` produced and consumed flow (160×120 grid=4, mean
-~5.1 px, frame 1 correctly empty, 19/20 with flow); `grid-size=1` dense 640×480
-works; 720p grid=4 sustains **~46 fps**. No unit test in CI (VPI-gated, OFA is
-Orin-only) — tested on-device, the documented exception.
+**Validated on Orin** (probe `probes/vpi_ofa_probe.cpp` + end-to-end): `nvmmofa`
+→ `nvmmflowstats` produced and consumed a 160×120 grid-4 field; frame 1 correctly
+empty (19/20 with flow); `grid-size=1` dense 640×480 works; 720p grid=4 sustains
+**~46 fps**. Mean magnitude rises monotonically with scene motion (static smpte
+4.59 px < ball 5.12 < noise 6.93), confirming the field tracks real content —
+though the non-zero static baseline is the usual dense-flow artifact in
+textureless regions, so the field is approximate, not per-cell exact. No unit
+test in CI (VPI-gated, OFA Orin-only) — tested on-device, the documented
+exception. See [Validation](validation.md).
 
 ### B4. `nvmmcv` — PVA vision ops via VPI (both chips)
 Wrap selected VPI algorithms that run on PVA (e.g. stereo disparity, KLT feature

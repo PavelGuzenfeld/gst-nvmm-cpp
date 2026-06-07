@@ -64,6 +64,13 @@ gst-launch-1.0 -e \
 Because the frame passes through untouched, you can also tee it to an encoder or
 display while `nvmmflowstats` (or your own meta consumer) reads the flow.
 
+!!! note "Approximate, dense field"
+    OFA produces a *dense* field: the mean magnitude rises with scene motion
+    (a static pattern still reads ~4–5 px, a moving subject more, full-frame noise
+    more again — see [Validation](../validation.md)), but textureless/low-texture
+    regions carry the usual dense-flow artifacts (aperture problem). Threshold or
+    smooth the field for analytics rather than trusting every cell.
+
 ## Relationship to DeepStream
 
 DeepStream exposes OFA via `nvof` / `nvofvisual`. `nvmmofa` gives the same OFA
