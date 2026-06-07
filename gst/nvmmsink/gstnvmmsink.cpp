@@ -576,7 +576,7 @@ GST_PLUGIN_DEFINE(
     nvmmsink,
     "NVMM GPU-copy IPC sink",
     plugin_init,
-    "1.1.0",
+    "1.2.0",
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

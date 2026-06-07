@@ -37,6 +37,27 @@ gst-launch-1.0 ... ! nvmmconvert interpolation=5-tap ! \
   'video/x-raw(memory:NVMM),width=640,height=480' ! ...
 ```
 
+## Encode to H.264 / JPEG (reuse stock — already NVMM-native)
+
+There is **no `nvmmenc`/`nvmmjpegenc` in this suite by design**: NVIDIA's stock
+encoders already consume NVMM with no CPU bounce, so reimplementing them adds
+nothing. Verified on Jetson Xavier NX (JP5) and Orin NX (JP6) — `nvv4l2h264enc`,
+`nvv4l2h265enc`, `nvjpegenc`, and `nvjpegdec` all advertise
+`video/x-raw(memory:NVMM)` and run straight from an NVMM buffer (see
+[Validation](validation.md) and the hardware-acceleration plan's B1/B6 verdicts).
+
+```bash
+# H.264 encode straight from NVMM (no nvvidconv-to-sysmem in the path)
+gst-launch-1.0 -e \
+  nvmmappsrc shm-name=/camera_feed ! 'video/x-raw(memory:NVMM),format=NV12' \
+  ! nvv4l2h264enc bitrate=8000000 ! h264parse ! qtmux ! filesink location=out.mp4
+
+# JPEG snapshot from NVMM
+gst-launch-1.0 -e \
+  nvmmappsrc shm-name=/camera_feed ! 'video/x-raw(memory:NVMM),format=NV12' \
+  ! nvjpegenc ! filesink location=frame.jpg
+```
+
 ## Inter-process video sharing
 
 **Process A** (producer — `nvv4l2decoder` emits NVMM, which `nvmmsink` takes directly):

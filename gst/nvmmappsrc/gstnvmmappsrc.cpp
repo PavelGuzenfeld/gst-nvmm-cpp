@@ -519,7 +519,7 @@ GST_PLUGIN_DEFINE(
     nvmmappsrc,
     "NVMM zero-copy IPC source",
     plugin_init,
-    "1.1.0",
+    "1.2.0",
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"
