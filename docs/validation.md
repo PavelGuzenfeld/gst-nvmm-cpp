@@ -7,19 +7,20 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 9 test suites pass on both Xavier NX and Orin NX (54 assertions + a fuzz run):
+All 10 test suites pass on both Xavier NX and Orin NX (58 assertions + a fuzz run):
 
 ```
- 1/9 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
- 2/9 nvmm_transform     OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
- 3/9 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
- 4/9 fuzz_shm_header    OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
- 5/9 nvmm_compositor    OK    4 passed   (create, output props, request pads, pad placement props)
- 6/9 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
- 7/9 nvmm_appsrc        OK    2 passed   (create, properties)
- 8/9 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
- 9/9 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 9   Fail: 0
+  1/10 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
+  2/10 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
+  3/10 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
+  4/10 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
+  5/10 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
+  6/10 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
+  7/10 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
+  8/10 nvmm_appsrc         OK    2 passed   (create, properties)
+  9/10 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 10/10 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+Ok: 10   Fail: 0
 ```
 
 Run the suite under sanitizers with `./scripts/run-sanitizers.sh` (ASan+UBSan,
