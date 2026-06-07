@@ -25,6 +25,7 @@ for. See [Zero-copy IPC](ipc.md).
 |---|---|
 | [`nvmmconvert`](elements/nvmmconvert.md) | Crop / scale / format-convert / rotate-flip on the VIC |
 | [`nvmmcompositor`](elements/nvmmcompositor.md) | Composite multiple NVMM inputs into one frame (mosaic / PiP) on the VIC |
+| [`nvmmofa`](elements/nvmmofa.md) | Dense optical flow on the Orin OFA engine; flow rides as metadata (Orin only) |
 | [`nvmmsink`](elements/nvmmsink.md) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
 | [`nvmmappsrc`](elements/nvmmappsrc.md) | Import a producer's pool fds and read GPU memory in place |
 | [`nvmmalloc`](elements/nvmmalloc.md) | `GstAllocator` for `NvBufSurface` |

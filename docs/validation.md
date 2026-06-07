@@ -80,6 +80,23 @@ completed rc=0 — no crash, stall, or leak.
 Two VIC transforms per output frame; Orin sustains real-time 1080p compositing of
 two streams with headroom to spare.
 
+## Optical flow (nvmmofa, OFA — Orin only)
+
+`nvmmofa` runs VPI dense optical flow on the Orin **OFA** engine from zero-copy
+NVMM, attaching the motion-vector field as `NvmmOpticalFlowMeta`. Xavier has no
+OFA hardware (documented N/A, like NVENC). Validated end-to-end on Orin NX (JP6):
+
+- **Produce → consume:** `videotestsrc pattern=ball → nvvidconv → NVMM NV12 →
+  nvmmofa → nvmmflowstats`. The consumer read a `160×120` grid-4 flow field per
+  frame, mean ≈ 5.1 px / max ≈ 12.1 px (steady ball motion → steady flow); the
+  first frame has no predecessor and correctly carries no flow (19/20 frames with
+  flow). `grid-size=1` produces a dense per-pixel `640×480` field.
+- **Throughput:** 300 frames 720p, `grid-size=4`, sustained **~46 fps**, rc=0.
+
+There is no mock/CI unit test for `nvmmofa`: it is VPI-gated and OFA is Orin-only,
+so it is exercised on-device (the documented exception, like the NVENC Xavier
+gap). The OFA `(format, backend)` gate is recorded by `probes/vpi_ofa_probe.cpp`.
+
 ## Sanitizer results
 
 Run with `./scripts/run-sanitizers.sh` (mock build in the dev container).

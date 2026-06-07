@@ -176,20 +176,35 @@ See [Validation](validation.md).
 layouts must tile the full frame (or use a background pad); alpha blend / true
 `CompositeBlend` and a clear/background option are deferred.
 
-### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**)
-Dense/semi-dense optical flow between consecutive NVMM frames, output as a motion-
-vector surface. VPI exposes OFA with zero-copy NvBufSurface wrapping. Gated to
-Orin (Xavier has no dedicated OFA) — build-time / runtime capability check.
+### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**) — ✅ DONE (v1.2.0)
+Dense optical flow between consecutive NVMM frames on the OFA engine, with the
+motion-vector field carried as per-frame metadata. Orin-only hardware (Xavier has
+no OFA → documented N/A, like B6's NVENC).
 
-**Phase-0 verdict (2026-06-07): VIABLE but Orin-only (by design), with a measured
-layout caveat.** Orin ships **VPI 3** with `OpticalFlowDense.h`, and the zero-copy
-`VPI_IMAGE_BUFFER_NVBUFFER` wrap is confirmed working on-device (see the B4 probe
-table — the wrap itself passes on both chips). OFA is Orin-only hardware, so this
-element is inherently single-host (Xavier gets a documented N/A, like B6's
-NVENC). **Caveat carried over from the B4 probe:** VPI rejects **block-linear**
-NVMM (the `nvvidconv` default) — inputs must be **pitch-linear** or the element
-must VIC-de-tile first (a copy). Deferred (new VPI dependency, Phase 3); surface
-to the user before building, and note it cannot meet the dual-host bar.
+**Shipped:** [`nvmmofa`](elements/nvmmofa.md) (`GstBaseTransform`, in-place):
+NV12 frame passes through **zero-copy**; for each consecutive pair it wraps both
+surfaces zero-copy (`VPI_IMAGE_BUFFER_NVBUFFER`), runs `vpiSubmitOpticalFlowDense`
+on `VPI_BACKEND_OFA` (queries the wrapped input format at runtime — NvBuffer NV12
+maps to an ER/BL variant, not plain `NV12_BL`), then locks the `2S16_BL` result
+to host and attaches it as `NvmmOpticalFlowMeta`. Ships with `nvmmflowstats`, an
+example sink that consumes the meta. `grid-size` (1/2/4/8) + `quality` props.
+
+**Layout — corrected from the earlier note:** OFA *requires* **block-linear**
+input (`NV12_BL`/`Y8_BL`/…), which is exactly what `nvvidconv` emits — so the
+natural NVMM pipeline feeds OFA zero-copy. (The earlier "pitch-linear required"
+was a wrong carry-over from B4's *PVA* morphology, which is the opposite case.)
+
+**Honest zero-copy scope:** the *frame* is zero-copy throughout; the *flow field*
+is not — OFA only writes a VPI-native `2S16_BL` image (a wrapped `SIGNED_R16G16`
+NVMM surface is rejected), so the small field (e.g. 160×120 → ~75 KB) is
+copied out to host metadata. The meta is also **in-process only** (does not cross
+the nvmmsink→nvmmappsrc IPC boundary).
+
+**Validated on Orin** (probe `probes/vpi_ofa_probe.cpp` + end-to-end): moving-ball
+→ `nvmmofa` → `nvmmflowstats` produced and consumed flow (160×120 grid=4, mean
+~5.1 px, frame 1 correctly empty, 19/20 with flow); `grid-size=1` dense 640×480
+works; 720p grid=4 sustains **~46 fps**. No unit test in CI (VPI-gated, OFA is
+Orin-only) — tested on-device, the documented exception.
 
 ### B4. `nvmmcv` — PVA vision ops via VPI (both chips)
 Wrap selected VPI algorithms that run on PVA (e.g. stereo disparity, KLT feature
@@ -267,7 +282,8 @@ already trust; unit-testable in mock + pipeline-testable on hardware.
 risk, both SoCs. **B2 `nvmmcompositor` done (v1.2.0)**; B1 NVJPG next.
 
 **Phase 3 — VPI engines (B3 OFA Orin, B4 PVA).** New dependency (VPI); gate by
-SoC capability.
+SoC capability. **B3 `nvmmofa` done (v1.2.0, Orin-only)**; B4 PVA is NO-GO as
+specified (see B4 verdict).
 
 **Phase 4 — Inference (B5) and NVENC (B6).** Largest scope; B6 only where NVENC
 exists.
@@ -295,14 +311,16 @@ the Jetson, README + tests, then a version bump + tag.
 | B1 nvmmjpegenc/dec | ✅ PASS (reuse stock) | stock `nvjpegenc`/`nvjpegdec` do NVMM zero-copy, measured both hosts |
 | B2 nvmmcompositor | ✅ DONE (v1.2.0) | element shipped + dual-host validated (PR #25) |
 | B6 nvmmenc | ✅ PASS (reuse stock) | stock `nvv4l2h264enc` encodes from NVMM, measured both hosts |
-| B3 nvmmofa (OFA) | 🟡 Orin-only, deferred | zero-copy wrap confirmed; OFA is Orin HW only; pitch-linear required |
+| B3 nvmmofa (OFA) | ✅ DONE (v1.2.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
 | B4 nvmmcv (PVA) | 🔴 NO-GO as specified | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy; re-scope needed |
 | B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
 
-Phases 1–2 are complete and the "reuse stock" items (B1/B6) are measured-closed.
-The B3/B4 VPI probe (`vpi_pva_probe.cpp`, run on both hosts) confirmed zero-copy
-`NvBufSurface` wrapping works but surfaced two blockers for a *dual-host zero-copy*
-VPI element: uneven PVA algo support across VPI 2/3, and block-linear NVMM being
-rejected (de-tile copy required). So B4 is **NO-GO as originally specified** and
-B3 is Orin-only — both need a user decision on re-scope before any build. B5
-(inference) remains the open large item.
+Phases 1–3 (VIC + NVJPG/NVENC reuse + OFA) are done; the "reuse stock" items
+(B1/B6) are measured-closed. The VPI probes (`vpi_pva_probe.cpp`,
+`vpi_ofa_probe.cpp`, run on-device) confirmed zero-copy `NvBufSurface` wrapping
+works on both chips, but the two VPI engines diverge sharply on *layout*: **OFA
+requires block-linear** (the `nvvidconv` default → B3 shipped, Orin-only) while
+**PVA morphology requires pitch-linear** and is unevenly implemented across
+VPI 2/3 (→ B4 **NO-GO as specified**, would need re-scope to Orin-only +
+pitch-linear or fall back to CUDA/VIC). B5 (TensorRT inference) remains the open
+large item, pending user go-ahead.
