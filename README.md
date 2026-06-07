@@ -64,7 +64,7 @@ in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
 ## Status
 
 Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and native:
-**54 unit/integration tests + 13 on-hardware pipeline tests**, AddressSanitizer
+**58 unit/integration tests + 13 on-hardware pipeline tests**, AddressSanitizer
 and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
 [Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 
@@ -83,6 +83,7 @@ gst-nvmm-cpp/
 │   ├── nvmmalloc/   # GstNvmmAllocator plugin
 │   ├── nvmmconvert/ # nvmmconvert element
 │   ├── nvmmcompositor/ # nvmmcompositor element
+│   ├── nvmmofa/     # nvmmofa optical-flow element (Orin/VPI only)
 │   ├── nvmmsink/    # nvmmsink element
 │   └── nvmmappsrc/  # nvmmappsrc element
 ├── tests/           # unit + integration tests
