@@ -106,11 +106,40 @@ if jetpack_version == '6'
   endif
 endif
 
+# VPI support — needed for the OFA optical-flow element (nvmmofa). VPI ships
+# under /opt/nvidia/vpi{2,3} with no pkg-config, so probe the lib + headers.
+# Note: OFA is Orin-only hardware; the element builds wherever VPI is present
+# and gates OFA availability at runtime.
+have_vpi = false
+fs = import('fs')
+vpi_lib_dirs = [
+  '/opt/nvidia/vpi3/lib/aarch64-linux-gnu',
+  '/opt/nvidia/vpi2/lib/aarch64-linux-gnu',
+]
+vpi_inc_candidates = ['/opt/nvidia/vpi3/include', '/opt/nvidia/vpi2/include']
+nvvpi_lib = cc.find_library('nvvpi', dirs : vpi_lib_dirs, required : false)
+if nvvpi_lib.found()
+  vpi_inc_dirs = []
+  foreach d : vpi_inc_candidates
+    if fs.is_dir(d)
+      vpi_inc_dirs += d
+    endif
+  endforeach
+  if vpi_inc_dirs.length() > 0
+    vpi_dep = declare_dependency(
+      dependencies : nvvpi_lib,
+      include_directories : include_directories(vpi_inc_dirs, is_system : true),
+    )
+    have_vpi = true
+  endif
+endif
+
 # Configuration header
 conf = configuration_data()
 conf.set10('HAVE_NVBUFSURFACE', have_nvbufsurface)
 conf.set10('HAVE_NVBUFSURFTRANSFORM', have_nvbufsurftransform)
 conf.set10('HAVE_NVSCIBUF', have_nvscibuf)
+conf.set10('HAVE_VPI', have_vpi)
 conf.set_quoted('JETPACK_VERSION', jetpack_version)
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 
@@ -134,5 +163,11 @@ subdir('gst/nvmmconvert')
 subdir('gst/nvmmcompositor')
 subdir('gst/nvmmsink')
 subdir('gst/nvmmappsrc')
+# OFA optical flow (nvmmofa) + its flow-meta consumer — needs VPI + real NVMM
+# (Orin-only hardware; gated out of the x86 mock/CI build).
+if have_vpi and have_nvbufsurface
+  message('VPI found — building nvmmofa (OFA optical flow)')
+  subdir('gst/nvmmofa')
+endif
 subdir('tests')
 subdir('benchmarks')
