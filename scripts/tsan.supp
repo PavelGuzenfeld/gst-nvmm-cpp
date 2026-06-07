@@ -1,0 +1,16 @@
+# TSan suppressions for gst-nvmm-cpp.
+#
+# We only suppress findings in third-party code we don't own. Anything in our
+# own code (gst/common, gst/nvmmalloc, gst/nvmmsink, gst/nvmmappsrc,
+# gst/nvmmconvert, gst/nvmmcompositor) should be fixed, not suppressed.
+
+# GLib / GStreamer's own private reference counters and slice allocator are
+# full of benign races that libglib tracks with its own atomics that TSan
+# doesn't model. These are GLib bugs (or TSan limitations), not ours.
+race:libgobject-2.0.so
+race:libglib-2.0.so
+race:libgstreamer-1.0.so
+race:libgstbase-1.0.so
+
+# dlopen / dlclose during plugin scanning touches shared runtime state.
+race:^__dl_
