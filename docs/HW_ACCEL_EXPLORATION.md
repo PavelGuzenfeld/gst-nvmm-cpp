@@ -176,7 +176,7 @@ See [Validation](validation.md).
 layouts must tile the full frame (or use a background pad); alpha blend / true
 `CompositeBlend` and a clear/background option are deferred.
 
-### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**) — ✅ DONE (v1.2.0)
+### B3. `nvmmofa` — Optical Flow Accelerator via VPI (**Orin only**) — ✅ DONE (v1.3.0)
 Dense optical flow between consecutive NVMM frames on the OFA engine, with the
 motion-vector field carried as per-frame metadata. Orin-only hardware (Xavier has
 no OFA → documented N/A, like B6's NVENC).
@@ -286,7 +286,7 @@ already trust; unit-testable in mock + pipeline-testable on hardware.
 risk, both SoCs. **B2 `nvmmcompositor` done (v1.2.0)**; B1 NVJPG next.
 
 **Phase 3 — VPI engines (B3 OFA Orin, B4 PVA).** New dependency (VPI); gate by
-SoC capability. **B3 `nvmmofa` done (v1.2.0, Orin-only)**; B4 PVA is NO-GO as
+SoC capability. **B3 `nvmmofa` done (v1.3.0, Orin-only)**; B4 PVA is NO-GO as
 specified (see B4 verdict).
 
 **Phase 4 — Inference (B5) and NVENC (B6).** Largest scope; B6 only where NVENC
@@ -315,7 +315,7 @@ the Jetson, README + tests, then a version bump + tag.
 | B1 nvmmjpegenc/dec | ✅ PASS (reuse stock) | stock `nvjpegenc`/`nvjpegdec` do NVMM zero-copy, measured both hosts |
 | B2 nvmmcompositor | ✅ DONE (v1.2.0) | element shipped + dual-host validated (PR #25) |
 | B6 nvmmenc | ✅ PASS (reuse stock) | stock `nvv4l2h264enc` encodes from NVMM, measured both hosts |
-| B3 nvmmofa (OFA) | ✅ DONE (v1.2.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
+| B3 nvmmofa (OFA) | ✅ DONE (v1.3.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
 | B4 nvmmcv (PVA) | 🔴 NO-GO as specified | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy; re-scope needed |
 | B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
 
