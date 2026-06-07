@@ -7,19 +7,23 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 8 test suites pass on both Xavier NX and Orin NX:
+All 9 test suites pass on both Xavier NX and Orin NX (54 assertions + a fuzz run):
 
 ```
- 1/8 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
- 2/8 nvmm_transform     OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
- 3/8 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
- 4/8 nvmm_compositor    OK    4 passed   (create, output props, request pads, pad placement props)
- 5/8 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
- 6/8 nvmm_appsrc        OK    2 passed   (create, properties)
- 7/8 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
- 8/8 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 8   Fail: 0
+ 1/9 nvmm_buffer        OK   10 passed   (create, map, move, release, export_fd, planes)
+ 2/9 nvmm_transform     OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
+ 3/9 gst_nvmm_allocator OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
+ 4/9 fuzz_shm_header    OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
+ 5/9 nvmm_compositor    OK    4 passed   (create, output props, request pads, pad placement props)
+ 6/9 nvmm_sink          OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
+ 7/9 nvmm_appsrc        OK    2 passed   (create, properties)
+ 8/9 gstcheck_elements  OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 9/9 integration        OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+Ok: 9   Fail: 0
 ```
+
+Run the suite under sanitizers with `./scripts/run-sanitizers.sh` (ASan+UBSan,
+and TSan on a privileged container / bare host).
 
 11 pipeline tests also pass via `scripts/jetson-test.sh`:
 passthrough, flip-180, rotate-90, rotate-270, scale, crop, format-convert,
@@ -78,17 +82,21 @@ two streams with headroom to spare.
 
 ## Sanitizer results
 
-| Sanitizer | Tests | Result |
-|-----------|-------|--------|
-| AddressSanitizer | 22 (buffer + transform + allocator) | Clean |
-| ThreadSanitizer | 22 (buffer + transform + allocator) | Clean |
+Run with `./scripts/run-sanitizers.sh` (mock build in the dev container).
+
+| Sanitizer | Suites | Result |
+|-----------|--------|--------|
+| ASan + UBSan | all 9 (`libasan` preloaded) | Clean |
+| ThreadSanitizer | 4 core (buffer, transform, allocator, fuzz) | Clean |
 
 The element tests (`nvmm_compositor`, `nvmm_sink`, `gstcheck_elements`,
 `integration`) load plugins via `dlopen`, which trips ASan's *"runtime does not
-come first"* check unless `libasan` is `LD_PRELOAD`ed. With the preload all four
-`nvmm_compositor` subtests pass clean under ASan+UBSan; the leak is in the
-GStreamer plugin loader, not this code. The compositor's data path reuses the
-already-sanitized `NvBufSurfTransform` wrapper (covered by `nvmm_transform`).
+come first"* check unless `libasan` is `LD_PRELOAD`ed — the runner does this, so
+all nine suites pass clean under ASan+UBSan; the loader leak is GStreamer's, not
+this code. Under **TSan** those same dlopen tests can't run (the unsanitized
+plugin scanner can't load a sanitized `.so`), so the `plugin` suite is excluded
+and the atomic-heavy IPC paths are covered by the core + fuzz suites; TSan needs
+`setarch -R` (a privileged container or bare host) to disable ASLR.
 
 ## Benchmark results
 
