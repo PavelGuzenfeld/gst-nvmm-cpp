@@ -6,6 +6,8 @@
 ///
 /// Ref counts in shared memory manage buffer lifecycle.
 
+#include "config.h"  // PACKAGE_VERSION
+
 #include "gstnvmmappsrc.h"
 
 #ifdef NVMM_MOCK_API
@@ -519,7 +521,7 @@ GST_PLUGIN_DEFINE(
     nvmmappsrc,
     "NVMM zero-copy IPC source",
     plugin_init,
-    "1.1.0",
+    PACKAGE_VERSION,
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

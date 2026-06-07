@@ -10,6 +10,8 @@
 /// (zero-copy on the consumer side). Ref counts in shared memory manage buffer
 /// lifecycle.
 
+#include "config.h"  // PACKAGE_VERSION
+
 #include "gstnvmmsink.h"
 #include "gstnvmmallocator.h"
 
@@ -576,7 +578,7 @@ GST_PLUGIN_DEFINE(
     nvmmsink,
     "NVMM GPU-copy IPC sink",
     plugin_init,
-    "1.1.0",
+    PACKAGE_VERSION,
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

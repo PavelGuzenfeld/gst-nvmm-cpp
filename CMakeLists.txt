@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
+# Single source of truth for the version — bump the VERSION file only.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" GST_NVMM_VERSION)
 project(gst-nvmm-cpp
-    VERSION 1.1.2
+    VERSION ${GST_NVMM_VERSION}
     LANGUAGES C CXX
 )
 

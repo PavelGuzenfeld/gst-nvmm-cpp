@@ -181,22 +181,51 @@ Dense/semi-dense optical flow between consecutive NVMM frames, output as a motio
 vector surface. VPI exposes OFA with zero-copy NvBufSurface wrapping. Gated to
 Orin (Xavier has no dedicated OFA) — build-time / runtime capability check.
 
-**Phase-0 verdict (2026-06-07): VIABLE, deferred.** Orin ships **VPI 3** with
-`OpticalFlowDense.h`, and VPI's image API exposes `VPI_IMAGE_BUFFER_NVBUFFER`
-("on Tegra platforms only") — i.e. VPI wraps an externally-allocated NvBuffer/
-NvBufSurface **zero-copy**, no VPIImage copy. So the prerequisite holds; this is a
-real thin-wrap, Orin-gated. Not built yet — it's a new VPI dependency (Phase 3)
-and a multi-day element; surface to the user before starting.
+**Phase-0 verdict (2026-06-07): VIABLE but Orin-only (by design), with a measured
+layout caveat.** Orin ships **VPI 3** with `OpticalFlowDense.h`, and the zero-copy
+`VPI_IMAGE_BUFFER_NVBUFFER` wrap is confirmed working on-device (see the B4 probe
+table — the wrap itself passes on both chips). OFA is Orin-only hardware, so this
+element is inherently single-host (Xavier gets a documented N/A, like B6's
+NVENC). **Caveat carried over from the B4 probe:** VPI rejects **block-linear**
+NVMM (the `nvvidconv` default) — inputs must be **pitch-linear** or the element
+must VIC-de-tile first (a copy). Deferred (new VPI dependency, Phase 3); surface
+to the user before building, and note it cannot meet the dual-host bar.
 
 ### B4. `nvmmcv` — PVA vision ops via VPI (both chips)
 Wrap selected VPI algorithms that run on PVA (e.g. stereo disparity, KLT feature
 tracking, box/Gaussian filtering, remap/undistort) as GStreamer transform
 elements. PVA keeps GPU/CPU free for other work. PVA v2 on Orin, 2× PVA on Xavier.
 
-**Phase-0 verdict (2026-06-07): VIABLE, deferred.** Same VPI-3 zero-copy NvBuffer
-wrap as B3; `StereoDisparity.h`/`OpticalFlowPyrLK.h` present on Orin. Viable thin-
-wrap on both SoCs. Larger Phase-3 build sharing B3's VPI plumbing; deferred pending
-user go-ahead.
+**Phase-0 verdict (2026-06-07): measured — zero-copy wrap PASSES, but PVA compute
+is NOT a clean dual-host zero-copy win. Recommend NO-GO as specified; needs
+re-scope.** A standalone reproducer (`vpi_pva_probe.cpp`: create a GRAY8
+`NvBufSurface`, wrap it via `VPI_IMAGE_BUFFER_NVBUFFER`, run `vpiSubmitErode`) was
+built and run on **both** hosts. Results:
+
+| Host (VPI / PVA) | layout | zero-copy wrap | CUDA erode | **PVA erode** |
+|------------------|--------|----------------|------------|---------------|
+| Orin (VPI 3, PVA v2)   | pitch-linear | ✅ | ✅ | ✅ |
+| Orin                   | block-linear | ✅ | ❌ `Y8_BL16` | ❌ `Y8_BL16` |
+| Xavier (VPI 2, PVA v1) | pitch-linear | ✅ | ✅ | ❌ `NOT_IMPLEMENTED` |
+| Xavier                 | block-linear | ✅ | ❌ | ❌ |
+
+Three findings: (1) **VPI wraps an external `NvBufSurface` zero-copy on both
+chips** — the Phase-0 open question is answered YES. (2) But the PVA *algorithm*
+support is **version/chip-uneven**: `vpiSubmitErode` on PVA runs on Orin (VPI 3)
+yet returns `VPI_ERROR_NOT_IMPLEMENTED` on Xavier (VPI 2) — so this op fails the
+"both Xavier and Orin" bar. (3) **Block-linear** GRAY8 (the layout `nvvidconv`
+emits for NVMM) maps to `VPI_IMAGE_FORMAT_Y8_BL16`, which the algo rejects on
+*every* backend — only **pitch-linear** works, so a VPI element fed by a normal
+NVMM pipeline would need a VIC **de-tile copy** first, defeating the zero-copy
+value proposition.
+
+**Implication:** B4 as a *both-chips, zero-copy* element is **NO-GO** with the
+current VPI/PVA stack. Real options, smaller than the original B4: (a) an
+**Orin-only** PVA/VPI element (like B3's gating), accepting **pitch-linear**
+input and documenting the de-tile for block-linear sources; (b) drop PVA and
+expose these ops on the already-working **CUDA/VIC** backends (no new
+differentiator); (c) park B4 until a use case justifies the Orin-only +
+pitch-linear constraints. Decision deferred to the user.
 
 ### B5. `nvmminfer` — DLA/GPU inference via TensorRT (both chips)
 Run a TensorRT engine on a DLA core (fallback GPU) directly on NVMM input, with
@@ -266,10 +295,14 @@ the Jetson, README + tests, then a version bump + tag.
 | B1 nvmmjpegenc/dec | ✅ PASS (reuse stock) | stock `nvjpegenc`/`nvjpegdec` do NVMM zero-copy, measured both hosts |
 | B2 nvmmcompositor | ✅ DONE (v1.2.0) | element shipped + dual-host validated (PR #25) |
 | B6 nvmmenc | ✅ PASS (reuse stock) | stock `nvv4l2h264enc` encodes from NVMM, measured both hosts |
-| B3 nvmmofa (OFA) | 🟡 VIABLE, deferred | VPI 3 zero-copy NvBuffer wrap + OFA on Orin; Phase 3 |
-| B4 nvmmcv (PVA) | 🟡 VIABLE, deferred | VPI 3 + Stereo/PyrLK on PVA; Phase 3 |
+| B3 nvmmofa (OFA) | 🟡 Orin-only, deferred | zero-copy wrap confirmed; OFA is Orin HW only; pitch-linear required |
+| B4 nvmmcv (PVA) | 🔴 NO-GO as specified | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy; re-scope needed |
 | B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
 
 Phases 1–2 are complete and the "reuse stock" items (B1/B6) are measured-closed.
-What remains (B3/B4/B5) is new-dependency, multi-day work to be picked up per the
-phasing above with user sign-off.
+The B3/B4 VPI probe (`vpi_pva_probe.cpp`, run on both hosts) confirmed zero-copy
+`NvBufSurface` wrapping works but surfaced two blockers for a *dual-host zero-copy*
+VPI element: uneven PVA algo support across VPI 2/3, and block-linear NVMM being
+rejected (de-tile copy required). So B4 is **NO-GO as originally specified** and
+B3 is Orin-only — both need a user decision on re-scope before any build. B5
+(inference) remains the open large item.
