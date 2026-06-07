@@ -1,3 +1,5 @@
+#include "config.h"  // PACKAGE_VERSION
+
 #include "gstnvmmallocator.h"
 
 #include <gst/gst.h>
@@ -20,7 +22,7 @@ GST_PLUGIN_DEFINE(
     nvmmalloc,
     "NVMM memory allocator for Jetson NvBufSurface",
     plugin_init,
-    "1.2.0",
+    PACKAGE_VERSION,
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

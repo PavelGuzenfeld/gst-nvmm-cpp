@@ -1,3 +1,5 @@
+#include "config.h"  // PACKAGE_VERSION
+
 #include "gstnvmmcompositor.h"
 
 #include "gstnvmmallocator.h"
@@ -290,5 +292,5 @@ plugin_init(GstPlugin* plugin)
 GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR, GST_VERSION_MINOR,
     nvmmcompositor, "NVMM VIC compositor",
-    plugin_init, "1.2.0", "LGPL", "gst-nvmm-cpp",
+    plugin_init, PACKAGE_VERSION, "LGPL", "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp")

@@ -1,3 +1,5 @@
+#include "config.h"  // PACKAGE_VERSION
+
 #include "gstnvmmconvert.h"
 
 #include <gst/gst.h>
@@ -17,7 +19,7 @@ GST_PLUGIN_DEFINE(
     nvmmconvert,
     "NVMM video crop/scale/convert using Tegra VIC",
     plugin_init,
-    "1.2.0",
+    PACKAGE_VERSION,
     "LGPL",
     "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp"

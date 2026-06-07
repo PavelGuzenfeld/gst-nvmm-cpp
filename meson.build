@@ -1,5 +1,5 @@
 project('gst-nvmm-cpp', ['c', 'cpp'],
-  version : '1.2.0',
+  version : files('VERSION'),  # single source of truth — bump VERSION only
   meson_version : '>= 0.62.0',
   license : 'LGPL-2.1-or-later',
   default_options : [
