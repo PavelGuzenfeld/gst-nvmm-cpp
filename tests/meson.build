@@ -57,8 +57,15 @@ test_det_meta = executable('test_nvmm_det_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-test('nvmm_buffer', test_buffer, protocol : 'exitcode')
-test('nvmm_transform', test_transform, protocol : 'exitcode')
+# On a real-API (non-mock) build these two exercise closed NVIDIA libs that
+# ThreadSanitizer flags but we cannot fix: libnvbufsurftransform double-locks /
+# unlocks its own global mutex, and the CUDA allocator OOMs under TSan's shadow
+# reservation. Tag them 'nvidia_hwlib' so the on-device TSan run skips them
+# (run-sanitizers.sh passes --no-suite nvidia_hwlib). On the mock build they use
+# the mock NvBufSurface, are fully TSan-clean, and stay in the default suite.
+hwlib_suite = build_mock ? [] : ['nvidia_hwlib']
+test('nvmm_buffer', test_buffer, protocol : 'exitcode', suite : hwlib_suite)
+test('nvmm_transform', test_transform, protocol : 'exitcode', suite : hwlib_suite)
 test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 # Fuzz the consumer's shm-header validation. Standalone /dev/urandom driver;
 # a clean exit under ASan/UBSan is the pass. Not in the 'plugin' suite, so it

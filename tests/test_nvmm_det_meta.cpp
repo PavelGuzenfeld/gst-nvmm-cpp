@@ -9,36 +9,14 @@
 
 #include <cstdio>
 #include <cstring>
-#include <stdexcept>
+
+#include "test_harness.h"
 
 namespace {
 
 /* gst_init must run before the static-registered TEST constructors below; in a
    single TU static objects initialize in declaration order, so this goes first. */
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
-
-int tests_passed = 0;
-int tests_failed = 0;
-
-#define TEST(name) \
-    static void test_##name(); \
-    struct test_reg_##name { test_reg_##name() { \
-        printf("  TEST %s ... ", #name); \
-        try { test_##name(); printf("PASS\n"); tests_passed++; } \
-        catch (...) { printf("FAIL (exception)\n"); tests_failed++; } \
-    } } test_reg_inst_##name; \
-    static void test_##name()
-
-/* ASSERT_* throw so a failing assertion unwinds into TEST's catch (which counts
-   the failure) instead of returning into the PASS path — otherwise a failed test
-   prints both "FAIL at ..." and "PASS" and bumps both counters. */
-#define ASSERT_TRUE(expr) do { \
-    if (!(expr)) { printf("FAIL at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-                    throw std::runtime_error("assertion failed"); } } while(0)
-
-#define ASSERT_EQ(a, b) do { \
-    if ((a) != (b)) { printf("FAIL at %s:%d: %s != %s\n", __FILE__, __LINE__, #a, #b); \
-                       throw std::runtime_error("assertion failed"); } } while(0)
 
 static void fill_frame(NvmmFrameMeta *f, guint32 n)
 {
