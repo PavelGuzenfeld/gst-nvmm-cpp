@@ -137,7 +137,7 @@ endif
 # Optional DeepStream metadata bridge (libnvds_meta + nvdsmeta.h). Off by default
 # so the suite stays DeepStream-free; the flat IPC wire format never needs it.
 have_deepstream_meta = false
-nvds_meta_dep = dependency('', required : false)
+nvds_meta_dep = declare_dependency()  # empty placeholder; only consumed when enabled below
 if get_option('enable_deepstream_meta')
   # NvDsBatchMeta pool/iterators live in libnvds_meta; gst_buffer_get_nvds_batch_meta
   # lives in libnvdsgst_meta. The producer-side extraction needs both.

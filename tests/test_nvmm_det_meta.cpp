@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 
 namespace {
 
@@ -28,13 +29,16 @@ int tests_failed = 0;
     } } test_reg_inst_##name; \
     static void test_##name()
 
+/* ASSERT_* throw so a failing assertion unwinds into TEST's catch (which counts
+   the failure) instead of returning into the PASS path — otherwise a failed test
+   prints both "FAIL at ..." and "PASS" and bumps both counters. */
 #define ASSERT_TRUE(expr) do { \
     if (!(expr)) { printf("FAIL at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-                    tests_failed++; return; } } while(0)
+                    throw std::runtime_error("assertion failed"); } } while(0)
 
 #define ASSERT_EQ(a, b) do { \
     if ((a) != (b)) { printf("FAIL at %s:%d: %s != %s\n", __FILE__, __LINE__, #a, #b); \
-                       tests_failed++; return; } } while(0)
+                       throw std::runtime_error("assertion failed"); } } while(0)
 
 static void fill_frame(NvmmFrameMeta *f, guint32 n)
 {

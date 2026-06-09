@@ -34,9 +34,10 @@ static gboolean
 nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * /*buffer*/,
                         GQuark type, gpointer /*data*/)
 {
-    /* Copy on any transform (incl. gst_buffer_copy). Detections describe the
-       frame content, so they survive a straight copy; we don't try to remap on
-       scale/crop transforms — callers that resize must re-derive coordinates. */
+    /* Copy only on copy-transforms (e.g. gst_buffer_copy); for any non-copy
+       transform (scale/crop) we drop the meta rather than remap it. Detections
+       describe frame content and survive a straight copy, but callers that
+       resize must re-derive coordinates. */
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 
