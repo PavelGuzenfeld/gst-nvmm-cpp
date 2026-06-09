@@ -101,3 +101,11 @@ for **infer-once / fan-out** (many consumers, inference too costly to repeat) or
 **non-GStreamer consumer** that just wants detections. If a single consumer can
 re-infer cheaply, that path is simpler. For *visualization only*, burn the overlay
 in with `nvdsosd` **before** `nvmmsink` and skip metadata entirely.
+
+## Validation status
+
+The wire format + `GstMeta` round-trip (unit), the cross-process surface path
+(20/20 frames, no zero-copy regression), and the no-DeepStream graceful no-op are
+validated on Orin NX (JP6). The producer-side `NvDsBatchMeta → NvmmFrameMeta`
+extraction (`-Denable_deepstream_meta`) has **not** yet been run end-to-end on a
+DeepStream-equipped board. See [Validation → Detection metadata side-channel](validation.md#detection-metadata-side-channel-ipc).

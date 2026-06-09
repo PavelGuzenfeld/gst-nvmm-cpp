@@ -7,21 +7,28 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 10 test suites pass on both Xavier NX and Orin NX (58 assertions + a fuzz run):
+All 11 test suites pass on both Xavier NX and Orin NX (65 assertions + a fuzz run):
 
 ```
-  1/10 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
-  2/10 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
-  3/10 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
-  4/10 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
-  5/10 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
-  6/10 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
-  7/10 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
-  8/10 nvmm_appsrc         OK    2 passed   (create, properties)
-  9/10 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
- 10/10 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 10   Fail: 0
+  1/11 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
+  2/11 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
+  3/11 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
+  4/11 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
+  5/11 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
+  6/11 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
+  7/11 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
+  8/11 nvmm_appsrc         OK    2 passed   (create, properties)
+  9/11 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 10/11 nvmm_det_meta       OK    7 passed   (wire layout/segment size, slot pointer math, add/get roundtrip, empty + count-clamped objects, survives buffer copy)
+ 11/11 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+Ok: 11   Fail: 0
 ```
+
+> The `nvmm_det_meta` suite is DeepStream-free POD + `GstMeta` (no `NvBufSurface`),
+> so it is hardware-agnostic; re-confirmed 7/7 on Orin NX (JP6) and the x86 dev
+> image. Note: inside the Jetson build container the NVMM-allocating suites fail
+> with `NvRmMemInitNvmap … Memory Manager Not supported` (no `/dev/nvmap` in the
+> container) — build in the container, run the NVMM suites on the host.
 
 Run the suite under sanitizers with `./scripts/run-sanitizers.sh` (ASan+UBSan,
 and TSan on a privileged container / bare host).
@@ -112,6 +119,35 @@ OFA hardware (documented N/A, like NVENC). Validated end-to-end on Orin NX (JP6)
 There is no mock/CI unit test for `nvmmofa`: it is VPI-gated and OFA is Orin-only,
 so it is exercised on-device (the documented exception, like the NVENC Xavier
 gap). The OFA `(format, backend)` gate is recorded by `probes/vpi_ofa_probe.cpp`.
+
+## Detection metadata side-channel (IPC)
+
+The optional [metadata side-channel](metadata-ipc.md) carries flat detection
+records (`NvmmFrameMeta`) alongside each frame so a consumer can recover them
+without re-running inference. Validated on Orin NX (JP6, L4T R36.4.3):
+
+- **Wire format + `GstMeta` (unit, host):** `nvmm_det_meta` 7/7 — segment-size
+  math with/without the metadata region, per-slot pointer arithmetic, add/get
+  round-trip, empty and count-clamped object lists, and survival across
+  `gst_buffer_copy` (copy-transform only; non-copy transforms drop the meta).
+- **Cross-process surface path (E2E, host):** the protocol-v3 bump does not
+  regress zero-copy IPC — a two-process `videotestsrc → nvvidconv → NVMM NV12 →
+  nvmmsink` / `nvmmappsrc → nvvidconv → fakesink` run delivered **20/20** frames
+  across the boundary, with and without `export-metadata`/`import-metadata`.
+- **Properties + graceful degradation:** `nvmmsink export-metadata` and
+  `nvmmappsrc import-metadata` are exposed; on a build **without**
+  `-Denable_deepstream_meta`, `export-metadata=true` is a documented no-op
+  (warns once, `meta_active=FALSE`) and frames still flow — confirmed.
+
+!!! warning "Not yet exercised on hardware: the DeepStream→flat extraction"
+    The producer-side `NvDsBatchMeta → NvmmFrameMeta` serialization is gated
+    behind `-Denable_deepstream_meta` and needs DeepStream (`nvdsmeta.h`,
+    `nvinfer`). The validation Orin has no DeepStream installed, so the full
+    `nvinfer → nvmmsink(export) → nvmmappsrc(import) → GstNvmmDetMeta` path with
+    **real detections crossing** has not been run end-to-end on hardware. Until a
+    DeepStream-equipped box is available, that extraction step is covered only by
+    the unit tests above. Everything downstream of the wire record (consumer
+    attach, transform, graceful no-op) is validated.
 
 ## Sanitizer results
 
