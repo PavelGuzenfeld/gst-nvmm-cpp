@@ -151,21 +151,38 @@ without re-running inference. Validated on Orin NX (JP6, L4T R36.4.3):
 
 ## Sanitizer results
 
-Run with `./scripts/run-sanitizers.sh` (mock build in the dev container).
+`./scripts/run-sanitizers.sh` builds and runs the suite under ASan+UBSan and,
+separately, TSan. It is exercised two ways:
+
+**Mock build (x86 dev container):**
 
 | Sanitizer | Suites | Result |
 |-----------|--------|--------|
-| ASan + UBSan | all 9 (`libasan` preloaded) | Clean |
-| ThreadSanitizer | 4 core (buffer, transform, allocator, fuzz) | Clean |
+| ASan + UBSan | all 11 (`libasan` preloaded) | Clean |
+| ThreadSanitizer | 6 non-plugin (buffer, transform, allocator, fuzz, optical_flow, det_meta) | Clean |
 
-The element tests (`nvmm_compositor`, `nvmm_sink`, `gstcheck_elements`,
-`integration`) load plugins via `dlopen`, which trips ASan's *"runtime does not
-come first"* check unless `libasan` is `LD_PRELOAD`ed — the runner does this, so
-all nine suites pass clean under ASan+UBSan; the loader leak is GStreamer's, not
-this code. Under **TSan** those same dlopen tests can't run (the unsanitized
-plugin scanner can't load a sanitized `.so`), so the `plugin` suite is excluded
-and the atomic-heavy IPC paths are covered by the core + fuzz suites; TSan needs
-`setarch -R` (a privileged container or bare host) to disable ASLR.
+**Real-API build (Orin NX, JP6)** — same script in a privileged container with
+`/dev` mounted so `/dev/nvmap` and the CUDA allocator are reachable:
+
+| Sanitizer | Suites | Result |
+|-----------|--------|--------|
+| ASan + UBSan | all 11 | Clean |
+| ThreadSanitizer | 4 (allocator, fuzz, optical_flow, det_meta) | Clean |
+
+The element tests (`nvmm_compositor`, `nvmm_sink`, `nvmm_appsrc`,
+`gstcheck_elements`, `integration`) load plugins via `dlopen`, which trips ASan's
+*"runtime does not come first"* check unless `libasan` is `LD_PRELOAD`ed — the
+runner does this, so all 11 suites pass clean under ASan+UBSan; the loader leak
+is GStreamer's, not this code. Under **TSan** those dlopen tests can't run (the
+unsanitized plugin scanner can't load a sanitized `.so`), so the `plugin` suite
+is excluded; TSan needs `setarch -R` (a privileged container or bare host) to
+disable ASLR. On the **real-API** build, `nvmm_buffer` and `nvmm_transform` are
+also excluded from TSan (suite `nvidia_hwlib`): they delegate to closed NVIDIA
+libs that TSan flags but we cannot fix — `libnvbufsurftransform` double-locks its
+own global mutex and the CUDA allocator OOMs under TSan's shadow reservation. On
+the mock build those two use the mock NvBufSurface and stay TSan-clean, so the
+skip is a no-op there. The atomic-heavy IPC paths (shm header/fuzz, det-meta,
+allocator) are covered under TSan on both builds.
 
 ## Benchmark results
 
