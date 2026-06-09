@@ -8,23 +8,9 @@
 #include <cstdio>
 #include <cstring>
 
+#include "test_harness.h"
+
 namespace {
-
-int tests_passed = 0;
-int tests_failed = 0;
-
-#define TEST(name) \
-    static void test_##name(); \
-    struct test_reg_##name { test_reg_##name() { \
-        printf("  TEST %s ... ", #name); \
-        try { test_##name(); printf("PASS\n"); tests_passed++; } \
-        catch (...) { printf("FAIL (exception)\n"); tests_failed++; } \
-    } } test_reg_inst_##name; \
-    static void test_##name()
-
-#define ASSERT_TRUE(expr) do { \
-    if (!(expr)) { printf("FAIL at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-                    tests_failed++; return; } } while(0)
 
 // Helper: create a test buffer
 nvmm::Result<nvmm::NvmmBuffer> make_buffer(uint32_t w, uint32_t h,

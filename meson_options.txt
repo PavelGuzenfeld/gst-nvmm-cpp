@@ -1,0 +1,5 @@
+option('enable_deepstream_meta', type : 'boolean', value : false,
+  description : 'Build the optional DeepStream metadata bridge (links libnvds_meta) ' +
+                'so nvmmsink can serialize NvDsBatchMeta detections into the IPC ' +
+                'side-channel. The flat wire format and GstNvmmDetMeta stay ' +
+                'DeepStream-free regardless of this option.')

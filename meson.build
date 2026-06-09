@@ -134,12 +134,43 @@ if nvvpi_lib.found()
   endif
 endif
 
+# Optional DeepStream metadata bridge (libnvds_meta + nvdsmeta.h). Off by default
+# so the suite stays DeepStream-free; the flat IPC wire format never needs it.
+have_deepstream_meta = false
+nvds_meta_dep = declare_dependency()  # empty placeholder; only consumed when enabled below
+if get_option('enable_deepstream_meta')
+  # NvDsBatchMeta pool/iterators live in libnvds_meta; gst_buffer_get_nvds_batch_meta
+  # lives in libnvdsgst_meta. The producer-side extraction needs both.
+  nvds_meta_lib = cc.find_library('nvds_meta', dirs : nvmm_lib_dirs, required : true)
+  nvdsgst_meta_lib = cc.find_library('nvdsgst_meta', dirs : nvmm_lib_dirs, required : true)
+  fsmod_ds = import('fs')
+  nvds_inc_candidates = [
+    '/opt/nvidia/deepstream/deepstream/sources/includes',
+  ]
+  nvds_inc_dirs = []
+  foreach d : nvds_inc_candidates
+    if fsmod_ds.is_dir(d)
+      nvds_inc_dirs += d
+    endif
+  endforeach
+  if nvds_inc_dirs.length() == 0
+    error('enable_deepstream_meta=true but DeepStream includes (nvdsmeta.h) not found')
+  endif
+  nvds_meta_dep = declare_dependency(
+    dependencies : [nvds_meta_lib, nvdsgst_meta_lib],
+    include_directories : include_directories(nvds_inc_dirs, is_system : true),
+    compile_args : ['-DNVMM_DEEPSTREAM_META'],
+  )
+  have_deepstream_meta = true
+endif
+
 # Configuration header
 conf = configuration_data()
 conf.set10('HAVE_NVBUFSURFACE', have_nvbufsurface)
 conf.set10('HAVE_NVBUFSURFTRANSFORM', have_nvbufsurftransform)
 conf.set10('HAVE_NVSCIBUF', have_nvscibuf)
 conf.set10('HAVE_VPI', have_vpi)
+conf.set10('HAVE_DEEPSTREAM_META', have_deepstream_meta)
 conf.set_quoted('JETPACK_VERSION', jetpack_version)
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
 

@@ -7,21 +7,28 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 10 test suites pass on both Xavier NX and Orin NX (58 assertions + a fuzz run):
+All 11 test suites pass on both Xavier NX and Orin NX (65 assertions + a fuzz run):
 
 ```
-  1/10 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
-  2/10 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
-  3/10 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
-  4/10 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
-  5/10 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
-  6/10 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
-  7/10 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
-  8/10 nvmm_appsrc         OK    2 passed   (create, properties)
-  9/10 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
- 10/10 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 10   Fail: 0
+  1/11 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
+  2/11 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
+  3/11 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
+  4/11 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
+  5/11 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
+  6/11 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
+  7/11 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
+  8/11 nvmm_appsrc         OK    2 passed   (create, properties)
+  9/11 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
+ 10/11 nvmm_det_meta       OK    7 passed   (wire layout/segment size, slot pointer math, add/get roundtrip, empty + count-clamped objects, survives buffer copy)
+ 11/11 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
+Ok: 11   Fail: 0
 ```
+
+> The `nvmm_det_meta` suite is DeepStream-free POD + `GstMeta` (no `NvBufSurface`),
+> so it is hardware-agnostic; re-confirmed 7/7 on Orin NX (JP6) and the x86 dev
+> image. Note: inside the Jetson build container the NVMM-allocating suites fail
+> with `NvRmMemInitNvmap … Memory Manager Not supported` (no `/dev/nvmap` in the
+> container) — build in the container, run the NVMM suites on the host.
 
 Run the suite under sanitizers with `./scripts/run-sanitizers.sh` (ASan+UBSan,
 and TSan on a privileged container / bare host).
@@ -113,23 +120,69 @@ There is no mock/CI unit test for `nvmmofa`: it is VPI-gated and OFA is Orin-onl
 so it is exercised on-device (the documented exception, like the NVENC Xavier
 gap). The OFA `(format, backend)` gate is recorded by `probes/vpi_ofa_probe.cpp`.
 
+## Detection metadata side-channel (IPC)
+
+The optional [metadata side-channel](metadata-ipc.md) carries flat detection
+records (`NvmmFrameMeta`) alongside each frame so a consumer can recover them
+without re-running inference. Validated on Orin NX (JP6, L4T R36.4.3):
+
+- **Wire format + `GstMeta` (unit, host):** `nvmm_det_meta` 7/7 — segment-size
+  math with/without the metadata region, per-slot pointer arithmetic, add/get
+  round-trip, empty and count-clamped object lists, and survival across
+  `gst_buffer_copy` (copy-transform only; non-copy transforms drop the meta).
+- **Cross-process surface path (E2E, host):** the protocol-v3 bump does not
+  regress zero-copy IPC — a two-process `videotestsrc → nvvidconv → NVMM NV12 →
+  nvmmsink` / `nvmmappsrc → nvvidconv → fakesink` run delivered **20/20** frames
+  across the boundary, with and without `export-metadata`/`import-metadata`.
+- **Properties + graceful degradation:** `nvmmsink export-metadata` and
+  `nvmmappsrc import-metadata` are exposed; on a build **without**
+  `-Denable_deepstream_meta`, `export-metadata=true` is a documented no-op
+  (warns once, `meta_active=FALSE`) and frames still flow — confirmed.
+
+!!! warning "Not yet exercised on hardware: the DeepStream→flat extraction"
+    The producer-side `NvDsBatchMeta → NvmmFrameMeta` serialization is gated
+    behind `-Denable_deepstream_meta` and needs DeepStream (`nvdsmeta.h`,
+    `nvinfer`). The validation Orin has no DeepStream installed, so the full
+    `nvinfer → nvmmsink(export) → nvmmappsrc(import) → GstNvmmDetMeta` path with
+    **real detections crossing** has not been run end-to-end on hardware. Until a
+    DeepStream-equipped box is available, that extraction step is covered only by
+    the unit tests above. Everything downstream of the wire record (consumer
+    attach, transform, graceful no-op) is validated.
+
 ## Sanitizer results
 
-Run with `./scripts/run-sanitizers.sh` (mock build in the dev container).
+`./scripts/run-sanitizers.sh` builds and runs the suite under ASan+UBSan and,
+separately, TSan. It is exercised two ways:
+
+**Mock build (x86 dev container):**
 
 | Sanitizer | Suites | Result |
 |-----------|--------|--------|
-| ASan + UBSan | all 9 (`libasan` preloaded) | Clean |
-| ThreadSanitizer | 4 core (buffer, transform, allocator, fuzz) | Clean |
+| ASan + UBSan | all 11 (`libasan` preloaded) | Clean |
+| ThreadSanitizer | 6 non-plugin (buffer, transform, allocator, fuzz, optical_flow, det_meta) | Clean |
 
-The element tests (`nvmm_compositor`, `nvmm_sink`, `gstcheck_elements`,
-`integration`) load plugins via `dlopen`, which trips ASan's *"runtime does not
-come first"* check unless `libasan` is `LD_PRELOAD`ed — the runner does this, so
-all nine suites pass clean under ASan+UBSan; the loader leak is GStreamer's, not
-this code. Under **TSan** those same dlopen tests can't run (the unsanitized
-plugin scanner can't load a sanitized `.so`), so the `plugin` suite is excluded
-and the atomic-heavy IPC paths are covered by the core + fuzz suites; TSan needs
-`setarch -R` (a privileged container or bare host) to disable ASLR.
+**Real-API build (Orin NX, JP6)** — same script in a privileged container with
+`/dev` mounted so `/dev/nvmap` and the CUDA allocator are reachable:
+
+| Sanitizer | Suites | Result |
+|-----------|--------|--------|
+| ASan + UBSan | all 11 | Clean |
+| ThreadSanitizer | 4 (allocator, fuzz, optical_flow, det_meta) | Clean |
+
+The element tests (`nvmm_compositor`, `nvmm_sink`, `nvmm_appsrc`,
+`gstcheck_elements`, `integration`) load plugins via `dlopen`, which trips ASan's
+*"runtime does not come first"* check unless `libasan` is `LD_PRELOAD`ed — the
+runner does this, so all 11 suites pass clean under ASan+UBSan; the loader leak
+is GStreamer's, not this code. Under **TSan** those dlopen tests can't run (the
+unsanitized plugin scanner can't load a sanitized `.so`), so the `plugin` suite
+is excluded; TSan needs `setarch -R` (a privileged container or bare host) to
+disable ASLR. On the **real-API** build, `nvmm_buffer` and `nvmm_transform` are
+also excluded from TSan (suite `nvidia_hwlib`): they delegate to closed NVIDIA
+libs that TSan flags but we cannot fix — `libnvbufsurftransform` double-locks its
+own global mutex and the CUDA allocator OOMs under TSan's shadow reservation. On
+the mock build those two use the mock NvBufSurface and stay TSan-clean, so the
+skip is a no-op there. The atomic-heavy IPC paths (shm header/fuzz, det-meta,
+allocator) are covered under TSan on both builds.
 
 ## Benchmark results
 

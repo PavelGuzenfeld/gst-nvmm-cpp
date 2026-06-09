@@ -34,6 +34,11 @@ nvmm_add_test(test_gst_nvmm_allocator
     LIBRARIES nvmm_common gstnvmmalloc PkgConfig::GSTREAMER
 )
 
+nvmm_add_test(test_nvmm_det_meta
+    SOURCES test_nvmm_det_meta.cpp
+    LIBRARIES nvmm_common PkgConfig::GSTREAMER
+)
+
 nvmm_add_test(test_nvmm_sink
     SOURCES test_nvmm_sink.cpp
     LIBRARIES gstnvmmsink PkgConfig::GSTREAMER

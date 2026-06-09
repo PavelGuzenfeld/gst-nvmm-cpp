@@ -66,10 +66,17 @@ run_tsan() {
     # can't load sanitized libs, and TSan can't be LD_PRELOADed the way ASan
     # can). The remaining core + concurrency tests cover the atomic-heavy IPC
     # paths without going through the plugin factory.
+    #
+    # Skip `nvidia_hwlib` too: on a real-API (Jetson) build, nvmm_buffer and
+    # nvmm_transform delegate to closed NVIDIA libs that TSan flags but we can't
+    # fix (libnvbufsurftransform double-locks its own global mutex; the CUDA
+    # allocator OOMs under TSan's shadow space). That suite is empty on the mock
+    # build, so this flag is a harmless no-op there and those tests still run.
     TSAN_OPTIONS="halt_on_error=1:abort_on_error=1:second_deadlock_stack=1:suppressions=$ROOT/scripts/tsan.supp" \
     G_SLICE=always-malloc \
     meson test -C builddir-tsan --print-errorlogs \
         --no-suite plugin \
+        --no-suite nvidia_hwlib \
         --wrapper "setarch $(uname -m) -R"
 }
 

@@ -33,6 +33,7 @@
 #include "shm_protocol.h"
 #include "fd_ipc.h"
 #include "nvmm_caps.h"
+#include "nvmm_det_meta.h"
 
 typedef NvmmShmHeader ShmHeader;
 
@@ -40,6 +41,7 @@ enum {
     PROP_0,
     PROP_SHM_NAME,
     PROP_IS_LIVE,
+    PROP_IMPORT_METADATA,
 };
 
 /* --- Custom GstAllocator for imported NVMM pool buffers --- */
@@ -135,6 +137,8 @@ struct _GstNvmmAppSrcPrivate {
     GstVideoInfo video_info;
     gboolean is_live;
     gboolean caps_set;
+    gboolean import_metadata;  /* attach GstNvmmDetMeta from the side-channel */
+    gboolean meta_available;   /* import_metadata AND producer publishes metadata */
 
     /* Zero-copy pool */
     int socket_fd;
@@ -161,6 +165,9 @@ gst_nvmm_app_src_set_property(GObject *object, guint prop_id,
             self->priv->is_live = g_value_get_boolean(value);
             gst_base_src_set_live(GST_BASE_SRC(self), self->priv->is_live);
             break;
+        case PROP_IMPORT_METADATA:
+            self->priv->import_metadata = g_value_get_boolean(value);
+            break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
             break;
@@ -178,6 +185,9 @@ gst_nvmm_app_src_get_property(GObject *object, guint prop_id,
             break;
         case PROP_IS_LIVE:
             g_value_set_boolean(value, self->priv->is_live);
+            break;
+        case PROP_IMPORT_METADATA:
+            g_value_set_boolean(value, self->priv->import_metadata);
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -236,6 +246,14 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         fprintf(stderr, "[nvmmappsrc] Bad version %u\n", header->version);
         return FALSE;
     }
+
+    /* Metadata side-channel is usable only if both sides opted in. The producer
+       grew the segment (and we mmap'd st.st_size), so meta_enabled implies the
+       region is present and mapped. */
+    priv->meta_available = priv->import_metadata && header->meta_enabled;
+    if (priv->import_metadata && !header->meta_enabled)
+        fprintf(stderr, "[nvmmappsrc] import-metadata=true but producer is not "
+                "exporting metadata — no GstNvmmDetMeta will be attached\n");
 
     /* Connect to producer socket */
     priv->socket_fd = nvmm_client_connect(header->socket_path);
@@ -428,6 +446,18 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     GST_BUFFER_PTS(buffer) = header->timestamp_ns;
     GST_BUFFER_DURATION(buffer) = GST_CLOCK_TIME_NONE;
 
+    /* Attach detections from the side-channel. The ref count we incremented on
+       `idx` pins both pool[idx] and slot[idx]: the producer only writes a slot it
+       owns (ref_count == -1) and won't reuse `idx` while we hold a ref, so
+       slot[idx] is exactly the metadata for the pixels in this buffer regardless
+       of how far the producer has since advanced. Attach unconditionally — a
+       frame_number comparison against the live header would wrongly drop metadata
+       whenever the consumer lags the producer. */
+    if (priv->meta_available) {
+        NvmmFrameMeta *slot = nvmm_shm_meta(priv->shm_ptr, idx);
+        gst_buffer_add_nvmm_det_meta(buffer, slot);
+    }
+
     priv->last_frame_number = header->frame_number;
 
     *buf = buffer;
@@ -464,6 +494,15 @@ gst_nvmm_app_src_class_init(GstNvmmAppSrcClass *klass)
             "Whether this source is a live source",
             TRUE, G_PARAM_READWRITE));
 
+    g_object_class_install_property(gobject_class, PROP_IMPORT_METADATA,
+        g_param_spec_boolean("import-metadata", "Import Metadata",
+            "Attach a GstNvmmDetMeta with the producer's object detections "
+            "(read from the IPC side-channel) to each output buffer. Requires "
+            "the producer to run with export-metadata=true. DeepStream-free: "
+            "downstream reads GstNvmmDetMeta; a DeepStream consumer can convert "
+            "it to NvDsBatchMeta in a pad probe.",
+            FALSE, G_PARAM_READWRITE));
+
     gst_element_class_set_static_metadata(element_class,
         "NVMM Zero-Copy IPC Source",
         "Source/Video",
@@ -493,6 +532,8 @@ gst_nvmm_app_src_init(GstNvmmAppSrc *self)
     self->priv->last_frame_number = 0;
     self->priv->is_live = TRUE;
     self->priv->caps_set = FALSE;
+    self->priv->import_metadata = FALSE;
+    self->priv->meta_available = FALSE;
     self->priv->socket_fd = -1;
     self->priv->pool_size = 0;
     for (int i = 0; i < NVMM_POOL_SIZE; i++)
