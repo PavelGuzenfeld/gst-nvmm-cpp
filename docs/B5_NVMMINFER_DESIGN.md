@@ -1,6 +1,6 @@
 # B5 — `nvmminfer` & the NVMM inference-graph family (design)
 
-> Status: **design agreed, build pending Phase-0 reproducer.** Supersedes the
+> Status: **design agreed; Phase-0 gate CLEARED (GO) on Orin JP6.** Supersedes the
 > single-element framing in `HW_ACCEL_EXPLORATION.md` (B5). Target: Orin first.
 
 ## What this is
@@ -48,13 +48,34 @@ The genuinely new **TRT** work is only the detector + the secondary classifier.
 | Engine artifacts | Source + precision | Mirror `nvinfer`: `engine-file` (prebuilt `.engine`) and/or `onnx-file` (build + disk-cache on first run; engines are device+TRT-version specific, non-portable). `dla-core` (0/1/-1=GPU), `precision` = **fp16 first**; **int8 deferred** (needs calibration cache). |
 | First model | Concrete detector | **Default: YOLO11n/v8n** ONNX → engine; its decode+NMS parser behind a clean `parse(output_tensors) → vector<NvmmDetObject>` interface so a 2nd model is a new function, not a new element. |
 
-## Phase 0 — the go/no-go gate (do this first)
+## Phase 0 — the go/no-go gate — ✅ CLEARED (GO)
 
-**Standalone on-Jetson reproducer**: confirm an `NvBufSurface` surface's device
-pointer is directly readable by **NPP/TRT on Orin without a copy** (no EGL-image
-bounce). This single result decides whether *any* `nvmminfer` is worth building.
-Same method as the IPC root-cause work: build in `gst-nvmm-cpp:jp5`/Orin image,
-verify on hardware.
+**Standalone on-Jetson reproducer** (`probes/trt_nvbufsurface_probe.cpp`):
+confirm an `NvBufSurface` surface's device pointer flows into **NPP and TRT with
+no host round-trip**. This single result decides whether *any* `nvmminfer` is
+worth building.
+
+**Result (Orin JP6, TensorRT 10.3.0.30 + CUDA 12.5, run on host):** every step
+passed → **GO**.
+
+- `NvBufSurface` `dataPtr` is **CUDA device-addressable** (`cudaPointerGetAttributes`
+  → `memoryType=device`) for a **pitch-linear RGBA** surface (the VIC-preprocess
+  output layout) — *and*, notably, for a **block-linear NV12** surface too (the
+  decoder default), so addressability is not the constraint; the de-tile to planar
+  (VIC) before TRT is.
+- **NPP** (`nppiSet_8u_C4R`) operates on `dataPtr` in place — device→device, no copy.
+- **TensorRT** builds an engine, accepts `setInputTensorAddress`/`setTensorAddress`
+  on device pointers **we own**, and runs `enqueueV3` + sync — confirming the
+  raw-device-pointer binding model the element relies on.
+
+Build/run:
+```
+g++ -std=c++17 -O2 probes/trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
+  -I/usr/src/jetson_multimedia_api/include -I/usr/local/cuda/include \
+  -L/usr/lib/aarch64-linux-gnu/tegra -L/usr/local/cuda/lib64 -L/usr/lib/aarch64-linux-gnu \
+  -lnvbufsurface -lnvinfer -lcudart -lnppc -lnppidei -lnppig
+./trt_nvbufsurface_probe   # on the HOST (needs /dev/nvmap), not a container
+```
 
 ## Phasing
 
