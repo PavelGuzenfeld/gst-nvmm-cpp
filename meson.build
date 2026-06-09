@@ -134,6 +134,35 @@ if nvvpi_lib.found()
   endif
 endif
 
+# TensorRT + CUDA + NPP — needed for the inference element (nvmminfer). These ship
+# under /usr/lib/aarch64-linux-gnu + /usr/local/cuda with no pkg-config on Jetson,
+# so probe the libs + headers directly. The element builds wherever TensorRT is
+# present (Jetson) and is gated out of the x86 mock/CI build (skip-on-host, the
+# same strategy as VPI/nvmmofa; CUDA/TRT are not mocked).
+have_tensorrt = false
+trt_header_dir = ''
+foreach d : ['/usr/include/aarch64-linux-gnu', '/usr/include']
+  if trt_header_dir == '' and fs.is_file(d / 'NvInfer.h')
+    trt_header_dir = d
+  endif
+endforeach
+cuda_lib_dirs = ['/usr/local/cuda/lib64', '/usr/lib/aarch64-linux-gnu']
+nvinfer_lib = cc.find_library('nvinfer', dirs : cuda_lib_dirs, required : false)
+cudart_lib  = cc.find_library('cudart',  dirs : cuda_lib_dirs, required : false)
+nppc_lib    = cc.find_library('nppc',    dirs : cuda_lib_dirs, required : false)
+nppidei_lib = cc.find_library('nppidei', dirs : cuda_lib_dirs, required : false)
+nppig_lib   = cc.find_library('nppig',   dirs : cuda_lib_dirs, required : false)
+if trt_header_dir != '' and fs.is_dir('/usr/local/cuda/include') \
+   and nvinfer_lib.found() and cudart_lib.found() \
+   and nppc_lib.found() and nppidei_lib.found() and nppig_lib.found()
+  trt_dep = declare_dependency(
+    dependencies : [nvinfer_lib, cudart_lib, nppc_lib, nppidei_lib, nppig_lib],
+    include_directories : include_directories(
+      trt_header_dir, '/usr/local/cuda/include', is_system : true),
+  )
+  have_tensorrt = true
+endif
+
 # Optional DeepStream metadata bridge (libnvds_meta + nvdsmeta.h). Off by default
 # so the suite stays DeepStream-free; the flat IPC wire format never needs it.
 have_deepstream_meta = false
@@ -170,6 +199,7 @@ conf.set10('HAVE_NVBUFSURFACE', have_nvbufsurface)
 conf.set10('HAVE_NVBUFSURFTRANSFORM', have_nvbufsurftransform)
 conf.set10('HAVE_NVSCIBUF', have_nvscibuf)
 conf.set10('HAVE_VPI', have_vpi)
+conf.set10('HAVE_TENSORRT', have_tensorrt)
 conf.set10('HAVE_DEEPSTREAM_META', have_deepstream_meta)
 conf.set_quoted('JETPACK_VERSION', jetpack_version)
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
@@ -199,6 +229,12 @@ subdir('gst/nvmmappsrc')
 if have_vpi and have_nvbufsurface
   message('VPI found — building nvmmofa (OFA optical flow)')
   subdir('gst/nvmmofa')
+endif
+# TensorRT inference (nvmminfer) — needs TRT + CUDA + NPP + real NVMM (Jetson-only;
+# gated out of the x86 mock/CI build, same as nvmmofa).
+if have_tensorrt and have_nvbufsurface
+  message('TensorRT found — building nvmminfer (TRT inference)')
+  subdir('gst/nvmminfer')
 endif
 subdir('tests')
 subdir('benchmarks')
