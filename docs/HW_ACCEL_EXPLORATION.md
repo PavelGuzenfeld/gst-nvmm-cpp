@@ -340,7 +340,7 @@ the Jetson, README + tests, then a version bump + tag.
 | B3 nvmmofa (OFA) | ✅ DONE (v1.3.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
 | B4 nvmmcv (PVA) | ⚫ PARKED (no puller, 2026-06-09) | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy. Re-enter only if Orin-only consumer + PVA-beats-CUDA measurement |
 | `nvmmremap` (remap/undistort) | ⚪ DORMANT candidate | no stock no-DS NVMM remap exists; would build CUDA-backed (both chips, NV12 zero-copy, no PVA) if lens-undistort demand appears |
-| B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
+| B5 nvmminfer (TRT) | 🟢 DESIGN AGREED, build pending Phase-0 reproducer | Scoped into an inference-graph element family + 3 phases — see [B5_NVMMINFER_DESIGN.md](B5_NVMMINFER_DESIGN.md). Phase-0 gate: NvBufSurface device-ptr → NPP/TRT zero-copy reproducer on Orin |
 
 Phases 1–3 (VIC + NVJPG/NVENC reuse + OFA) are done; the "reuse stock" items
 (B1/B6) are measured-closed. The VPI probes (`vpi_pva_probe.cpp`,
@@ -349,5 +349,9 @@ works on both chips, but the two VPI engines diverge sharply on *layout*: **OFA
 requires block-linear** (the `nvvidconv` default → B3 shipped, Orin-only) while
 **PVA morphology requires pitch-linear** and is unevenly implemented across
 VPI 2/3 (→ B4 **NO-GO as specified**, would need re-scope to Orin-only +
-pitch-linear or fall back to CUDA/VIC). B5 (TensorRT inference) remains the open
-large item, pending user go-ahead.
+pitch-linear or fall back to CUDA/VIC). B5 (TensorRT inference) is now **design
+agreed** — scoped into a composable inference-graph element family across three
+phases (`nvmminfer` detector → `nvmmtracker` + share-capable allocator +
+`nvmmfusion` → secondary classifier cascade), gated on a Phase-0 reproducer that
+proves `NvBufSurface` device-ptr → NPP/TRT zero-copy on Orin. Full design:
+[B5_NVMMINFER_DESIGN.md](B5_NVMMINFER_DESIGN.md).
