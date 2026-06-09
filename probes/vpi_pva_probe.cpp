@@ -1,5 +1,10 @@
 // Phase-0 go/no-go probe for B4 (nvmmcv — PVA vision ops via VPI).
 //
+// VERDICT (2026-06-09): B4 is PARKED (no puller). This probe is the primary
+// evidence behind the (algo, format, backend, chip) matrix and the NO-GO — kept
+// so the finding is reproducible, not just claimed. See the B4 verdict in
+// docs/HW_ACCEL_EXPLORATION.md before reopening.
+//
 // The real unknown is the (algo, format, backend, chip) triple: does VPI accept a
 // ZERO-COPY-wrapped NvBufSurface on the PVA backend, in a format the PVA algo
 // supports, on BOTH Xavier and Orin? PVA morphology supports only single-channel
