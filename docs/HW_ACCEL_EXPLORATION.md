@@ -239,12 +239,31 @@ NVMM pipeline would need a VIC **de-tile copy** first, defeating the zero-copy
 value proposition.
 
 **Implication:** B4 as a *both-chips, zero-copy* element is **NO-GO** with the
-current VPI/PVA stack. Real options, smaller than the original B4: (a) an
-**Orin-only** PVA/VPI element (like B3's gating), accepting **pitch-linear**
-input and documenting the de-tile for block-linear sources; (b) drop PVA and
-expose these ops on the already-working **CUDA/VIC** backends (no new
-differentiator); (c) park B4 until a use case justifies the Orin-only +
-pitch-linear constraints. Decision deferred to the user.
+current VPI/PVA stack. The options considered were: (a) an **Orin-only** PVA/VPI
+element (like B3's gating), accepting **pitch-linear** input and documenting the
+de-tile for block-linear sources; (b) drop PVA and expose these ops on the
+already-working **CUDA/VIC** backends (no new differentiator); (c) park B4 until
+a use case justifies the Orin-only + pitch-linear constraints.
+
+**Decision (2026-06-09): PARK (option c).** There is **no puller** — no consumer
+pipeline demands a PVA vision op today, and a single-host vision op does not
+advance the project's differentiator (cross-process zero-copy NVMM IPC). Option
+(a) is strictly worse than B3: Orin-only **and** pitch-linear, versus B3's
+Orin-only but block-linear-native. Option (b) carries no differentiator for the
+trivially-available ops.
+
+**Re-entry trigger (narrow):** re-open B4-PVA only if (1) a *named* Orin-only
+consumer needs a specific PVA op, **and** (2) a measurement shows PVA beats the
+CUDA/VIC backend for that op. Default expectation: stays parked — CUDA/VIC
+usually wins on availability (both chips, no version-uneven `NOT_IMPLEMENTED`).
+
+**Carve-out — `nvmmremap` (dormant candidate, not a roadmap item):** of the
+candidate op list, **remap / lens-undistort** is the one with no stock no-DS
+NVMM element (`nvvidconv` does scale/crop/convert/flip, not arbitrary remap). If
+lens-undistort demand ever appears, the clean build is a **CUDA-backed
+`nvmmremap`** — both chips, NV12 zero-copy, **no PVA dependency** — which fits
+the no-DeepStream thesis far better than Orin-only PVA morphology. Recorded
+separately from B4 because its justification differs; no puller yet, so dormant.
 
 ### B5. `nvmminfer` — DLA/GPU inference via TensorRT (both chips)
 Run a TensorRT engine on a DLA core (fallback GPU) directly on NVMM input, with
@@ -306,7 +325,10 @@ the Jetson, README + tests, then a version bump + tag.
   copy?~~ **Likely yes** — TensorRT 10.3 (installed on Orin) binds raw CUDA device
   pointers and NvBufSurface exposes a per-surface device pointer; full reproducer
   deferred with the B5 build.
-- Mock strategy for VPI/TensorRT in CI (stub vs. skip-on-host).
+- ~~Mock strategy for VPI in CI (stub vs. skip-on-host).~~ **Settled by B3
+  precedent:** VPI engines ship with **no CI unit test** — VPI/SoC-gated, tested
+  on-device as the documented exception. Remaining open only for **B5**:
+  TensorRT CI-mock strategy (stub vs. skip-on-host).
 
 ## Status summary (2026-06-07)
 | Item | Verdict | Evidence |
@@ -316,7 +338,8 @@ the Jetson, README + tests, then a version bump + tag.
 | B2 nvmmcompositor | ✅ DONE (v1.2.0) | element shipped + dual-host validated (PR #25) |
 | B6 nvmmenc | ✅ PASS (reuse stock) | stock `nvv4l2h264enc` encodes from NVMM, measured both hosts |
 | B3 nvmmofa (OFA) | ✅ DONE (v1.3.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
-| B4 nvmmcv (PVA) | 🔴 NO-GO as specified | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy; re-scope needed |
+| B4 nvmmcv (PVA) | ⚫ PARKED (no puller, 2026-06-09) | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy. Re-enter only if Orin-only consumer + PVA-beats-CUDA measurement |
+| `nvmmremap` (remap/undistort) | ⚪ DORMANT candidate | no stock no-DS NVMM remap exists; would build CUDA-backed (both chips, NV12 zero-copy, no PVA) if lens-undistort demand appears |
 | B5 nvmminfer (TRT) | 🟡 VIABLE, deferred | TensorRT 10.3 present; largest scope — needs user go-ahead |
 
 Phases 1–3 (VIC + NVJPG/NVENC reuse + OFA) are done; the "reuse stock" items
