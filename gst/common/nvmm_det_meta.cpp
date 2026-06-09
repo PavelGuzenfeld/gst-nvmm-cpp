@@ -30,6 +30,34 @@ nvmm_det_meta_free(GstMeta *meta, GstBuffer * /*buffer*/)
     m->num_objects = 0;
 }
 
+/* Allocate + populate a GstNvmmDetMeta on `buffer` from flat fields, deep-copying
+   the `n` objects (n must already be clamped to NVMM_META_MAX_OBJECTS; `objects`
+   may be null when n == 0). Shared by the public add and the copy-transform so the
+   object array is copied exactly once, with no NvmmFrameMeta-sized temporary. */
+static GstNvmmDetMeta *
+nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_width,
+                     guint32 infer_height, guint32 flags, guint n,
+                     const NvmmDetObject *objects)
+{
+    auto *m = reinterpret_cast<GstNvmmDetMeta *>(
+        gst_buffer_add_meta(buffer, gst_nvmm_det_meta_get_info(), nullptr));
+    if (!m)
+        return nullptr;
+
+    m->frame_number = frame_number;
+    m->infer_width = infer_width;
+    m->infer_height = infer_height;
+    m->flags = flags;
+    m->num_objects = n;
+    if (n) {
+        m->objects = static_cast<NvmmDetObject *>(g_malloc(n * sizeof(NvmmDetObject)));
+        memcpy(m->objects, objects, n * sizeof(NvmmDetObject));
+    } else {
+        m->objects = nullptr;
+    }
+    return m;
+}
+
 static gboolean
 nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * /*buffer*/,
                         GQuark type, gpointer /*data*/)
@@ -41,17 +69,11 @@ nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * /*buffer*/,
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 
+    /* src->num_objects is already clamped (set when src was attached). */
     auto *src = reinterpret_cast<GstNvmmDetMeta *>(meta);
-    NvmmFrameMeta frame;
-    frame.frame_number = src->frame_number;
-    frame.infer_width = src->infer_width;
-    frame.infer_height = src->infer_height;
-    frame.flags = src->flags;
-    frame.num_objects = src->num_objects;
-    if (src->num_objects)
-        memcpy(frame.objects, src->objects,
-               src->num_objects * sizeof(NvmmDetObject));
-    return gst_buffer_add_nvmm_det_meta(dest, &frame) != nullptr;
+    return nvmm_det_meta_attach(dest, src->frame_number, src->infer_width,
+                                src->infer_height, src->flags, src->num_objects,
+                                src->objects) != nullptr;
 }
 
 GType
@@ -93,28 +115,13 @@ gst_buffer_add_nvmm_det_meta(GstBuffer *buffer, const NvmmFrameMeta *frame)
     g_return_val_if_fail(GST_IS_BUFFER(buffer), nullptr);
     g_return_val_if_fail(frame != nullptr, nullptr);
 
-    auto *m = reinterpret_cast<GstNvmmDetMeta *>(
-        gst_buffer_add_meta(buffer, gst_nvmm_det_meta_get_info(), nullptr));
-    if (!m)
-        return nullptr;
-
     guint n = frame->num_objects;
     if (n > NVMM_META_MAX_OBJECTS)
         n = NVMM_META_MAX_OBJECTS;
 
-    m->frame_number = frame->frame_number;
-    m->infer_width = frame->infer_width;
-    m->infer_height = frame->infer_height;
-    m->flags = frame->flags;
-    m->num_objects = n;
-    if (n) {
-        m->objects = static_cast<NvmmDetObject *>(
-            g_malloc(n * sizeof(NvmmDetObject)));
-        memcpy(m->objects, frame->objects, n * sizeof(NvmmDetObject));
-    } else {
-        m->objects = nullptr;
-    }
-    return m;
+    return nvmm_det_meta_attach(buffer, frame->frame_number, frame->infer_width,
+                                frame->infer_height, frame->flags, n,
+                                frame->objects);
 }
 
 #ifdef NVMM_DEEPSTREAM_META
