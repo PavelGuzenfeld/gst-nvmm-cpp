@@ -68,12 +68,19 @@ struct _GstNvmmInfer {
     int     net_w, net_h;
     int     num_classes, num_proposals;
     guint64 frame_no;
+
+    /* performance measurement (property measure-latency) */
+    gboolean   measure;
+    cudaEvent_t ev0, ev1, ev2, ev3;  /* pre-start, pre-end, infer-end, copy-end */
+    gdouble    acc_pre, acc_infer, acc_copy, acc_parse;  /* ms summed over window */
+    guint      perf_frames;
+    gint64     window_start_us;
 };
 
 G_DEFINE_TYPE(GstNvmmInfer, gst_nvmm_infer, GST_TYPE_BASE_TRANSFORM)
 
 enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE,
-       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD };
+       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY };
 
 /* Detector input is fed from decoded NV12 NVMM video. Frame travels through
    unchanged; only detection meta is attached. */
@@ -133,6 +140,14 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         GST_ELEMENT_ERROR(self, LIBRARY, INIT, ("cudaStreamCreate failed"),
                           ("%s", cudaGetErrorString(ce)));
         return FALSE;
+    }
+
+    if (self->measure) {
+        cudaEventCreate(&self->ev0); cudaEventCreate(&self->ev1);
+        cudaEventCreate(&self->ev2); cudaEventCreate(&self->ev3);
+        self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
+        self->perf_frames = 0;
+        self->window_start_us = g_get_monotonic_time();
     }
 
     std::string err;
@@ -234,27 +249,34 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         }
     }
 
+    const gboolean m = self->measure;
+    if (m) cudaEventRecord(self->ev0, self->stream);
+
     nvmm::LetterboxInfo lb;
     if (!self->pre->run(surf, self->d_input, lb, err)) {
         GST_WARNING_OBJECT(self, "preprocess failed: %s", err.c_str());
         return GST_FLOW_OK;
     }
+    if (m) cudaEventRecord(self->ev1, self->stream);
 
     if (!self->engine->infer(self->stream)) {
         GST_WARNING_OBJECT(self, "TensorRT enqueueV3 failed");
         return GST_FLOW_OK;
     }
+    if (m) cudaEventRecord(self->ev2, self->stream);
 
     /* Copy the output back to host and wait for the whole stream (preprocess +
        inference + copy) to complete. */
     const size_t out_bytes = self->host_out->size() * sizeof(float);
     cudaError_t ce = cudaMemcpyAsync(self->host_out->data(), self->d_output, out_bytes,
                                      cudaMemcpyDeviceToHost, self->stream);
+    if (m) cudaEventRecord(self->ev3, self->stream);
     if (ce == cudaSuccess) ce = cudaStreamSynchronize(self->stream);
     if (ce != cudaSuccess) {
         GST_WARNING_OBJECT(self, "CUDA output copy/sync failed: %s", cudaGetErrorString(ce));
         return GST_FLOW_OK;
     }
+    const gint64 parse_t0 = m ? g_get_monotonic_time() : 0;
 
     /* Decode + NMS -> det_meta (boxes in original-frame pixel space). */
     NvmmFrameMeta fm{};
@@ -278,6 +300,32 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         GST_LOG_OBJECT(self, "  [%u] %s %.2f  box=(%.0f,%.0f %0.fx%.0f)",
                        i, o.label, o.confidence, o.left, o.top, o.width, o.height);
     }
+
+    if (m) {
+        float pre = 0, inf = 0, cpy = 0;
+        cudaEventElapsedTime(&pre, self->ev0, self->ev1);
+        cudaEventElapsedTime(&inf, self->ev1, self->ev2);
+        cudaEventElapsedTime(&cpy, self->ev2, self->ev3);
+        self->acc_pre   += pre;
+        self->acc_infer += inf;
+        self->acc_copy  += cpy;
+        self->acc_parse += (g_get_monotonic_time() - parse_t0) / 1000.0;  // us -> ms
+        if (++self->perf_frames >= 60) {
+            const gint64 now = g_get_monotonic_time();
+            const double secs = (now - self->window_start_us) / 1e6;
+            const double n = self->perf_frames;
+            GST_INFO_OBJECT(self,
+                "perf over %d frames: pre=%.2f infer=%.2f copy=%.2f parse=%.2f "
+                "inner-total=%.2f ms | %.1f FPS (wall)",
+                (int)n, self->acc_pre / n, self->acc_infer / n, self->acc_copy / n,
+                self->acc_parse / n,
+                (self->acc_pre + self->acc_infer + self->acc_copy + self->acc_parse) / n,
+                n / secs);
+            self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
+            self->perf_frames = 0;
+            self->window_start_us = now;
+        }
+    }
     return GST_FLOW_OK;
 }
 
@@ -291,6 +339,13 @@ gst_nvmm_infer_stop(GstBaseTransform *bt)
     self->pre = new nvmm::Preprocessor();   /* fresh, so a re-start reconfigures */
     if (self->d_input)  { cudaFree(self->d_input);  self->d_input = nullptr; }
     if (self->d_output) { cudaFree(self->d_output); self->d_output = nullptr; }
+    if (self->measure) {
+        if (self->ev0) cudaEventDestroy(self->ev0);
+        if (self->ev1) cudaEventDestroy(self->ev1);
+        if (self->ev2) cudaEventDestroy(self->ev2);
+        if (self->ev3) cudaEventDestroy(self->ev3);
+        self->ev0 = self->ev1 = self->ev2 = self->ev3 = nullptr;
+    }
     if (self->stream) { cudaStreamDestroy(self->stream); self->stream = nullptr; }
     return TRUE;
 }
@@ -319,6 +374,7 @@ gst_nvmm_infer_set_property(GObject *o, guint id, const GValue *v, GParamSpec *p
         case PROP_DLA_CORE:         self->dla_core = g_value_get_int(v); break;
         case PROP_CONF_THRESHOLD:   self->conf_threshold = g_value_get_double(v); break;
         case PROP_IOU_THRESHOLD:    self->iou_threshold = g_value_get_double(v); break;
+        case PROP_MEASURE_LATENCY:  self->measure = g_value_get_boolean(v); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -334,6 +390,7 @@ gst_nvmm_infer_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
         case PROP_DLA_CORE:         g_value_set_int(v, self->dla_core); break;
         case PROP_CONF_THRESHOLD:   g_value_set_double(v, self->conf_threshold); break;
         case PROP_IOU_THRESHOLD:    g_value_set_double(v, self->iou_threshold); break;
+        case PROP_MEASURE_LATENCY:  g_value_set_boolean(v, self->measure); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -375,6 +432,11 @@ gst_nvmm_infer_class_init(GstNvmmInferClass *klass)
         g_param_spec_double("nms-iou-threshold", "NMS IoU threshold",
             "IoU above which same-class boxes are suppressed",
             0.0, 1.0, 0.45, flags));
+    g_object_class_install_property(go, PROP_MEASURE_LATENCY,
+        g_param_spec_boolean("measure-latency", "Measure latency",
+            "Log per-stage inner-pipeline latency (preprocess/infer/copy/parse) "
+            "and FPS every 60 frames at INFO level",
+            FALSE, flags));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -413,6 +475,11 @@ gst_nvmm_infer_init(GstNvmmInfer *self)
     self->net_w = self->net_h = 0;
     self->num_classes = self->num_proposals = 0;
     self->frame_no = 0;
+    self->measure = FALSE;
+    self->ev0 = self->ev1 = self->ev2 = self->ev3 = nullptr;
+    self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
+    self->perf_frames = 0;
+    self->window_start_us = 0;
     /* In-place: same caps in/out, the frame's pixels are never copied —
        transform_ip gets the writable buffer and only attaches detection meta. */
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);

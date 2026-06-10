@@ -15,6 +15,12 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
     p.height      = (uint32_t)h;
     p.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
     p.layout      = NVBUF_LAYOUT_PITCH;
+    // FIXME(robustness): NvBufSurfTransform on this Orin rejects a CUDA-memory dst
+    // ("Surface type not supported ... NVBUF_MEM_CUDA_DEVICE") for some source
+    // memtypes (works for a plain decode frame, fails for imagefreeze/videotestsrc).
+    // Hardening TODO: VIC-transform into a SURFACE_ARRAY dst, then EGL-register it
+    // (cudaGraphicsEGLRegisterImage) to get a CUDA pointer for NPP. Until then this
+    // path is validated only for the decode source.
     p.memType     = NVBUF_MEM_CUDA_DEVICE;   // CUDA-addressable (Phase-0 verified)
     p.gpuId       = 0;
     NvBufSurface *s = nullptr;
