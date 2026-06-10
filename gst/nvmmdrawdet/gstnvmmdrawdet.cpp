@@ -234,9 +234,16 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
                       self->thickness, r8, g8, b8);
 
             if (!self->draw_labels) continue;
-            char text[NVMM_META_LABEL_LEN + 8];
-            g_snprintf(text, sizeof text, "%s %.0f%%",
-                       o.label[0] ? o.label : "obj", (double)o.confidence * 100.0);
+            const char *lbl = o.label[0] ? o.label : "obj";
+            char text[NVMM_META_LABEL_LEN + 32];
+            /* Prepend the tracker id (e.g. "car #4 82%") when a tracker upstream
+               has assigned one; otherwise just "label conf%". */
+            if (o.tracker_id)
+                g_snprintf(text, sizeof text, "%s #%" G_GUINT64_FORMAT " %.0f%%",
+                           lbl, o.tracker_id, (double)o.confidence * 100.0);
+            else
+                g_snprintf(text, sizeof text, "%s %.0f%%", lbl,
+                           (double)o.confidence * 100.0);
             /* Label bar just above the box; tuck it inside the top if no room. */
             int ty = by - FONT_H * ts - ts;
             if (ty < ts) ty = by + ts;
