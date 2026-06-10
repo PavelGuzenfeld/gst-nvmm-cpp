@@ -152,11 +152,12 @@ cudart_lib  = cc.find_library('cudart',  dirs : cuda_lib_dirs, required : false)
 nppc_lib    = cc.find_library('nppc',    dirs : cuda_lib_dirs, required : false)
 nppidei_lib = cc.find_library('nppidei', dirs : cuda_lib_dirs, required : false)
 nppig_lib   = cc.find_library('nppig',   dirs : cuda_lib_dirs, required : false)
+nppial_lib  = cc.find_library('nppial',  dirs : cuda_lib_dirs, required : false)
 if trt_header_dir != '' and fs.is_dir('/usr/local/cuda/include') \
    and nvinfer_lib.found() and cudart_lib.found() \
-   and nppc_lib.found() and nppidei_lib.found() and nppig_lib.found()
+   and nppc_lib.found() and nppidei_lib.found() and nppig_lib.found() and nppial_lib.found()
   trt_dep = declare_dependency(
-    dependencies : [nvinfer_lib, cudart_lib, nppc_lib, nppidei_lib, nppig_lib],
+    dependencies : [nvinfer_lib, cudart_lib, nppc_lib, nppidei_lib, nppig_lib, nppial_lib],
     include_directories : include_directories(
       trt_header_dir, '/usr/local/cuda/include', is_system : true),
   )

@@ -2,6 +2,8 @@
 
 #include "gstnvmminfer.h"
 #include "trt_engine.hpp"
+#include "preprocess.hpp"
+#include "yolo_parser.hpp"
 #include "nvmm_det_meta.h"
 #include "gstnvmmallocator.h"
 
@@ -9,6 +11,7 @@
 #include <cuda_runtime.h>
 
 #include <string>
+#include <vector>
 
 GST_DEBUG_CATEGORY_STATIC(gst_nvmm_infer_debug);
 #define GST_CAT_DEFAULT gst_nvmm_infer_debug
@@ -48,16 +51,29 @@ struct _GstNvmmInfer {
     gdouble  net_scale;     /* multiply pixels by this (YOLO: 1/255) */
     gint     color_order;   /* NVMM_INFER_{RGB,BGR} */
     gint     dla_core;      /* -1 = GPU / as-built; 0/1 = DLA core (onnx-build path) */
+    gdouble  conf_threshold;
+    gdouble  iou_threshold;
 
     /* runtime state */
-    nvmm::TrtEngine *engine;
-    cudaStream_t     stream;
-    gint             width, height;
+    nvmm::TrtEngine    *engine;
+    nvmm::Preprocessor *pre;
+    cudaStream_t        stream;
+    gint                width, height;
+
+    /* device I/O + introspected geometry */
+    float  *d_input;
+    float  *d_output;
+    std::vector<float> *host_out;   /* output copied to host for parsing */
+    std::string *in_name, *out_name;
+    int     net_w, net_h;
+    int     num_classes, num_proposals;
+    guint64 frame_no;
 };
 
 G_DEFINE_TYPE(GstNvmmInfer, gst_nvmm_infer, GST_TYPE_BASE_TRANSFORM)
 
-enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE };
+enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE,
+       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD };
 
 /* Detector input is fed from decoded NV12 NVMM video. Frame travels through
    unchanged; only detection meta is attached. */
@@ -147,12 +163,45 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
                           ("engine has no %s tensor", in ? "output" : "input"), (nullptr));
         return FALSE;
     }
-    /* A detector input is expected to be 1x3xHxW (NCHW). Warn — don't fail —
-       so other shapes can still be inspected during bring-up. */
+    /* Detector input must be 1x3xHxW (NCHW). */
     if (in->dims.nbDims != 4 || in->dims.d[1] != 3) {
-        GST_WARNING_OBJECT(self, "input \"%s\" is %s, expected 1x3xHxW (NCHW)",
-                           in->name.c_str(), nvmm::dims_str(in->dims).c_str());
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("input \"%s\" is %s, expected 1x3xHxW (NCHW)",
+                           in->name.c_str(), nvmm::dims_str(in->dims).c_str()), (nullptr));
+        return FALSE;
     }
+    self->net_h = (int)in->dims.d[2];
+    self->net_w = (int)in->dims.d[3];
+
+    /* YOLO head: [1, 4+num_classes, num_proposals] (channels-first). */
+    if (out->dims.nbDims != 3 || out->dims.d[1] <= 4) {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("output \"%s\" is %s, expected [1, 4+classes, proposals]",
+                           out->name.c_str(), nvmm::dims_str(out->dims).c_str()), (nullptr));
+        return FALSE;
+    }
+    self->num_classes   = (int)out->dims.d[1] - 4;
+    self->num_proposals = (int)out->dims.d[2];
+
+    cudaError_t e1 = cudaMalloc((void **)&self->d_input, in->bytes);
+    cudaError_t e2 = cudaMalloc((void **)&self->d_output, out->bytes);
+    if (e1 != cudaSuccess || e2 != cudaSuccess) {
+        GST_ELEMENT_ERROR(self, RESOURCE, NO_SPACE_LEFT, ("cudaMalloc for engine I/O failed"),
+                          ("%s / %s", cudaGetErrorString(e1), cudaGetErrorString(e2)));
+        return FALSE;
+    }
+    self->host_out->resize((size_t)out->volume);
+
+    *self->in_name = in->name;
+    *self->out_name = out->name;
+    if (!self->engine->bind(*self->in_name, self->d_input) ||
+        !self->engine->bind(*self->out_name, self->d_output)) {
+        GST_ELEMENT_ERROR(self, LIBRARY, INIT, ("failed to bind engine I/O addresses"), (nullptr));
+        return FALSE;
+    }
+
+    GST_INFO_OBJECT(self, "ready: net %dx%d, %d classes, %d proposals",
+                    self->net_w, self->net_h, self->num_classes, self->num_proposals);
     return TRUE;
 }
 
@@ -167,11 +216,63 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         return GST_FLOW_OK;
     }
 
-    /* Phase-1 slice 1: engine is loaded + introspected at start(); the VIC+NPP
-       preprocess, enqueueV3, YOLO parse and det_meta attach land in the next
-       slices. For now the frame passes through unchanged. */
-    GST_LOG_OBJECT(self, "frame %ux%u — inference path pending (preprocess+parse)",
-                   self->width, self->height);
+    std::string err;
+
+    /* Lazy preprocess config: needs both the network size (start) and the frame
+       size (set_caps). Letterbox geometry is fixed once the frame size is known. */
+    if (!self->pre->configured()) {
+        if (self->width <= 0 || self->height <= 0) {
+            GST_WARNING_OBJECT(self, "frame size unknown; skipping");
+            return GST_FLOW_OK;
+        }
+        const bool rgb = self->color_order == NVMM_INFER_RGB;
+        if (!self->pre->configure(self->net_w, self->net_h, self->width, self->height,
+                                  rgb, (float)self->net_scale, self->stream, err)) {
+            GST_ELEMENT_ERROR(self, LIBRARY, INIT, ("preprocess configure failed"),
+                              ("%s", err.c_str()));
+            return GST_FLOW_ERROR;
+        }
+    }
+
+    nvmm::LetterboxInfo lb;
+    if (!self->pre->run(surf, self->d_input, lb, err)) {
+        GST_WARNING_OBJECT(self, "preprocess failed: %s", err.c_str());
+        return GST_FLOW_OK;
+    }
+
+    if (!self->engine->infer(self->stream)) {
+        GST_WARNING_OBJECT(self, "TensorRT enqueueV3 failed");
+        return GST_FLOW_OK;
+    }
+
+    /* Copy the output back to host and wait for the whole stream (preprocess +
+       inference + copy) to complete. */
+    const size_t out_bytes = self->host_out->size() * sizeof(float);
+    cudaError_t ce = cudaMemcpyAsync(self->host_out->data(), self->d_output, out_bytes,
+                                     cudaMemcpyDeviceToHost, self->stream);
+    if (ce == cudaSuccess) ce = cudaStreamSynchronize(self->stream);
+    if (ce != cudaSuccess) {
+        GST_WARNING_OBJECT(self, "CUDA output copy/sync failed: %s", cudaGetErrorString(ce));
+        return GST_FLOW_OK;
+    }
+
+    /* Decode + NMS -> det_meta (boxes in original-frame pixel space). */
+    NvmmFrameMeta fm{};
+    fm.frame_number = self->frame_no++;
+    fm.infer_width  = (guint32)lb.frame_w;
+    fm.infer_height = (guint32)lb.frame_h;
+    nvmm::YoloParams yp;
+    yp.num_classes   = self->num_classes;
+    yp.num_proposals = self->num_proposals;
+    yp.conf_threshold = (float)self->conf_threshold;
+    yp.iou_threshold  = (float)self->iou_threshold;
+    bool truncated = false;
+    fm.num_objects = nvmm::yolo_parse(self->host_out->data(), yp, lb, fm.objects, &truncated);
+    fm.flags = truncated ? NVMM_FRAME_META_FLAG_TRUNCATED : 0u;
+
+    gst_buffer_add_nvmm_det_meta(buf, &fm);
+    GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %u detections",
+                   fm.frame_number, fm.num_objects);
     return GST_FLOW_OK;
 }
 
@@ -181,6 +282,10 @@ gst_nvmm_infer_stop(GstBaseTransform *bt)
     auto *self = GST_NVMM_INFER(bt);
     delete self->engine;
     self->engine = nullptr;
+    delete self->pre;                       /* releases its RGBA surface + planes */
+    self->pre = new nvmm::Preprocessor();   /* fresh, so a re-start reconfigures */
+    if (self->d_input)  { cudaFree(self->d_input);  self->d_input = nullptr; }
+    if (self->d_output) { cudaFree(self->d_output); self->d_output = nullptr; }
     if (self->stream) { cudaStreamDestroy(self->stream); self->stream = nullptr; }
     return TRUE;
 }
@@ -190,6 +295,10 @@ gst_nvmm_infer_finalize(GObject *o)
 {
     auto *self = GST_NVMM_INFER(o);
     g_free(self->engine_file);
+    delete self->pre;
+    delete self->host_out;
+    delete self->in_name;
+    delete self->out_name;
     G_OBJECT_CLASS(gst_nvmm_infer_parent_class)->finalize(o);
 }
 
@@ -203,6 +312,8 @@ gst_nvmm_infer_set_property(GObject *o, guint id, const GValue *v, GParamSpec *p
         case PROP_NET_SCALE_FACTOR: self->net_scale = g_value_get_double(v); break;
         case PROP_COLOR_ORDER:      self->color_order = g_value_get_enum(v); break;
         case PROP_DLA_CORE:         self->dla_core = g_value_get_int(v); break;
+        case PROP_CONF_THRESHOLD:   self->conf_threshold = g_value_get_double(v); break;
+        case PROP_IOU_THRESHOLD:    self->iou_threshold = g_value_get_double(v); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -216,6 +327,8 @@ gst_nvmm_infer_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
         case PROP_NET_SCALE_FACTOR: g_value_set_double(v, self->net_scale); break;
         case PROP_COLOR_ORDER:      g_value_set_enum(v, self->color_order); break;
         case PROP_DLA_CORE:         g_value_set_int(v, self->dla_core); break;
+        case PROP_CONF_THRESHOLD:   g_value_set_double(v, self->conf_threshold); break;
+        case PROP_IOU_THRESHOLD:    g_value_set_double(v, self->iou_threshold); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -249,6 +362,14 @@ gst_nvmm_infer_class_init(GstNvmmInferClass *klass)
             "DLA core for the onnx-build path (-1 = GPU/as-built); for a prebuilt "
             "engine-file the accelerator is already baked in",
             -1, 1, -1, flags));
+    g_object_class_install_property(go, PROP_CONF_THRESHOLD,
+        g_param_spec_double("conf-threshold", "Confidence threshold",
+            "Minimum class confidence to keep a detection",
+            0.0, 1.0, 0.25, flags));
+    g_object_class_install_property(go, PROP_IOU_THRESHOLD,
+        g_param_spec_double("nms-iou-threshold", "NMS IoU threshold",
+            "IoU above which same-class boxes are suppressed",
+            0.0, 1.0, 0.45, flags));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -270,13 +391,23 @@ gst_nvmm_infer_class_init(GstNvmmInferClass *klass)
 static void
 gst_nvmm_infer_init(GstNvmmInfer *self)
 {
-    self->engine_file = nullptr;
-    self->net_scale   = 1.0 / 255.0;
-    self->color_order = NVMM_INFER_RGB;
-    self->dla_core    = -1;
-    self->engine      = nullptr;
-    self->stream      = nullptr;
+    self->engine_file    = nullptr;
+    self->net_scale      = 1.0 / 255.0;
+    self->color_order    = NVMM_INFER_RGB;
+    self->dla_core       = -1;
+    self->conf_threshold = 0.25;
+    self->iou_threshold  = 0.45;
+    self->engine         = nullptr;
+    self->pre            = new nvmm::Preprocessor();
+    self->stream         = nullptr;
     self->width = self->height = 0;
+    self->d_input = self->d_output = nullptr;
+    self->host_out = new std::vector<float>();
+    self->in_name  = new std::string();
+    self->out_name = new std::string();
+    self->net_w = self->net_h = 0;
+    self->num_classes = self->num_proposals = 0;
+    self->frame_no = 0;
     /* In-place: same caps in/out, the frame's pixels are never copied —
        transform_ip gets the writable buffer and only attaches detection meta. */
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
