@@ -61,20 +61,6 @@ jobs:
           git log --oneline --no-merges "${PREV_TAG}..HEAD~1" | while read -r line; do
             echo "- ${line}" >> changelog.md
           done
-          echo "" >> changelog.md
-
-          # Append test summary
-          echo "## Test Results" >> changelog.md
-          echo '```' >> changelog.md
-          grep -E "^Ok:|^Fail:|passed|failed" test-output.txt | tail -10 >> changelog.md
-          echo '```' >> changelog.md
-          echo "" >> changelog.md
-
-          # Append benchmark results
-          echo "## Benchmark Results (mock API)" >> changelog.md
-          echo '```' >> changelog.md
-          cat benchmark-results.csv >> changelog.md
-          echo '```' >> changelog.md
 
       - name: Build source tarball
         run: |
@@ -89,7 +75,6 @@ jobs:
           body_path: changelog.md
           files: |
             gst-nvmm-cpp-${{ steps.version.outputs.version }}.tar.gz
-            benchmark-results.csv
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
         env:
