@@ -419,6 +419,17 @@ as the host compiler, and GCC 14 is the first GCC with feature-complete C++20.
 - Sanitizer pass (`scripts/run-sanitizers.sh`) re-run, since the standard-library
   ABI and `-std` change can surface new diagnostics.
 
+#### Feasibility — verified on Orin (JP6, CUDA 12.6)
+A spike confirmed the CUDA/TRT/NPP stack is C++20-clean before committing to the bump:
+- **Compile** `cpp_std=c++20`, CUDA 12.6.68, TensorRT 10.3: 58/58 targets build under
+  both the stock **GCC 11.4** and **GCC 14.3** (installed from `ppa:ubuntu-toolchain-r/test`);
+  no CUDA/TRT/NPP header breakage (we have no `.cu`/`nvcc`, so no host-version gate fires).
+- **Test** the full `meson test` suite under GCC 14.3 / C++20 / CUDA 12.6: **12/12 pass**.
+- **Golden** (`nvmminfer_golden_test`) against the C++20 build: **5/5**, IoU 0.97–0.996,
+  conf delta ≤0.05 — runtime detections unchanged.
+
+So the remaining work is image/CI toolchain pinning (5.1/5.2), not a code-compatibility risk.
+
 > Rationale: C++20 (concepts, `std::span`, ranges, designated initializers,
 > `<bit>`) simplifies the buffer/meta plumbing and the upcoming Phase-2 tracker
 > math; standardizing the version removes the current C++14/17 drift across
