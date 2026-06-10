@@ -46,6 +46,14 @@ test_yolo_parser = executable('test_yolo_parser',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+# Pure-host motion-compute test: per-box mean flow + moving flag (Phase 3).
+test_nvmm_motion = executable('test_nvmm_motion',
+  'test_nvmm_motion.cpp',
+  '../gst/common/nvmm_motion.cpp',
+  include_directories : [config_inc, common_inc],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
 # Pure-host tracker test: compiles the tracker core directly (no CUDA/TRT/gst),
 # covering IOU matching + id persistence + expiry on the x86 CI build.
 test_nvmm_tracker = executable('test_nvmm_tracker',
@@ -94,6 +102,7 @@ test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
+test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')
 test_appsrc = executable('test_nvmm_appsrc',
   'test_nvmm_appsrc.cpp',
   include_directories : [

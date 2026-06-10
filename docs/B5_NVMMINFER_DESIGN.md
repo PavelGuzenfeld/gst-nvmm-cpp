@@ -96,6 +96,10 @@ g++ -std=c++17 -O2 probes/trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
 - **Phase 3 — cascade + payoff (v1.6.0).** `nvmmsecondaryinfer` (ROI crop +
   re-batch + per-track cache) **and** the sibling metas (classifier result +
   fusion motion-annotation). The "mark moving objects" headline lands here.
+  *3.1 motion annotation ✅ DONE:* `nvmmfusion` computes per-box mean flow
+  (px/frame) at join time and attaches `GstNvmmMotionMeta`; `nvmmdrawdet`
+  renders movers (`>>` + heavy box). Verified on Orin: the driving car is
+  marked, parked cars/pedestrians are not. *3.2 `nvmmsecondaryinfer`:* next.
 
 ## Validation assets
 

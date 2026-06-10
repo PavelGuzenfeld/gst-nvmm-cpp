@@ -42,4 +42,8 @@ static int tests_failed = 0;
 
 #define ASSERT_NOT_NULL(ptr) ASSERT_TRUE((ptr) != nullptr)
 
+/* Float comparison within eps (test file must include <cmath>). */
+#define ASSERT_NEAR(a, b, eps) \
+    ASSERT_TRUE(std::fabs((double)(a) - (double)(b)) <= (eps))
+
 #endif  // NVMM_TEST_HARNESS_H

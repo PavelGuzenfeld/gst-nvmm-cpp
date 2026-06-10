@@ -2,6 +2,8 @@
 
 #include "gstnvmmfusion.h"
 #include "nvmm_det_meta.h"
+#include "nvmm_motion.hpp"
+#include "nvmm_motion_meta.h"
 #include "nvmm_optical_flow_meta.h"
 
 GST_DEBUG_CATEGORY_STATIC(gst_nvmm_fusion_debug);
@@ -18,9 +20,39 @@ struct _GstNvmmFusion {
     GstAggregatorPad *det_pad;
     GstAggregatorPad *flow_pad;
     gboolean          src_caps_set;
+    gboolean          compute_motion;    /* property */
+    gdouble           motion_threshold;  /* property: px/frame */
 };
 
 G_DEFINE_TYPE(GstNvmmFusion, gst_nvmm_fusion, GST_TYPE_AGGREGATOR)
+
+enum { PROP_0, PROP_COMPUTE_MOTION, PROP_MOTION_THRESHOLD };
+
+/* Phase-3 payoff: mean flow magnitude under each det box -> motion meta. The
+   flow field is a small tightly-packed host memory (e.g. 480x270 cells). */
+static void
+annotate_motion(GstNvmmFusion *self, GstBuffer *out,
+                const GstNvmmDetMeta *dm, const NvmmOpticalFlowMeta *fm)
+{
+    GstMapInfo map;
+    if (!fm->mv || !gst_memory_map(fm->mv, &map, GST_MAP_READ)) {
+        GST_WARNING_OBJECT(self, "cannot map flow field; skipping motion");
+        return;
+    }
+    nvmm::MotionEntry entries[NVMM_META_MAX_OBJECTS];
+    /* Boxes are in dm->infer_width/height space; we hand the compute the flow
+       meta's frame dims. These match today — both branches see the same tee'd
+       frame and nvmminfer sets infer dims = source frame — but if a scaler ever
+       lands between the branches the spaces diverge and need a rescale here. */
+    const guint32 n = MIN(dm->num_objects, (guint32)NVMM_META_MAX_OBJECTS);
+    const uint32_t got = nvmm::compute_box_motion(
+        reinterpret_cast<const int16_t *>(map.data), fm->mv_width, fm->mv_height,
+        fm->grid_size, fm->frame_width, fm->frame_height,
+        dm->objects, n, (float)self->motion_threshold, entries);
+    gst_memory_unmap(fm->mv, &map);
+    if (got)
+        gst_buffer_add_nvmm_motion_meta(out, entries, got);
+}
 
 /* Two named sink pads (detection carries the frame + det_meta and becomes the
    output; flow contributes its optical-flow meta) + the fused src. */
@@ -98,6 +130,8 @@ gst_nvmm_fusion_aggregate(GstAggregator *agg, gboolean /*timeout*/) {
             GST_LOG_OBJECT(self, "flow branch buffer carries no optical-flow meta");
         }
         GstNvmmDetMeta *dm = gst_buffer_get_nvmm_det_meta(out);
+        if (self->compute_motion && fm && dm && dm->num_objects)
+            annotate_motion(self, out, dm, fm);
         GST_LOG_OBJECT(self, "fused: %u detection(s) + flow=%s on one buffer",
                        dm ? dm->num_objects : 0, fm ? "yes" : "no");
         ret = gst_aggregator_finish_buffer(agg, out);  /* consumes `out` */
@@ -110,9 +144,39 @@ done:
 }
 
 static void
+gst_nvmm_fusion_set_property(GObject *o, guint id, const GValue *v, GParamSpec *p) {
+    auto *self = GST_NVMM_FUSION(o);
+    if (id == PROP_COMPUTE_MOTION) self->compute_motion = g_value_get_boolean(v);
+    else if (id == PROP_MOTION_THRESHOLD) self->motion_threshold = g_value_get_double(v);
+    else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
+}
+
+static void
+gst_nvmm_fusion_get_property(GObject *o, guint id, GValue *v, GParamSpec *p) {
+    auto *self = GST_NVMM_FUSION(o);
+    if (id == PROP_COMPUTE_MOTION) g_value_set_boolean(v, self->compute_motion);
+    else if (id == PROP_MOTION_THRESHOLD) g_value_set_double(v, self->motion_threshold);
+    else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
+}
+
+static void
 gst_nvmm_fusion_class_init(GstNvmmFusionClass *klass) {
+    auto *go = G_OBJECT_CLASS(klass);
     auto *el = GST_ELEMENT_CLASS(klass);
     auto *agg = GST_AGGREGATOR_CLASS(klass);
+
+    go->set_property = gst_nvmm_fusion_set_property;
+    go->get_property = gst_nvmm_fusion_get_property;
+    g_object_class_install_property(go, PROP_COMPUTE_MOTION,
+        g_param_spec_boolean("compute-motion", "Compute motion",
+            "Compute per-detection motion from the flow field and attach a "
+            "GstNvmmMotionMeta (the Phase-3 fusion result)", TRUE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_MOTION_THRESHOLD,
+        g_param_spec_double("motion-threshold", "Motion threshold",
+            "Mean flow magnitude (pixels/frame) at/above which an object is "
+            "flagged moving", 0.0, 1000.0, 1.0,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     gst_element_class_add_static_pad_template_with_gtype(
         el, &det_tmpl, GST_TYPE_AGGREGATOR_PAD);
@@ -148,6 +212,8 @@ add_sink_pad(GstNvmmFusion *self, const char *name) {
 static void
 gst_nvmm_fusion_init(GstNvmmFusion *self) {
     self->src_caps_set = FALSE;
+    self->compute_motion = TRUE;
+    self->motion_threshold = 1.0;
     self->det_pad = add_sink_pad(self, "detection");
     self->flow_pad = add_sink_pad(self, "flow");
 }

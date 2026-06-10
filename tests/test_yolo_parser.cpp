@@ -12,8 +12,6 @@ using nvmm::LetterboxInfo;
 using nvmm::YoloParams;
 // NvmmDetObject is a global C struct from shm_protocol.h (not namespaced).
 
-#define ASSERT_NEAR(a, b, eps) ASSERT_TRUE(std::fabs((double)(a) - (double)(b)) <= (eps))
-
 namespace {
 constexpr int N = 8400;  // proposals
 constexpr int C = 80;    // classes
