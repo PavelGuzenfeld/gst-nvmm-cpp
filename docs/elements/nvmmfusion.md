@@ -16,9 +16,9 @@ single buffer downstream holds **both** metas at one PTS. PTS is the join key:
 
 Either branch reaching EOS ends the fused stream (inner-join semantics).
 
-## Motion annotation (the Phase-3 payoff)
+## Motion annotation
 
-With both metas in hand at the join, fusion computes each detection's **mean
+With both metas available at the join, fusion computes each detection's **mean
 flow magnitude** (pixels/frame) from the flow cells under its box and attaches a
 `GstNvmmMotionMeta` — entries align by index with the det meta's objects. The
 threshold only sets the convenience `moving` flag; `mean_px` is stored alongside

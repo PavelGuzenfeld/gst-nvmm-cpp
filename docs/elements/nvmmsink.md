@@ -43,14 +43,11 @@ its frames to other processes**. Insert it on an NVMM branch after the stage you
 want to share:
 
 !!! success "Verified on Orin"
-    Run on Orin NX / JetPack 6 (L4T R36.4.3) / DeepStream 7.1 (samples container):
-    this pipeline (TrafficCamNet `nvinfer` + `nvdsosd`, `batch-size=1`) published
-    annotated NVMM frames through `nvmmsink`, and a separate `nvmmappsrc` consumer
-    imported and decoded **1422 frames** (re-encoded to JPEG) — confirming
-    `nvmmsink` accepts post-DeepStream NVMM and consumers read the annotated pixels.
-    Set
-    `nvinfer batch-size=1` for a single stream (the stock config defaults to a
-    heavy batch-30 INT8 engine); adjust `config-file-path` to your install.
+    Tested on Orin NX (JP6) with DeepStream 7.1: this pipeline published
+    annotated NVMM frames through `nvmmsink`, and a separate `nvmmappsrc`
+    consumer imported and re-encoded them. Set `nvinfer batch-size=1` for a
+    single stream (the stock config defaults to a batch-30 INT8 engine);
+    adjust `config-file-path` to your install.
 
 ```bash
 # Run inference, burn the overlay into the pixels, publish annotated NVMM frames

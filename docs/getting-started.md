@@ -47,3 +47,11 @@ gst-launch-1.0 videotestsrc num-buffers=1 pattern=smpte ! \
 
 > `nvmmconvert`/`nvmmappsrc` consume and emit `video/x-raw(memory:NVMM)`. Use
 > `nvvidconv` (VIC) — **not** `videoconvert` (CPU) — to cross the NVMM boundary.
+
+## Next steps
+
+- [Pipeline examples](pipelines.md) — transport, processing, encoding,
+  multi-camera fan-out.
+- [Inference graphs](inference-graphs.md) — detector / tracker / classifier /
+  optical-flow compositions.
+- [Creating a new element](extending.md) — extend the suite with your own node.

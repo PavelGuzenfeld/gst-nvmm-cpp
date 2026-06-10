@@ -39,30 +39,23 @@ Output dimensions come from the downstream caps. `rotate-90`/`270` and
 ... ! nvmmconvert flip-method=rotate-90 ! 'video/x-raw(memory:NVMM),width=480,height=640' ! ...
 ```
 
-## Relationship to `nvvidconv`
-
-`nvmmconvert` overlaps NVIDIA's stock `nvvidconv`; the value here is being
-open-source and integrated with this suite's NVMM allocator/IPC pool — not new 2D
-capability.
+`nvmmconvert` covers the same 2D operations as NVIDIA's stock `nvvidconv`,
+as an open-source element integrated with this suite's NVMM allocator and IPC
+pool.
 
 ## DeepStream interop
 
-`nvmmconvert` emits `video/x-raw(memory:NVMM)` backed by `NvBufSurface` (NV12 /
-RGBA), the same memory DeepStream consumes — so it drops in as an **open-source
-preprocessing stage** (crop / scale / rotate on the VIC) ahead of inference. You
-*can* feed DeepStream; you aren't *required* to.
-
-Put it **before** `nvstreammux` — `nvinfer` runs on the batched mux output, so any
-per-stream ROI crop or resize happens upstream of the mux:
+`nvmmconvert` emits `video/x-raw(memory:NVMM)` backed by `NvBufSurface`
+(NV12 / RGBA), the same memory DeepStream consumes, so it works as a
+preprocessing stage (crop / scale / rotate on the VIC) ahead of inference.
+Place it before `nvstreammux` — `nvinfer` runs on the batched mux output, so
+per-stream ROI crops or resizes belong upstream of the mux:
 
 !!! success "Verified on Orin"
-    Run on Jetson Orin NX, JetPack 6 (L4T R36.4.3), inside the
-    `nvcr.io/nvidia/deepstream:7.1-samples` container — the elements built against
-    DeepStream's own `NvBufSurface`, all four `nvmm*` plugins co-registered with
-    `nvinfer`/`nvstreammux`/`nvdsosd`. The pipeline below (TrafficCamNet detector)
-    ran end-to-end to EOS with real inference (headless test terminated in
-    `fakesink` in place of `nv3dsink`). `nvstreammux` property names and the
-    `nvinfer` config layout vary by DS release — adjust `config-file-path` to your
+    Tested on Orin NX (JP6) inside the `nvcr.io/nvidia/deepstream:7.1-samples`
+    container: the pipeline below ran end-to-end with real inference
+    (TrafficCamNet). `nvstreammux` property names and the `nvinfer` config
+    layout vary by DeepStream release — adjust `config-file-path` to your
     install.
 
 ```bash
@@ -83,6 +76,6 @@ gst-launch-1.0 \
     far more GPU memory than one stream warrants and can OOM on an 8 GB Orin NX.
     Overriding `nvinfer batch-size=1` builds a small single-batch engine instead.
 
-`nvmmconvert` is interchangeable with `nvvideoconvert` for this 2D step; the value
-is that it shares this suite's NVMM allocator/IPC pool, so a cropped frame can be
-published over [IPC](../ipc.md) without leaving the GPU.
+`nvmmconvert` is interchangeable with `nvvideoconvert` for this 2D step; it
+additionally shares this suite's NVMM allocator and IPC pool, so a cropped
+frame can be published over [IPC](../ipc.md) without leaving the GPU.

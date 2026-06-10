@@ -8,9 +8,8 @@ OFA hardware and attaches the motion-vector field as an
 [`NvmmOpticalFlowMeta`](#flow-metadata) for in-process analytics.
 
 !!! warning "Orin only"
-    OFA is dedicated hardware on Orin; **Xavier has no OFA** and cannot run this
-    element (documented N/A, like NVENC's Xavier-only encode). Built only where
-    VPI is present.
+    OFA is dedicated hardware on Orin; Xavier has no OFA and cannot run this
+    element. Built only where VPI is present.
 
 Sink/src caps: `video/x-raw(memory:NVMM), format=NV12`, 32×32 … 8192×8192. The
 input must be **block-linear** NV12 — exactly what `nvvidconv` emits — which is

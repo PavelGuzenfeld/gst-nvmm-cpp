@@ -41,14 +41,11 @@ fds in place — no extra GPU copy per consumer. Feed `nvstreammux` (batch the
 single stream), then `nvinfer`:
 
 !!! success "Verified on Orin"
-    Run on Orin NX / JetPack 6 (L4T R36.4.3) / DeepStream 7.1 (samples container):
-    an `nvmmsink` producer feeding `nvmmappsrc ! nvstreammux ! nvinfer`
-    (TrafficCamNet, `batch-size=1`) ran to EOS — `nvmmappsrc`'s NVMM negotiated into
-    `nvstreammux` and inference ran on the **imported** buffers (headless test
-    terminated in `fakesink` in place of `nv3dsink`). Adjust `nvstreammux`
-    properties and the `nvinfer` `config-file-path` to your install; set
-    `nvinfer batch-size=1` for a single stream (the stock config defaults to a
-    heavy batch-30 INT8 engine).
+    Tested on Orin NX (JP6) with DeepStream 7.1: an `nvmmsink` producer feeding
+    `nvmmappsrc ! nvstreammux ! nvinfer` ran to EOS with inference on the
+    imported buffers. Adjust `nvstreammux` properties and the `nvinfer`
+    `config-file-path` to your install; set `nvinfer batch-size=1` for a
+    single stream (the stock config defaults to a batch-30 INT8 engine).
 
 ```bash
 # Zero-copy IPC source -> DeepStream detector

@@ -12,10 +12,9 @@ inference.
 
 ## What crosses — and what doesn't
 
-The wire record is deliberate, fixed-size POD (`NvmmDetObject` /
-`NvmmFrameMeta` in `gst/common/shm_protocol.h`): per object a bbox, `class_id`,
-`confidence`, `tracker_id`, and a label string. That is the contract. It does
-**not** carry:
+The wire record is fixed-size POD (`NvmmDetObject` / `NvmmFrameMeta` in
+`gst/common/shm_protocol.h`): per object a bbox, `class_id`, `confidence`,
+`tracker_id`, and a label string. It does **not** carry:
 
 - `NvDsUserMeta` / custom user metadata (it holds process-local function
   pointers that cannot cross processes),
