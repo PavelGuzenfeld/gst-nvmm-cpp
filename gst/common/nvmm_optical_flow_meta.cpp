@@ -6,7 +6,16 @@ nvmm_optical_flow_meta_api_get_type(void)
     static GType type = 0;
     static const gchar *tags[] = { "memory", NULL };
     if (g_once_init_enter(&type)) {
-        GType t = gst_meta_api_type_register("NvmmOpticalFlowMetaAPI", tags);
+        /* Defensive: nvmm_common is a shared lib in-tree (one copy/process), but
+           a test harness or out-of-tree consumer may still static-link a second
+           copy. gst_meta_api_type_register() is NOT idempotent, so reuse an
+           existing registration; if we still lose a concurrent race, re-look-up
+           the winner's type (the register call returns 0 on a duplicate name). */
+        GType t = g_type_from_name("NvmmOpticalFlowMetaAPI");
+        if (t == 0)
+            t = gst_meta_api_type_register("NvmmOpticalFlowMetaAPI", tags);
+        if (t == 0)
+            t = g_type_from_name("NvmmOpticalFlowMetaAPI");
         g_once_init_leave(&type, t);
     }
     return type;

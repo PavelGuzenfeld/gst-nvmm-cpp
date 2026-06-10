@@ -1,7 +1,11 @@
 # B5 — `nvmminfer` & the NVMM inference-graph family (design)
 
-> Status: **design agreed; Phase-0 gate CLEARED (GO) on Orin JP6.** Supersedes the
-> single-element framing in `HW_ACCEL_EXPLORATION.md` (B5). Target: Orin first.
+> Status: **Phases 0–2 SHIPPED, Orin-validated.** Phase 0 gate cleared; Phase 1
+> (`nvmminfer` detector + `nvmmdrawdet` overlay + golden validation) merged via
+> PRs #37–#40; Phase 2 (share-capable `nvmmalloc` #44, `nvmmtracker` #45/#46,
+> `nvmmfusion`) complete. Phase 3 (cascade + the "mark moving objects" payoff)
+> is next. Supersedes the single-element framing in `HW_ACCEL_EXPLORATION.md`
+> (B5). Target: Orin first.
 
 ## What this is
 
@@ -42,7 +46,7 @@ The genuinely new **TRT** work is only the detector + the secondary classifier.
 | Preprocess | Where + how | **Inside `nvmminfer`** (like `nvinfer` — "just give it a frame"; do **not** revive the unshipped A.4 `NORMALIZE`). Mechanism: reuse proven **VIC** (`nvmm_transform`/`NvBufSurfTransform`) for resize + NV12→RGBA, then **NPP** (`nppi`) for normalize+planarize+cast → device tensor → TRT bind. NPP over a custom kernel: no `nvcc`/`.cu` added, ships with CUDA. Props: `network-size`, `mean`/`std` (or `net-scale-factor`), `color-order`. |
 | "Zero-copy" honesty | What it means for inference | **No host/CPU round-trip** — *not* binding the camera surface directly. Surface→input-tensor is one device pass (VIC→CUDA, one sync/frame, like DeepStream). Project's IPC/`tee` zero-copy claims unaffected. |
 | Fusion compute | Phase 1 vs later | **(a) structural join only** in Phase 1/2 (co-locate `det_meta` + flow meta by PTS). The cross-modal "mark moving objects" payoff lands in **Phase 3** with the fusion-result sibling meta. |
-| Join key | How fusion aligns branches | **PTS** — `tee` copies timestamps verbatim, so branch PTS are identical; `GstAggregator` aligns for free. Add a frame-id stamper only if hardware shows PTS collisions/reorder. Fusion latency = slower branch (OFA); `GstAggregator` timeout emits-with-flag rather than deadlocking. |
+| Join key | How fusion aligns branches | **PTS** — `tee` copies timestamps verbatim, so branch PTS are identical. *(As-built correction: plain `GstAggregator` does NOT align by timestamp — only `GstVideoAggregator` does — so `nvmmfusion` pairs queue heads and, on a PTS mismatch, drops the older head to resync.)* Add a frame-id stamper only if hardware shows PTS collisions/reorder. Fusion latency = slower branch (OFA); the timeout emit-with-flag is deferred until a live use-case needs it. |
 | CUDA/TRT | New deps | B5 is the **first CUDA in the repo** (TRT *is* CUDA). Pulls in `cudart` + `nvinfer` + `nppi`. |
 | CI / mock | Stub vs skip | **Skip-on-host**, following the VPI/`nvmmofa` precedent: probe `cudart`/`nvinfer`/`nppi` → `have_tensorrt`; TRT elements build only on Jetson, validated on hardware. **Host-CI-able** (mock `NvBufSurface`, no CUDA): the share-capable allocator, `nvmmtracker`, most of `nvmmfusion`. |
 | Engine artifacts | Source + precision | Mirror `nvinfer`: `engine-file` (prebuilt `.engine`) and/or `onnx-file` (build + disk-cache on first run; engines are device+TRT-version specific, non-portable). `dla-core` (0/1/-1=GPU), `precision` = **fp16 first**; **int8 deferred** (needs calibration cache). |
@@ -79,14 +83,16 @@ g++ -std=c++17 -O2 probes/trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
 
 ## Phasing
 
-- **Phase 1 — `nvmminfer` detector (v1.4.0).** Single element: VIC+NPP preprocess
-  → TRT engine (DLA/GPU, fp16) → YOLO parser → `det_meta`. Orin, file source,
-  validated end-to-end against a reference clip (below). *De-risks TRT + preprocess
-  + device-ptr zero-copy + CUDA/CI.* Nothing else.
-- **Phase 2 — graph plumbing (v1.5.0).** Share-capable `nvmmalloc` (+ host unit
-  test asserting identical surface device-ptr across `tee` branches) + `nvmmtracker`
-  + `nvmmfusion` (structural join of `det_meta` + reused `nvmmofa→flowstats`).
-  Largely host-CI-tested.
+- **Phase 1 — `nvmminfer` detector (v1.4.0). ✅ DONE** (PRs #37–#40). Single
+  element: VIC+NPP preprocess → TRT engine (fp16) → YOLO parser → `det_meta`,
+  plus `nvmmdrawdet` overlay, Dockerised E2E and the golden cross-check
+  (onnxruntime fp32 vs TRT: IoU ≥ 0.97). ~23 ms/frame (~43 FPS) at 1080p on Orin.
+- **Phase 2 — graph plumbing (v1.5.0). ✅ DONE.** Share-capable `nvmmalloc`
+  (#44; on-Jetson probe shows `tee`+`make_writable` keep the same NvBufSurface) +
+  `nvmmtracker` (#45/#46; pure-host IOU tracker, ids drawn by the overlay) +
+  `nvmmfusion` (PTS join unioning `det_meta` + `nvmmofa` flow meta on one
+  buffer; 590/591 frames fused with flow on Orin). Also fixed a latent
+  cross-`.so` meta-registration race by making `nvmm_common` a shared library.
 - **Phase 3 — cascade + payoff (v1.6.0).** `nvmmsecondaryinfer` (ROI crop +
   re-batch + per-track cache) **and** the sibling metas (classifier result +
   fusion motion-annotation). The "mark moving objects" headline lands here.
