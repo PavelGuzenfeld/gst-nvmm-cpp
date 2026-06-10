@@ -14,6 +14,9 @@ common_sources += files('nvmm_det_meta.cpp')
 # Phase-3 motion annotation: per-box flow compute (pure host, unit-tested on
 # x86) + the fusion-result sibling meta produced by nvmmfusion.
 common_sources += files('nvmm_motion.cpp', 'nvmm_motion_meta.cpp')
+# Phase-3.2 cascade: the classifier-result sibling meta produced by
+# nvmmsecondaryinfer (pure GstMeta, unit-tested on x86).
+common_sources += files('nvmm_class_meta.cpp')
 if build_mock
   mock_inc = include_directories('.')
 else

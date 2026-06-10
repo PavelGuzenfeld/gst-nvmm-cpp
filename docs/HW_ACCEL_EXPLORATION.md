@@ -340,7 +340,7 @@ the Jetson, README + tests, then a version bump + tag.
 | B3 nvmmofa (OFA) | ✅ DONE (v1.3.0, Orin-only) | element + flow-meta + nvmmflowstats shipped; OFA needs block-linear (nvvidconv default); validated on Orin (~46 fps 720p) |
 | B4 nvmmcv (PVA) | ⚫ PARKED (no puller, 2026-06-09) | measured: PVA erode Orin-only (Xavier VPI2 `NOT_IMPLEMENTED`) + block-linear rejected → no clean dual-host zero-copy. Re-enter only if Orin-only consumer + PVA-beats-CUDA measurement |
 | `nvmmremap` (remap/undistort) | ⚪ DORMANT candidate | no stock no-DS NVMM remap exists; would build CUDA-backed (both chips, NV12 zero-copy, no PVA) if lens-undistort demand appears |
-| B5 nvmminfer (TRT) | 🟢 DESIGN AGREED, Phase-0 gate **CLEARED (GO)** | Scoped into an inference-graph element family + 3 phases — see [B5_NVMMINFER_DESIGN.md](B5_NVMMINFER_DESIGN.md). Phase-0 reproducer (`probes/trt_nvbufsurface_probe.cpp`) confirmed on Orin JP6 (TRT 10.3 + CUDA 12.5): NvBufSurface `dataPtr` is CUDA device-addressable, NPP + TRT bind device pointers with no host round-trip |
+| B5 nvmminfer (TRT) | ✅ DONE (Phases 0–3, Orin-validated) | The full inference-graph family shipped: `nvmminfer` detector (+golden cross-check), share-capable `nvmmalloc`, `nvmmtracker`, `nvmmfusion` (+motion annotation), `nvmmsecondaryinfer` cascade classifier — see [B5_NVMMINFER_DESIGN.md](B5_NVMMINFER_DESIGN.md) |
 
 Phases 1–3 (VIC + NVJPG/NVENC reuse + OFA) are done; the "reuse stock" items
 (B1/B6) are measured-closed. The VPI probes (`vpi_pva_probe.cpp`,

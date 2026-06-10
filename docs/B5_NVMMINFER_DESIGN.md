@@ -1,11 +1,11 @@
 # B5 — `nvmminfer` & the NVMM inference-graph family (design)
 
-> Status: **Phases 0–2 SHIPPED, Orin-validated.** Phase 0 gate cleared; Phase 1
+> Status: **Phases 0–3 SHIPPED, Orin-validated.** Phase 0 gate cleared; Phase 1
 > (`nvmminfer` detector + `nvmmdrawdet` overlay + golden validation) merged via
 > PRs #37–#40; Phase 2 (share-capable `nvmmalloc` #44, `nvmmtracker` #45/#46,
-> `nvmmfusion`) complete. Phase 3 (cascade + the "mark moving objects" payoff)
-> is next. Supersedes the single-element framing in `HW_ACCEL_EXPLORATION.md`
-> (B5). Target: Orin first.
+> `nvmmfusion` #47) complete; Phase 3 (motion annotation #48 +
+> `nvmmsecondaryinfer` cascade) complete. Supersedes the single-element framing
+> in `HW_ACCEL_EXPLORATION.md` (B5). Target: Orin first.
 
 ## What this is
 
@@ -93,13 +93,23 @@ g++ -std=c++17 -O2 probes/trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
   `nvmmfusion` (PTS join unioning `det_meta` + `nvmmofa` flow meta on one
   buffer; 590/591 frames fused with flow on Orin). Also fixed a latent
   cross-`.so` meta-registration race by making `nvmm_common` a shared library.
-- **Phase 3 — cascade + payoff (v1.6.0).** `nvmmsecondaryinfer` (ROI crop +
-  re-batch + per-track cache) **and** the sibling metas (classifier result +
+- **Phase 3 — cascade + payoff (v1.6.0). ✅ DONE.** `nvmmsecondaryinfer` (ROI
+  crop + per-track cache) **and** the sibling metas (classifier result +
   fusion motion-annotation). The "mark moving objects" headline lands here.
   *3.1 motion annotation ✅ DONE:* `nvmmfusion` computes per-box mean flow
   (px/frame) at join time and attaches `GstNvmmMotionMeta`; `nvmmdrawdet`
   renders movers (`>>` + heavy box). Verified on Orin: the driving car is
-  marked, parked cars/pedestrians are not. *3.2 `nvmmsecondaryinfer`:* next.
+  marked, parked cars/pedestrians are not. *3.2 `nvmmsecondaryinfer` ✅ DONE:*
+  TRT cascade classifier — reads det meta, VIC-crops each ROI, classifies on an
+  `infer-interval` with a per-`tracker_id` cache, attaches the
+  `GstNvmmClassMeta` sibling (rendered by `nvmmdrawdet` as `[label conf%]`).
+  Per-channel `offsets`/`std-values` normalization (NPP `_Ctx` stream API, so
+  the global NPP stream nvmminfer binds stays untouched). Verified on Orin
+  (ResNet50 fp16 from TRT's own sample data behind yolo11n + tracker): COCO
+  `cat` → "tiger cat" on TRT's tabby sample, bus → "recreational vehicle";
+  cache shows full inference only on interval frames. ROI re-batch (a
+  dynamic-batch engine) is a deferred optimization — with the cache, per-frame
+  ROI counts are small.
 
 ## Validation assets
 

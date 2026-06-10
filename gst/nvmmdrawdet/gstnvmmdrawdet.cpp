@@ -3,6 +3,7 @@
 #include "gstnvmmdrawdet.h"
 #include "nvmm_det_meta.h"
 #include "nvmm_motion_meta.h"
+#include "nvmm_class_meta.h"
 #include "gstnvmmallocator.h"
 #include "font6x8.h"
 
@@ -224,6 +225,8 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     if (m && m->num_objects) {
         /* Motion annotation (from nvmmfusion): entries align by index. */
         GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
+        /* Classifier annotation (from nvmmsecondaryinfer): same alignment. */
+        GstNvmmClassMeta *cm = gst_buffer_get_nvmm_class_meta(inbuf);
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
         const float sy = m->infer_height ? (float)H / m->infer_height : 1.f;
         const int ts = MAX(1, H / 360);  /* font scale: ~3 at 1080p, ~2 at 720p */
@@ -240,14 +243,20 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
                       moving ? self->thickness * 2 : self->thickness, r8, g8, b8);
 
             if (!self->draw_labels) continue;
-            /* "car #4 82% >>" — tracker id when assigned, ">>" when moving. */
+            /* "car #4 82% >> [taxi 91%]" — tracker id when assigned, ">>"
+             * when moving, secondary-classifier result when attached. */
             char idbuf[24] = "";
             if (o.tracker_id)
                 g_snprintf(idbuf, sizeof idbuf, " #%" G_GUINT64_FORMAT, o.tracker_id);
-            char text[NVMM_META_LABEL_LEN + 40];
-            g_snprintf(text, sizeof text, "%s%s %.0f%%%s",
+            char clsbuf[NVMM_META_LABEL_LEN + 16] = "";
+            if (cm && i < cm->num_objects && cm->objects[i].class_id >= 0)
+                g_snprintf(clsbuf, sizeof clsbuf, " [%s %.0f%%]",
+                           cm->objects[i].label,
+                           (double)cm->objects[i].confidence * 100.0);
+            char text[2 * NVMM_META_LABEL_LEN + 64];
+            g_snprintf(text, sizeof text, "%s%s %.0f%%%s%s",
                        o.label[0] ? o.label : "obj", idbuf,
-                       (double)o.confidence * 100.0, moving ? " >>" : "");
+                       (double)o.confidence * 100.0, moving ? " >>" : "", clsbuf);
             /* Label bar just above the box; tuck it inside the top if no room. */
             int ty = by - FONT_H * ts - ts;
             if (ty < ts) ty = by + ts;

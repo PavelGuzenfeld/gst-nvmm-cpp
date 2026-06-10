@@ -21,8 +21,29 @@ pulls the frame to host via EGL/CUDA, and draws on the CPU.
 | `draw-labels` | bool | `true` | Draw the `label [#id] conf%` bar above each box |
 
 When an upstream [`nvmmtracker`](nvmmtracker.md) has assigned a `tracker_id`,
-the label shows it (`car #4 82%`); otherwise just `car 82%`. The font scale
-auto-derives from frame height (~3× at 1080p).
+the label shows it (`car #4 82%`); otherwise just `car 82%`. When
+[`nvmmsecondaryinfer`](nvmmsecondaryinfer.md) has attached a `GstNvmmClassMeta`,
+the classification is appended (`car #4 82% [taxi 91%]`); fused motion meta adds
+`>>` and a heavier box for movers. The font scale auto-derives from frame
+height (~3× at 1080p).
+
+## Known issue — caps-any downstream (e.g. `fakesink`) crashes
+
+`nvmmdrawdet ! fakesink` SIGSEGVs deterministically after the first frame
+(driver-stack backtrace via `libnvrm_gpu`/`libcuda`; reproduced 3/3 on Orin
+JP6/R36.4.3, 2026-06-10, with main's elements only — not introduced by the
+Phase-3 work). Suspected cause: with a caps-any downstream the default
+`GstBaseTransform` output allocation for the NVMM(NV12) → raw(RGBA) caps change
+sizes the output buffer wrong, so the element's host-side `cudaMemcpy2D` of
+`W*4 x H` bytes scribbles past the allocation and the corruption detonates in
+the next CUDA call.
+
+**Workaround:** always put a real raw-video consumer after the element —
+`videoconvert ! …` (as in every documented pipeline) is unaffected.
+**Fix direction (later):** validate the mapped output size before the copy
+(fail loudly instead of writing), and review
+`transform_caps`/`transform_size`/`get_unit_size` so the default allocator
+sizes the RGBA output correctly regardless of downstream.
 
 ```bash
 ... ! nvmminfer engine-file=yolo.engine ! nvmmtracker ! nvmmdrawdet \
