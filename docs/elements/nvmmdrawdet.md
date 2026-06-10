@@ -27,20 +27,11 @@ the classification is appended (`car #4 82% [taxi 91%]`); fused motion meta adds
 `>>` and a heavier box for movers. The font scale auto-derives from frame
 height (~3× at 1080p).
 
-## Fixed issue — caps-any downstream (e.g. `fakesink`) used to crash
-
-`nvmmdrawdet ! fakesink` SIGSEGV'd deterministically after the first frame
-(reproduced 3/3 on Orin JP6/R36.4.3, 2026-06-10). Cause: the element
-implemented neither `transform_size` nor `get_unit_size`, and the NVMM input's
-gst-buffer size is a surface *handle*, not pixels — so when a caps-any
-downstream answered the ALLOCATION query with no pool, the default output
-allocation mis-sized the RGBA buffer and the host-side `cudaMemcpy2D` of
-`W*4 x H` bytes corrupted the heap (detonating in the next CUDA call).
-
-Fixed by implementing `transform_size` (packed `W*H*4` computed from the RGBA
-caps) plus a loud size guard in `transform()` that errors instead of writing
-past a mis-negotiated buffer. Verified on Orin: the fakesink pipeline runs
-clean 3/3, and the documented `videoconvert` pipelines are unchanged.
+The element implements `transform_size` so its packed-RGBA output buffers are
+sized from the output caps regardless of what downstream proposes (an NVMM
+input buffer's size is a surface handle, not a pixel count), and it refuses to
+write into an undersized output buffer. Any downstream raw-video consumer
+works, including caps-any sinks like `fakesink`.
 
 ```bash
 ... ! nvmminfer engine-file=yolo.engine ! nvmmtracker ! nvmmdrawdet \

@@ -227,6 +227,7 @@ subdir('gst/nvmmsink')
 subdir('gst/nvmmappsrc')
 subdir('gst/nvmmtracker')  # pure-host det-meta tracker (no CUDA), builds everywhere
 subdir('gst/nvmmfusion')   # pure-host PTS branch fusion (no CUDA), builds everywhere
+subdir('gst/nvmmexample')  # docs/extending.md worked example (built, never installed)
 # OFA optical flow (nvmmofa) + its flow-meta consumer — needs VPI + real NVMM
 # (Orin-only hardware; gated out of the x86 mock/CI build).
 if have_vpi and have_nvbufsurface

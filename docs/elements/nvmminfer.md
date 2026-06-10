@@ -15,8 +15,8 @@ Sink/src caps: `video/x-raw(memory:NVMM), format=NV12`.
 ## Pipeline (device-only preprocess)
 
 1. **VIC** (`NvBufSurfTransform`) letterboxes NV12 → RGBA at network size into a
-   VIC-native surface; **EGL/CUDA interop** exposes it to CUDA (robust across all
-   source memtypes — decoder, `nvvidconv`, `imagefreeze`).
+   VIC-native surface; **EGL/CUDA interop** exposes it to CUDA, which works for
+   every source memtype (decoder, `nvvidconv`, `imagefreeze`).
 2. **NPP** splits planes, converts to float and normalizes into the input tensor.
 3. **TensorRT** `enqueueV3` on the bound device buffers.
 4. The host **YOLO parser** (pure CPU, unit-tested on x86 CI) decodes the

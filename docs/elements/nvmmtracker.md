@@ -19,8 +19,8 @@ too — the `nvmm::Tracker` core is dependency-free and unit-tested directly
 | `max-age` | int | `30` | Frames a track survives with no match |
 
 IDs are 1-based, stable within a stream session, and `0` means "no tracker"
-(the meta's default). Greedy-IOU is the Phase-2 algorithm; a motion model
-(SORT/Kalman) is a later internal change behind the same class boundary.
+(the meta's default). A motion model (SORT/Kalman) can replace greedy-IOU
+behind the same class boundary without changing the element interface.
 
 ```bash
 ... ! nvmminfer engine-file=yolo.engine ! nvmmtracker iou-threshold=0.3 \

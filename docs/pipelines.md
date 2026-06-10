@@ -1,5 +1,9 @@
 # Pipeline examples
 
+Transport, processing and encoding pipelines. For detector / tracker /
+classifier / optical-flow compositions see
+[Inference graphs](inference-graphs.md).
+
 > `nvmmconvert`/`nvmmappsrc` work in `video/x-raw(memory:NVMM)`. Cross the NVMM
 > boundary with `nvvidconv` (VIC) — not `videoconvert` (CPU) — or feed a hardware
 > consumer (`nvv4l2h264enc`, `nvjpegenc`) that takes NVMM directly.
@@ -37,14 +41,13 @@ gst-launch-1.0 ... ! nvmmconvert interpolation=5-tap ! \
   'video/x-raw(memory:NVMM),width=640,height=480' ! ...
 ```
 
-## Encode to H.264 / JPEG (reuse stock — already NVMM-native)
+## Encode to H.264 / JPEG
 
-There is **no `nvmmenc`/`nvmmjpegenc` in this suite by design**: NVIDIA's stock
-encoders already consume NVMM with no CPU bounce, so reimplementing them adds
-nothing. Verified on Jetson Xavier NX (JP5) and Orin NX (JP6) — `nvv4l2h264enc`,
-`nvv4l2h265enc`, `nvjpegenc`, and `nvjpegdec` all advertise
-`video/x-raw(memory:NVMM)` and run straight from an NVMM buffer (see
-[Validation](validation.md) and the hardware-acceleration plan's B1/B6 verdicts).
+NVIDIA's stock encoders are already NVMM-native, so this suite does not wrap
+them: `nvv4l2h264enc`, `nvv4l2h265enc`, `nvjpegenc`, and `nvjpegdec` all
+advertise `video/x-raw(memory:NVMM)` and consume an NVMM buffer directly
+(verified on Xavier NX / JP5 and Orin NX / JP6 — see
+[Validation](validation.md)).
 
 ```bash
 # H.264 encode straight from NVMM (no nvvidconv-to-sysmem in the path)
@@ -74,10 +77,10 @@ gst-launch-1.0 nvmmappsrc shm-name=/video_feed ! nvvidconv ! videoconvert ! auto
 
 ## Multi-camera fan-out to multiple consumers
 
-The motivating use case: one producer stream published once, consumed by as many
-processes as you want, all staying on the GPU. Each `nvmmsink` pool is written
-once per frame; every consumer just imports the fds and reads in place — adding a
-second or third consumer adds **no** extra GPU copy.
+One producer stream is published once and consumed by any number of processes,
+all staying on the GPU. Each `nvmmsink` pool is written once per frame; every
+consumer imports the fds and reads in place, so additional consumers add no
+extra GPU copy.
 
 **Producer** (N ZED cameras → N shm segments, one process):
 

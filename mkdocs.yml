@@ -42,20 +42,25 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Elements:
-      - nvmmconvert: elements/nvmmconvert.md
-      - nvmmcompositor: elements/nvmmcompositor.md
-      - nvmmofa: elements/nvmmofa.md
-      - nvmminfer: elements/nvmminfer.md
-      - nvmmtracker: elements/nvmmtracker.md
-      - nvmmfusion: elements/nvmmfusion.md
-      - nvmmsecondaryinfer: elements/nvmmsecondaryinfer.md
-      - nvmmdrawdet: elements/nvmmdrawdet.md
-      - nvmmsink: elements/nvmmsink.md
-      - nvmmappsrc: elements/nvmmappsrc.md
-      - nvmmalloc: elements/nvmmalloc.md
+      - Memory & IPC:
+          - nvmmalloc: elements/nvmmalloc.md
+          - nvmmsink: elements/nvmmsink.md
+          - nvmmappsrc: elements/nvmmappsrc.md
+      - Video processing:
+          - nvmmconvert: elements/nvmmconvert.md
+          - nvmmcompositor: elements/nvmmcompositor.md
+      - Inference & analytics:
+          - nvmminfer: elements/nvmminfer.md
+          - nvmmtracker: elements/nvmmtracker.md
+          - nvmmofa: elements/nvmmofa.md
+          - nvmmfusion: elements/nvmmfusion.md
+          - nvmmsecondaryinfer: elements/nvmmsecondaryinfer.md
+          - nvmmdrawdet: elements/nvmmdrawdet.md
+  - Pipeline examples: pipelines.md
+  - Inference graphs: inference-graphs.md
   - Zero-copy IPC: ipc.md
   - Metadata over IPC: metadata-ipc.md
-  - Pipeline examples: pipelines.md
+  - Creating a new element: extending.md
   - Validation & benchmarks: validation.md
   - Roadmap:
       - Hardware-acceleration plan: HW_ACCEL_EXPLORATION.md

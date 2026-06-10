@@ -1,9 +1,9 @@
-# Zero-copy IPC (the differentiator)
+# Zero-copy IPC
 
-The headline capability NVIDIA ships **no** stock element for: sharing GPU
-(NVMM) video frames between **independent processes** without a CPU copy on the
-consumer. DeepStream batches within a *single* process; this does it *across*
-processes.
+`nvmmsink` and `nvmmappsrc` share GPU (NVMM) video frames between independent
+processes without a CPU copy on the consumer. NVIDIA ships no stock element
+for this: DeepStream batches streams within a single process, while this
+transport crosses process boundaries.
 
 ## Data path
 
@@ -21,10 +21,11 @@ videotestsrc/camera/decoder
 - **Producer:** one GPU/VIC copy of each frame into a stable, ref-counted shared
   pool (decouples lifetime from the transient upstream buffer, and de-tiles
   BLOCK_LINEAR → PITCH_LINEAR).
-- **Consumer:** imports the pool buffer's fd and reads the **same physical
-  memory** — verified byte-identical on hardware. No further copy.
+- **Consumer:** imports the pool buffer's fd and reads the same physical
+  memory (verified byte-identical on hardware). No further copy.
 
-So the suite is **single-copy in, zero-copy out**, with no CPU on the path.
+The path is single-copy on the producer, zero-copy per consumer, with no CPU
+touching pixels.
 
 ## Wire protocol
 
