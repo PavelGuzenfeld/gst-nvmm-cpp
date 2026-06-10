@@ -201,6 +201,81 @@ static void test_pool_video_meta_real_strides() {
     PASS();
 }
 
+/* Phase 2: NVMM memory must be share-capable so tee fan-out + make_writable
+   stay zero-copy (shallow buffer copy referencing the SAME NvBufSurface). */
+
+static void test_memory_is_shareable() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
+    ASSERT_NOT_NULL(mem);
+    /* NO_SHARE would force a deep copy on make_writable — must be cleared. */
+    ASSERT_TRUE(!GST_MEMORY_FLAG_IS_SET(mem, GST_MEMORY_FLAG_NO_SHARE));
+    gst_memory_unref(mem);
+    gst_object_unref(alloc);
+    PASS();
+}
+
+static void test_share_references_same_surface() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
+    ASSERT_NOT_NULL(mem);
+
+    GstMemory* shared = gst_memory_share(mem, 0, -1);
+    ASSERT_NOT_NULL(shared);
+    ASSERT_TRUE(gst_is_nvmm_memory(shared));
+    /* Zero-copy: the share resolves to the SAME NvBufSurface, not a copy. */
+    ASSERT_TRUE(gst_nvmm_memory_get_surface(shared) ==
+                gst_nvmm_memory_get_surface(mem));
+
+    gst_memory_unref(shared);
+    gst_memory_unref(mem);
+    gst_object_unref(alloc);
+    PASS();
+}
+
+static void test_tee_make_writable_zero_copy() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
+    ASSERT_NOT_NULL(mem);
+    void* surf0 = gst_nvmm_memory_get_surface(mem);
+
+    GstBuffer* buf = gst_buffer_new();
+    gst_buffer_append_memory(buf, mem);  /* buf takes ownership of mem */
+
+    /* gst_buffer_copy() shallow-copies: shares the memory by ref when the
+       memory is shareable, deep-copies when NO_SHARE. Assert it shared. */
+    GstBuffer* buf2 = gst_buffer_copy(buf);
+    void* surf1 = gst_nvmm_memory_get_surface(gst_buffer_peek_memory(buf2, 0));
+    ASSERT_TRUE(surf1 == surf0);  /* same surface across the two buffers */
+
+    gst_buffer_unref(buf2);
+    gst_buffer_unref(buf);
+    gst_object_unref(alloc);
+    PASS();
+}
+
+static void test_share_outlives_parent() {
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
+    GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
+        GST_VIDEO_FORMAT_NV12, 640, 480);
+    ASSERT_NOT_NULL(mem);
+    void* surf = gst_nvmm_memory_get_surface(mem);
+
+    GstMemory* shared = gst_memory_share(mem, 0, -1);
+    ASSERT_NOT_NULL(shared);
+    gst_memory_unref(mem);  /* drop the original ref; share holds a parent ref */
+
+    /* The surface is still valid: the share kept the owner alive. */
+    ASSERT_TRUE(gst_nvmm_memory_get_surface(shared) == surf);
+
+    gst_memory_unref(shared);
+    gst_object_unref(alloc);
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     gst_init(&argc, &argv);
     printf("=== GstNvmmAllocator Tests ===\n");
@@ -214,6 +289,10 @@ int main(int argc, char* argv[]) {
     RUN_TEST(per_plane_write_read_roundtrip);
     RUN_TEST(non_nvmm_memory_rejected);
     RUN_TEST(pool_video_meta_real_strides);
+    RUN_TEST(memory_is_shareable);
+    RUN_TEST(share_references_same_surface);
+    RUN_TEST(tee_make_writable_zero_copy);
+    RUN_TEST(share_outlives_parent);
 
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     gst_deinit();
