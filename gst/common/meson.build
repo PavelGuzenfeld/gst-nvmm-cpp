@@ -24,11 +24,18 @@ if have_deepstream_meta
   common_deps += [nvds_meta_dep]
 endif
 
-nvmm_common_lib = static_library('nvmm_common',
+# Shared (not static) so the GstMeta registrations live in ONE copy per process.
+# A static lib is linked into every plugin .so, so each gets its own copy of the
+# meta api_get_type() + its static GType cache; two plugins first-touching the
+# same meta concurrently (e.g. nvmmofa producing + nvmmfusion consuming the flow
+# meta on different threads) then race the process-global type registration and
+# deadlock. One shared copy removes the duplication.
+nvmm_common_lib = shared_library('nvmm_common',
   common_sources,
   include_directories : [config_inc, common_inc],
   dependencies : common_deps,
   cpp_args : common_cpp_args,
+  install : true,
 )
 
 nvmm_common_dep = declare_dependency(

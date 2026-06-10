@@ -45,6 +45,10 @@ nav:
       - nvmmconvert: elements/nvmmconvert.md
       - nvmmcompositor: elements/nvmmcompositor.md
       - nvmmofa: elements/nvmmofa.md
+      - nvmminfer: elements/nvmminfer.md
+      - nvmmtracker: elements/nvmmtracker.md
+      - nvmmfusion: elements/nvmmfusion.md
+      - nvmmdrawdet: elements/nvmmdrawdet.md
       - nvmmsink: elements/nvmmsink.md
       - nvmmappsrc: elements/nvmmappsrc.md
       - nvmmalloc: elements/nvmmalloc.md

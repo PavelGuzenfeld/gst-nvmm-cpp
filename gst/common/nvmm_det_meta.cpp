@@ -82,14 +82,16 @@ gst_nvmm_det_meta_api_get_type(void)
     static GType type = 0;
     static const gchar *tags[] = { nullptr };
     if (g_once_init_enter(&type)) {
-        /* nvmm_common is statically linked into each plugin .so (and into test
-           harnesses), so more than one module can reach this in a single process.
-           gst_meta_api_type_register() is NOT idempotent — it aborts if the API
-           name is already registered — so reuse an existing registration when a
-           sibling module got here first. */
+        /* Defensive: nvmm_common is a shared lib in-tree (one copy/process), but
+           a test harness or out-of-tree consumer may still static-link a second
+           copy. gst_meta_api_type_register() is NOT idempotent, so reuse an
+           existing registration; if we still lose a concurrent race, re-look-up
+           the winner's type (the register call returns 0 on a duplicate name). */
         GType t = g_type_from_name("GstNvmmDetMetaAPI");
         if (t == 0)
             t = gst_meta_api_type_register("GstNvmmDetMetaAPI", tags);
+        if (t == 0)
+            t = g_type_from_name("GstNvmmDetMetaAPI");
         g_once_init_leave(&type, t);
     }
     return type;
