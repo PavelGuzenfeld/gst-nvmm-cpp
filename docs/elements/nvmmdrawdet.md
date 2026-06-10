@@ -27,23 +27,20 @@ the classification is appended (`car #4 82% [taxi 91%]`); fused motion meta adds
 `>>` and a heavier box for movers. The font scale auto-derives from frame
 height (~3× at 1080p).
 
-## Known issue — caps-any downstream (e.g. `fakesink`) crashes
+## Fixed issue — caps-any downstream (e.g. `fakesink`) used to crash
 
-`nvmmdrawdet ! fakesink` SIGSEGVs deterministically after the first frame
-(driver-stack backtrace via `libnvrm_gpu`/`libcuda`; reproduced 3/3 on Orin
-JP6/R36.4.3, 2026-06-10, with main's elements only — not introduced by the
-Phase-3 work). Suspected cause: with a caps-any downstream the default
-`GstBaseTransform` output allocation for the NVMM(NV12) → raw(RGBA) caps change
-sizes the output buffer wrong, so the element's host-side `cudaMemcpy2D` of
-`W*4 x H` bytes scribbles past the allocation and the corruption detonates in
-the next CUDA call.
+`nvmmdrawdet ! fakesink` SIGSEGV'd deterministically after the first frame
+(reproduced 3/3 on Orin JP6/R36.4.3, 2026-06-10). Cause: the element
+implemented neither `transform_size` nor `get_unit_size`, and the NVMM input's
+gst-buffer size is a surface *handle*, not pixels — so when a caps-any
+downstream answered the ALLOCATION query with no pool, the default output
+allocation mis-sized the RGBA buffer and the host-side `cudaMemcpy2D` of
+`W*4 x H` bytes corrupted the heap (detonating in the next CUDA call).
 
-**Workaround:** always put a real raw-video consumer after the element —
-`videoconvert ! …` (as in every documented pipeline) is unaffected.
-**Fix direction (later):** validate the mapped output size before the copy
-(fail loudly instead of writing), and review
-`transform_caps`/`transform_size`/`get_unit_size` so the default allocator
-sizes the RGBA output correctly regardless of downstream.
+Fixed by implementing `transform_size` (packed `W*H*4` computed from the RGBA
+caps) plus a loud size guard in `transform()` that errors instead of writing
+past a mis-negotiated buffer. Verified on Orin: the fakesink pipeline runs
+clean 3/3, and the documented `videoconvert` pipelines are unchanged.
 
 ```bash
 ... ! nvmminfer engine-file=yolo.engine ! nvmmtracker ! nvmmdrawdet \

@@ -70,6 +70,46 @@ jobs:
           name: benchmark-results
           path: benchmark-results.csv
 
+  # Forward-compatibility lane: same image, same tests, -Dcpp_std=c++20.
+  # The shipping baseline stays C++14 (the plugins target an eventual upstream
+  # GStreamer merge); this job only proves the code is C++20-clean so the
+  # later migration stays cheap. See docs/PRODUCTION_PLAN.md Phase 5.
+  build-and-test-cpp20:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (C++20)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.dev
+          tags: gst-nvmm-cpp:dev-cpp20
+          load: true
+          build-args: |
+            CPP_STD=c++20
+          cache-from: type=gha,scope=cpp20
+          cache-to: type=gha,mode=max,scope=cpp20
+
+      - name: Run tests (C++20)
+        run: |
+          docker run --rm --shm-size=256m gst-nvmm-cpp:dev-cpp20 \
+            meson test -C builddir --verbose 2>&1 | tee test-output-cpp20.txt
+          grep -E "^Ok:|^Fail:" test-output-cpp20.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-cpp20
+          path: test-output-cpp20.txt
+
   lint:
     runs-on: ubuntu-22.04
     timeout-minutes: 5

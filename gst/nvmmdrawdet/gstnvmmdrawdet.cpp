@@ -95,6 +95,36 @@ gst_nvmm_drawdet_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
            gst_structure_get_int(s, "height", &self->height);
 }
 
+/* Output allocation size. The NVMM input's gst-buffer size is a surface
+   HANDLE, not pixels, so the default unit-size scaling must never be used to
+   size the packed-RGBA output: with a caps-any downstream (no pool from the
+   ALLOCATION query, e.g. fakesink) that mis-sized the buffer and the host
+   copy in transform() corrupted the heap. Compute the size from the raw-RGBA
+   caps instead, whichever direction holds them. */
+static gboolean
+gst_nvmm_drawdet_transform_size(GstBaseTransform *bt, GstPadDirection direction,
+                                GstCaps * /*caps*/, gsize /*size*/,
+                                GstCaps *othercaps, gsize *othersize)
+{
+    GstCaps *rgba_caps = othercaps;  /* SINK direction: othercaps = src (RGBA) */
+    if (direction == GST_PAD_SRC) {
+        /* othercaps = sink (NVMM NV12): the NVMM buffer is a handle; report
+           the only meaningful size we have, the surface-struct pointer slot. */
+        *othersize = sizeof(NvBufSurface *);
+        return TRUE;
+    }
+    GstStructure *s = gst_caps_get_structure(rgba_caps, 0);
+    gint w = 0, h = 0;
+    if (!gst_structure_get_int(s, "width", &w) ||
+        !gst_structure_get_int(s, "height", &h) || w <= 0 || h <= 0) {
+        GST_ERROR_OBJECT(bt, "RGBA caps without width/height: %" GST_PTR_FORMAT,
+                         rgba_caps);
+        return FALSE;
+    }
+    *othersize = (gsize)w * h * 4;
+    return TRUE;
+}
+
 static gboolean
 ensure_rgba(GstNvmmDrawDet *self)
 {
@@ -201,6 +231,16 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     GstMapInfo omap;
     if (!gst_buffer_map(outbuf, &omap, GST_MAP_WRITE)) return GST_FLOW_ERROR;
     const int W = self->width, H = self->height;
+
+    /* Refuse to scribble: a mis-negotiated output buffer fails loudly here
+       instead of corrupting the heap (see transform_size above). */
+    if (omap.size < (gsize)W * H * 4) {
+        GST_ELEMENT_ERROR(self, STREAM, FAILED,
+                          ("output buffer is %" G_GSIZE_FORMAT " bytes, need %dx%dx4",
+                           omap.size, W, H), (nullptr));
+        gst_buffer_unmap(outbuf, &omap);
+        return GST_FLOW_ERROR;
+    }
 
     /* EGL/CUDA view of the RGBA surface -> copy to the (host) output buffer. */
     cudaEglFrame ef;
@@ -323,6 +363,7 @@ gst_nvmm_drawdet_class_init(GstNvmmDrawDetClass *klass)
         "Pavel Guzenfeld");
 
     bt->transform_caps = gst_nvmm_drawdet_transform_caps;
+    bt->transform_size = gst_nvmm_drawdet_transform_size;
     bt->set_caps       = gst_nvmm_drawdet_set_caps;
     bt->transform      = gst_nvmm_drawdet_transform;
     bt->stop           = gst_nvmm_drawdet_stop;
