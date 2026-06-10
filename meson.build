@@ -238,6 +238,7 @@ endif
 if have_tensorrt and have_nvbufsurface
   message('TensorRT found — building nvmminfer (TRT inference)')
   subdir('gst/nvmminfer')
+  subdir('gst/nvmmsecondaryinfer')  # Phase-3.2 cascade classifier (TRT)
   subdir('gst/nvmmdrawdet')  # detection overlay (demo/viz/E2E), uses CUDA+VIC
 endif
 subdir('tests')

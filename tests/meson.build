@@ -63,6 +63,24 @@ test_nvmm_tracker = executable('test_nvmm_tracker',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+# Pure-host secondary-cache test: compiles the cascade's interval/expiry policy
+# core directly (no CUDA/TRT/gst), covered on the x86 CI build (Phase 3.2).
+test_secondary_cache = executable('test_secondary_cache',
+  'test_secondary_cache.cpp',
+  '../gst/nvmmsecondaryinfer/secondary_cache.cpp',
+  include_directories : [config_inc, common_inc,
+                         include_directories('../gst/nvmmsecondaryinfer')],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+# Classifier-result sibling meta (Phase 3.2): pure GstMeta round-trips.
+test_class_meta = executable('test_nvmm_class_meta',
+  'test_nvmm_class_meta.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [nvmm_common_dep, gst_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
 rt_dep = cpp.find_library('rt', required : true)
 
 test_sink = executable('test_nvmm_sink',
@@ -103,6 +121,8 @@ test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')
+test('secondary_cache', test_secondary_cache, protocol : 'exitcode')
+test('nvmm_class_meta', test_class_meta, protocol : 'exitcode')
 test_appsrc = executable('test_nvmm_appsrc',
   'test_nvmm_appsrc.cpp',
   include_directories : [
