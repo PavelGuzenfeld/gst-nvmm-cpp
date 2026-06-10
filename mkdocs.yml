@@ -55,3 +55,4 @@ nav:
   - Roadmap:
       - Hardware-acceleration plan: HW_ACCEL_EXPLORATION.md
       - Production plan: PRODUCTION_PLAN.md
+      - nvmminfer design (B5): B5_NVMMINFER_DESIGN.md
