@@ -16,10 +16,20 @@ single buffer downstream holds **both** metas at one PTS. PTS is the join key:
 
 Either branch reaching EOS ends the fused stream (inner-join semantics).
 
-!!! note "Phase 2: structural join only"
-    Fusion co-locates the data; it does not yet *use* it. The cross-modal payoff
-    — marking which detected boxes are actually moving from the flow field —
-    is Phase 3.
+## Motion annotation (the Phase-3 payoff)
+
+With both metas in hand at the join, fusion computes each detection's **mean
+flow magnitude** (pixels/frame) from the flow cells under its box and attaches a
+`GstNvmmMotionMeta` — entries align by index with the det meta's objects. The
+threshold only sets the convenience `moving` flag; `mean_px` is stored alongside
+so consumers can re-threshold without reconfiguring fusion.
+[`nvmmdrawdet`](nvmmdrawdet.md) renders movers with a `>>` label suffix and a
+double-thickness box.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `compute-motion` | bool | `true` | Compute + attach the motion meta |
+| `motion-threshold` | double | `1.0` | px/frame at/above which an object is `moving` |
 
 ```bash
 gst-launch-1.0 filesrc location=video.h264 ! h264parse ! nvv4l2decoder \

@@ -2,6 +2,7 @@
 
 #include "gstnvmmdrawdet.h"
 #include "nvmm_det_meta.h"
+#include "nvmm_motion_meta.h"
 #include "gstnvmmallocator.h"
 #include "font6x8.h"
 
@@ -221,29 +222,32 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     /* Draw detection boxes (scaled from the meta's inference-frame space). */
     GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(inbuf);
     if (m && m->num_objects) {
+        /* Motion annotation (from nvmmfusion): entries align by index. */
+        GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
         const float sy = m->infer_height ? (float)H / m->infer_height : 1.f;
         const int ts = MAX(1, H / 360);  /* font scale: ~3 at 1080p, ~2 at 720p */
         for (guint32 i = 0; i < m->num_objects; i++) {
             const NvmmDetObject &o = m->objects[i];
+            const gboolean moving =
+                mm && i < mm->num_objects && mm->objects[i].moving;
             guint8 r8, g8, b8;
             class_color(o.class_id, &r8, &g8, &b8);
             const int bx = (int)(o.left * sx), by = (int)(o.top * sy);
+            /* Movers get a heavier box so motion reads at a glance. */
             draw_rect((guint8 *)omap.data, W, H, bx, by,
                       (int)(o.width * sx), (int)(o.height * sy),
-                      self->thickness, r8, g8, b8);
+                      moving ? self->thickness * 2 : self->thickness, r8, g8, b8);
 
             if (!self->draw_labels) continue;
-            const char *lbl = o.label[0] ? o.label : "obj";
-            char text[NVMM_META_LABEL_LEN + 32];
-            /* Prepend the tracker id (e.g. "car #4 82%") when a tracker upstream
-               has assigned one; otherwise just "label conf%". */
+            /* "car #4 82% >>" — tracker id when assigned, ">>" when moving. */
+            char idbuf[24] = "";
             if (o.tracker_id)
-                g_snprintf(text, sizeof text, "%s #%" G_GUINT64_FORMAT " %.0f%%",
-                           lbl, o.tracker_id, (double)o.confidence * 100.0);
-            else
-                g_snprintf(text, sizeof text, "%s %.0f%%", lbl,
-                           (double)o.confidence * 100.0);
+                g_snprintf(idbuf, sizeof idbuf, " #%" G_GUINT64_FORMAT, o.tracker_id);
+            char text[NVMM_META_LABEL_LEN + 40];
+            g_snprintf(text, sizeof text, "%s%s %.0f%%%s",
+                       o.label[0] ? o.label : "obj", idbuf,
+                       (double)o.confidence * 100.0, moving ? " >>" : "");
             /* Label bar just above the box; tuck it inside the top if no room. */
             int ty = by - FONT_H * ts - ts;
             if (ty < ts) ty = by + ts;

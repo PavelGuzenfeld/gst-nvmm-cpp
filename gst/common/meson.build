@@ -11,6 +11,9 @@ common_sources += files('nvmm_optical_flow_meta.cpp')
 # nvmm_det_meta.cpp is the DeepStream-free GstNvmmDetMeta carrying detections
 # across the IPC boundary (the optional NvDs bridge inside it is #ifdef-gated).
 common_sources += files('nvmm_det_meta.cpp')
+# Phase-3 motion annotation: per-box flow compute (pure host, unit-tested on
+# x86) + the fusion-result sibling meta produced by nvmmfusion.
+common_sources += files('nvmm_motion.cpp', 'nvmm_motion_meta.cpp')
 if build_mock
   mock_inc = include_directories('.')
 else
