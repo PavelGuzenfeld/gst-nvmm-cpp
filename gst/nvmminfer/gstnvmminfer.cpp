@@ -123,6 +123,8 @@ gst_nvmm_infer_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
     return TRUE;
 }
 
+static gboolean gst_nvmm_infer_stop(GstBaseTransform *bt);  /* unwind failed start */
+
 static gboolean
 gst_nvmm_infer_start(GstBaseTransform *bt)
 {
@@ -171,11 +173,36 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
                         nvmm::dims_str(t.dims).c_str(), nvmm::dtype_str(t.dtype), t.bytes);
     }
 
+    /* Exactly one input + one output: this parser binds only input0()/output0(),
+       so a multi-head engine (e.g. an NMS-plugin export) would leave tensors
+       unbound and enqueueV3 would fail. Reject it up front. */
+    size_t n_in = 0, n_out = 0;
+    for (const auto &t : self->engine->tensors()) (t.is_input ? n_in : n_out)++;
+    if (n_in != 1 || n_out != 1) {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("engine has %zu input(s)/%zu output(s), expected exactly 1/1",
+                           n_in, n_out), (nullptr));
+        gst_nvmm_infer_stop(bt);
+        return FALSE;
+    }
+
     const nvmm::TensorInfo *in = self->engine->input0();
     const nvmm::TensorInfo *out = self->engine->output0();
     if (!in || !out) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
                           ("engine has no %s tensor", in ? "output" : "input"), (nullptr));
+        gst_nvmm_infer_stop(bt);
+        return FALSE;
+    }
+    /* This path feeds float32 (NPP) and parses float32; reject quantized I/O
+       bindings (INT8/FP16-IO engines) loudly rather than reading garbage.
+       Note: trtexec --fp16 keeps FP32 I/O bindings, so fp16 engines pass. */
+    if (in->dtype != nvinfer1::DataType::kFLOAT ||
+        out->dtype != nvinfer1::DataType::kFLOAT) {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("engine I/O dtype is %s/%s, only FP32 bindings are supported",
+                           nvmm::dtype_str(in->dtype), nvmm::dtype_str(out->dtype)), (nullptr));
+        gst_nvmm_infer_stop(bt);
         return FALSE;
     }
     /* Detector input must be 1x3xHxW (NCHW). */
@@ -183,26 +210,38 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
                           ("input \"%s\" is %s, expected 1x3xHxW (NCHW)",
                            in->name.c_str(), nvmm::dims_str(in->dims).c_str()), (nullptr));
+        gst_nvmm_infer_stop(bt);
         return FALSE;
     }
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
-    /* YOLO head: [1, 4+num_classes, num_proposals] (channels-first). */
-    if (out->dims.nbDims != 3 || out->dims.d[1] <= 4) {
+    /* YOLO head: [1, 4+num_classes, num_proposals] (channels-first). Require
+       channels < proposals to reject a transposed [1, proposals, 4+classes]
+       export, which would otherwise pass (d[1] huge) and over-read the heap. */
+    if (out->dims.nbDims != 3 || out->dims.d[1] <= 4 ||
+        out->dims.d[1] >= out->dims.d[2]) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
-                          ("output \"%s\" is %s, expected [1, 4+classes, proposals]",
+                          ("output \"%s\" is %s, expected channels-first "
+                           "[1, 4+classes, proposals]",
                            out->name.c_str(), nvmm::dims_str(out->dims).c_str()), (nullptr));
+        gst_nvmm_infer_stop(bt);
         return FALSE;
     }
     self->num_classes   = (int)out->dims.d[1] - 4;
     self->num_proposals = (int)out->dims.d[2];
+    /* COCO-80 label table is assumed by the parser; warn on a mismatch so the
+       boxes-right-but-labels-wrong case isn't silent. */
+    if (self->num_classes != 80)
+        GST_WARNING_OBJECT(self, "engine has %d classes, not 80 — COCO labels "
+                           "will be wrong (boxes still valid)", self->num_classes);
 
     cudaError_t e1 = cudaMalloc((void **)&self->d_input, in->bytes);
     cudaError_t e2 = cudaMalloc((void **)&self->d_output, out->bytes);
     if (e1 != cudaSuccess || e2 != cudaSuccess) {
         GST_ELEMENT_ERROR(self, RESOURCE, NO_SPACE_LEFT, ("cudaMalloc for engine I/O failed"),
                           ("%s / %s", cudaGetErrorString(e1), cudaGetErrorString(e2)));
+        gst_nvmm_infer_stop(bt);
         return FALSE;
     }
     self->host_out->resize((size_t)out->volume);
@@ -212,6 +251,7 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     if (!self->engine->bind(*self->in_name, self->d_input) ||
         !self->engine->bind(*self->out_name, self->d_output)) {
         GST_ELEMENT_ERROR(self, LIBRARY, INIT, ("failed to bind engine I/O addresses"), (nullptr));
+        gst_nvmm_infer_stop(bt);
         return FALSE;
     }
 
