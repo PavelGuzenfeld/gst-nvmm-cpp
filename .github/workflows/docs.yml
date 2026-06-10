@@ -17,11 +17,23 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Deploy via the GitHub Actions Pages pipeline (Settings -> Pages -> Source:
+# "GitHub Actions"). This replaces `mkdocs gh-deploy` pushing to the gh-pages
+# branch, which triggered GitHub's *managed* "pages build and deployment" whose
+# deploy step intermittently 401'd. Deploying in-workflow with explicit token
+# scopes is self-contained and avoids that second, unmanaged workflow.
 permissions:
-  contents: write  # to push the built site to the gh-pages branch
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent Pages deployment; don't cancel an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,4 +44,17 @@ jobs:
           python-version: '3.x'
       - run: pip install mkdocs-material
       - run: mkdocs build --strict
-      - run: mkdocs gh-deploy --force
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
