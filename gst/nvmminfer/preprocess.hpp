@@ -41,8 +41,10 @@ private:
     LetterboxInfo lb_{};                 // constant geometry (frame size is fixed)
     NvBufSurfTransformRect dst_rect_{};
 
-    NvBufSurface *rgba_ = nullptr;       // net RGBA, pitch-linear, CUDA memory
-    uint8_t *planes_ = nullptr;          // 3 * net_w * net_h packed uint8
+    NvBufSurface *rgba_ = nullptr;       // net RGBA, VIC-native surface-array dst
+    cudaGraphicsResource_t egl_res_ = nullptr;  // CUDA view of rgba_ via EGL
+    uint8_t *rgba_lin_ = nullptr;        // linear RGBA device buffer (NPP-usable)
+    uint8_t *planes_ = nullptr;          // 4 * net_w * net_h packed uint8
 };
 
 }  // namespace nvmm
