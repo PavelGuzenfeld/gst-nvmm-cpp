@@ -25,18 +25,25 @@ IMAGE="${IMAGE:-gst-nvmm-infer:jp6}"
 NAME="${NAME:-nvmm-e2e}"
 
 fail() { echo "E2E FAIL: $1" >&2; exit 1; }
+case "$FPS"  in ''|*[!0-9]*) fail "FPS must be a positive integer (got: $FPS)";; esac
+case "$PORT" in ''|*[!0-9]*) fail "PORT must be a positive integer (got: $PORT)";; esac
 [ -f "$ENGINE" ] || fail "engine not found: $ENGINE (build with trtexec)"
+# `docker -v` treats a RELATIVE host path as a named volume, not a bind-mount,
+# so canonicalize every mounted path to absolute before handing it to docker.
+ENGINE="$(realpath "$ENGINE")"
 
 # A moving video makes the better demo; fall back to the still image if absent.
 # Caps are single-quoted so the '(memory:NVMM)' parens survive intact when the
 # pipeline string is re-parsed by the container's shell under `bash -c`.
 if [ -f "$VIDEO" ]; then
+  VIDEO="$(realpath "$VIDEO")"
   SOURCE="multifilesrc location=/data/src.h264 loop=true caps='video/x-h264,framerate=$FPS/1' \
     ! h264parse ! nvv4l2decoder ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12'"
   SRC_MOUNT=(-v "$VIDEO":/data/src.h264:ro)
   echo "source: looped video $VIDEO @ ${FPS}fps"
 else
   [ -f "$IMG" ] || fail "neither VIDEO ($VIDEO) nor IMG ($IMG) found"
+  IMG="$(realpath "$IMG")"
   SOURCE="filesrc location=/data/src.jpg ! jpegdec ! videoconvert ! imagefreeze \
     ! 'video/x-raw,format=NV12,framerate=$FPS/1' ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12'"
   SRC_MOUNT=(-v "$IMG":/data/src.jpg:ro)
@@ -55,7 +62,7 @@ echo "== [2/3] build plugins inside the container (runtime nvidia) =="
 # meson setup self-skips an already-configured dir; ninja is a fast no-op when
 # up to date, so this is cheap on repeat runs yet still picks up source edits.
 docker run --rm --runtime nvidia --network host -v "$ROOT":/src -w /src "$IMAGE" \
-  bash -c 'meson setup builddir-docker -Dbuildtype=debugoptimized -Dwerror=false 2>/dev/null
+  bash -c 'meson setup builddir-docker -Dbuildtype=debugoptimized -Dwerror=false || true
            ninja -C builddir-docker' || fail "in-container build failed"
 
 echo "== [3/3] launch streaming server container '$NAME' on port $PORT =="
