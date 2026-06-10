@@ -391,36 +391,20 @@ integration test → Jetson validation.
 
 ---
 
-## Phase 5 — toolchain modernization (planned)
+## Phase 5 — C++20 compatibility lane (baseline stays C++14) — DONE
 
-Raise the language baseline from **C++14 → C++20**, gated on **GCC ≥ 14.x** and
-**CUDA ≥ 12.6**. The codebase has no `.cu`/`nvcc` sources (CUDA is consumed via
-NPP/cudart/TensorRT only), so the CUDA bump is about **host-compiler support**,
-not device-code: CUDA 12.6 is the first release that officially supports GCC 14
-as the host compiler, and GCC 14 is the first GCC with feature-complete C++20.
+**Decision (2026-06-11, revised from the original "raise the baseline" plan):**
+the shipping language baseline **stays C++14** — the plugins are written to
+merge into upstream GStreamer later, and that target dictates the conservative
+standard. C++20 support is maintained as a **forward-compatibility test lane**:
+the dev Docker image takes a `CPP_STD` build-arg (default `c++14`) and CI runs
+the full mock build + `meson test` twice, once per standard
+(`build-and-test` + `build-and-test-cpp20` in `.github/workflows/ci.yml`).
+The C++20 lane must stay green but never raises the baseline; when the code
+eventually lives upstream, the lane is what keeps a future migration cheap.
 
-### 5.1 Bump the language baseline
-- `meson.build`: `default_options : ['cpp_std=c++14']` → `cpp_std=c++20`.
-- Drop the per-script `-Dcpp_std=c++14` / `-std=c++17` overrides
-  (`scripts/jetson-test.sh`, `scripts/nvmminfer_docker_e2e.sh`, the probe
-  build line in `B5_NVMMINFER_DESIGN.md`) so one standard is used everywhere.
-
-### 5.2 Pin the toolchain in the build images
-- Jetson images (`docker/Dockerfile.jetson*`): base on a JetPack/L4T image
-  carrying **CUDA ≥ 12.6** and install **GCC 14** (or `nvcr.io` images that
-  ship it); set `CC`/`CXX` accordingly.
-- Host/CI image (`Dockerfile.dev`, the `ubuntu` CI runner): install `g++-14`
-  and select it, so the mock build and `meson test` exercise C++20 too.
-
-### 5.3 Verify
-- Host: full `meson test` suite green under GCC 14 / C++20.
-- Jetson: `scripts/jetson-test.sh` + `scripts/nvmminfer_golden_test.sh`
-  (golden still 5/5) on the upgraded CUDA 12.6 / GCC 14 stack.
-- Sanitizer pass (`scripts/run-sanitizers.sh`) re-run, since the standard-library
-  ABI and `-std` change can surface new diagnostics.
-
-#### Feasibility — verified on Orin (JP6, CUDA 12.6)
-A spike confirmed the CUDA/TRT/NPP stack is C++20-clean before committing to the bump:
+### Feasibility evidence — verified on Orin (JP6, CUDA 12.6)
+A spike confirmed the CUDA/TRT/NPP stack is C++20-clean:
 - **Compile** `cpp_std=c++20`, CUDA 12.6.68, TensorRT 10.3: 58/58 targets build under
   both the stock **GCC 11.4** and **GCC 14.3** (installed from `ppa:ubuntu-toolchain-r/test`);
   no CUDA/TRT/NPP header breakage (we have no `.cu`/`nvcc`, so no host-version gate fires).
@@ -428,9 +412,6 @@ A spike confirmed the CUDA/TRT/NPP stack is C++20-clean before committing to the
 - **Golden** (`nvmminfer_golden_test`) against the C++20 build: **5/5**, IoU 0.97–0.996,
   conf delta ≤0.05 — runtime detections unchanged.
 
-So the remaining work is image/CI toolchain pinning (5.1/5.2), not a code-compatibility risk.
-
-> Rationale: C++20 (concepts, `std::span`, ranges, designated initializers,
-> `<bit>`) simplifies the buffer/meta plumbing and the upcoming Phase-2 tracker
-> math; standardizing the version removes the current C++14/17 drift across
-> build entry points.
+> The original Phase-5 rationale (concepts, `std::span`, ranges simplifying the
+> buffer/meta plumbing) is deferred to the post-upstreaming era; until then the
+> per-build-entry `-Dcpp_std=c++14` pins are intentional, not drift.

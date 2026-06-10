@@ -40,9 +40,16 @@ WORKDIR /src
 # Copy source
 COPY . /src/
 
+# C++ standard for the build. The PROJECT BASELINE IS C++14 — the plugins are
+# written to merge into upstream GStreamer later, so the shipping standard
+# stays C++14. CI additionally builds+tests this image with CPP_STD=c++20 as a
+# forward-compatibility lane (see .github/workflows/ci.yml); that lane must
+# stay green but never raises the baseline.
+ARG CPP_STD=c++14
+
 # Configure with mock API (host-side, no Jetson libs)
 RUN meson setup builddir \
-    -Dcpp_std=c++14 \
+    -Dcpp_std=${CPP_STD} \
     -Dbuildtype=debug \
     -Dwerror=false
 
