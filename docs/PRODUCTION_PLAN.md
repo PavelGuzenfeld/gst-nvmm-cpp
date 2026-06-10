@@ -403,7 +403,19 @@ the full mock build + `meson test` twice, once per standard
 The C++20 lane must stay green but never raises the baseline; when the code
 eventually lives upstream, the lane is what keeps a future migration cheap.
 
-### Feasibility evidence — verified on Orin (JP6, CUDA 12.6)
+### Lane verification — re-run on Orin with the full tree (2026-06-11)
+The C++20 lane is verified against the complete element family (through the
+Phase-3.2 cascade), on hardware, not only in the mock CI image:
+- **Build** `-Dcpp_std=c++20 -Dwerror=true` on Orin (JP6, CUDA 12.6, TRT 10.3,
+  stock GCC 11.4): 83/83 targets, including nvmminfer/nvmmsecondaryinfer/
+  nvmmofa/nvmmdrawdet.
+- **Tests** on the real-API build: 16/16.
+- **Runtime E2E** (detector → tracker → cascade classifier → overlay, CUDA/VIC/
+  NPP/TRT path): results identical to the C++14 build — same labels
+  ("tiger cat" / "recreational vehicle"), same interval-cache pattern, same
+  output bytes; the drawdet caps-any fix holds (fakesink pipeline 3/3 clean).
+
+### Feasibility evidence — original spike on Orin (JP6, CUDA 12.6)
 A spike confirmed the CUDA/TRT/NPP stack is C++20-clean:
 - **Compile** `cpp_std=c++20`, CUDA 12.6.68, TensorRT 10.3: 58/58 targets build under
   both the stock **GCC 11.4** and **GCC 14.3** (installed from `ppa:ubuntu-toolchain-r/test`);
