@@ -3,6 +3,7 @@
 #include "gstnvmmdrawdet.h"
 #include "nvmm_det_meta.h"
 #include "gstnvmmallocator.h"
+#include "font6x8.h"
 
 #include <nvbufsurface.h>
 #include <nvbufsurftransform.h>
@@ -23,13 +24,14 @@ struct _GstNvmmDrawDet {
     GstBaseTransform parent;
     gint           width, height;
     gint           thickness;          /* property: box line thickness (px) */
+    gboolean       draw_labels;        /* property: draw "label conf%" text */
     NvBufSurface  *rgba;               /* VIC-native RGBA, full-frame */
     cudaGraphicsResource_t egl_res;    /* CUDA view of rgba via EGL */
 };
 
 G_DEFINE_TYPE(GstNvmmDrawDet, gst_nvmm_drawdet, GST_TYPE_BASE_TRANSFORM)
 
-enum { PROP_0, PROP_THICKNESS };
+enum { PROP_0, PROP_THICKNESS, PROP_DRAW_LABELS };
 
 static GstStaticPadTemplate sink_tmpl = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
@@ -145,6 +147,38 @@ draw_rect(guint8 *rgba, int W, int H, int x, int y, int w, int h, int t,
     }
 }
 
+/* Fill the rect [x,x+w) x [y,y+h), clipped once to the frame. */
+static void
+fill_rect(guint8 *rgba, int W, int H, int x, int y, int w, int h,
+          guint8 r, guint8 g, guint8 b)
+{
+    const int x0 = MAX(0, x), y0 = MAX(0, y), x1 = MIN(W, x + w), y1 = MIN(H, y + h);
+    for (int yy = y0; yy < y1; yy++) {
+        guint8 *p = rgba + ((size_t)yy * W + x0) * 4;
+        for (int xx = x0; xx < x1; xx++, p += 4) { p[0] = r; p[1] = g; p[2] = b; p[3] = 255; }
+    }
+}
+
+/* Draw `str` with the built-in 6x8 font scaled by `s`: a filled bar in the box
+ * color (r,g,b) with black glyphs on top, for legibility over any background.
+ * (x,y) is the glyph origin; the bar is padded one scaled pixel around it. */
+static void
+draw_text(guint8 *rgba, int W, int H, int x, int y, const char *str, int s,
+          guint8 r, guint8 g, guint8 b)
+{
+    const int n = (int)strlen(str);
+    fill_rect(rgba, W, H, x - s, y - s, n * FONT_W * s + 2 * s, FONT_H * s + 2 * s, r, g, b);
+    for (int i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (c < FONT_FIRST || c > FONT_LAST) c = '?';
+        const unsigned char *gph = kFont[c - FONT_FIRST];
+        for (int row = 0; row < FONT_H; row++)
+            for (int col = 0; col < FONT_W; col++)
+                if (gph[row] & (1u << col))
+                    fill_rect(rgba, W, H, x + (i * FONT_W + col) * s, y + row * s, s, s, 0, 0, 0);
+    }
+}
+
 static GstFlowReturn
 gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *outbuf)
 {
@@ -189,14 +223,24 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     if (m && m->num_objects) {
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
         const float sy = m->infer_height ? (float)H / m->infer_height : 1.f;
+        const int ts = MAX(1, H / 360);  /* font scale: ~3 at 1080p, ~2 at 720p */
         for (guint32 i = 0; i < m->num_objects; i++) {
             const NvmmDetObject &o = m->objects[i];
             guint8 r8, g8, b8;
             class_color(o.class_id, &r8, &g8, &b8);
-            draw_rect((guint8 *)omap.data, W, H,
-                      (int)(o.left * sx), (int)(o.top * sy),
+            const int bx = (int)(o.left * sx), by = (int)(o.top * sy);
+            draw_rect((guint8 *)omap.data, W, H, bx, by,
                       (int)(o.width * sx), (int)(o.height * sy),
                       self->thickness, r8, g8, b8);
+
+            if (!self->draw_labels) continue;
+            char text[NVMM_META_LABEL_LEN + 8];
+            g_snprintf(text, sizeof text, "%s %.0f%%",
+                       o.label[0] ? o.label : "obj", (double)o.confidence * 100.0);
+            /* Label bar just above the box; tuck it inside the top if no room. */
+            int ty = by - FONT_H * ts - ts;
+            if (ty < ts) ty = by + ts;
+            draw_text((guint8 *)omap.data, W, H, bx + ts, ty, text, ts, r8, g8, b8);
         }
     }
     gst_buffer_unmap(outbuf, &omap);
@@ -208,6 +252,7 @@ gst_nvmm_drawdet_set_property(GObject *o, guint id, const GValue *v, GParamSpec 
 {
     auto *self = GST_NVMM_DRAWDET(o);
     if (id == PROP_THICKNESS) self->thickness = g_value_get_int(v);
+    else if (id == PROP_DRAW_LABELS) self->draw_labels = g_value_get_boolean(v);
     else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
 }
 static void
@@ -215,6 +260,7 @@ gst_nvmm_drawdet_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
 {
     auto *self = GST_NVMM_DRAWDET(o);
     if (id == PROP_THICKNESS) g_value_set_int(v, self->thickness);
+    else if (id == PROP_DRAW_LABELS) g_value_set_boolean(v, self->draw_labels);
     else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
 }
 
@@ -243,6 +289,10 @@ gst_nvmm_drawdet_class_init(GstNvmmDrawDetClass *klass)
     g_object_class_install_property(go, PROP_THICKNESS,
         g_param_spec_int("thickness", "Box thickness", "Detection box line width (px)",
             1, 32, 3, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_DRAW_LABELS,
+        g_param_spec_boolean("draw-labels", "Draw labels",
+            "Draw the class label and confidence above each box", TRUE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -265,6 +315,7 @@ gst_nvmm_drawdet_init(GstNvmmDrawDet *self)
 {
     self->width = self->height = 0;
     self->thickness = 3;
+    self->draw_labels = TRUE;
     self->rgba = nullptr;
     self->egl_res = nullptr;
 }
