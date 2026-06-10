@@ -107,6 +107,7 @@ g++ -std=c++17 -O2 probes/trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
 - Tracker algorithm detail (IOU vs SORT/Kalman) — Phase 2.
 - Sibling-meta schemas (tensor + per-object classifier/motion) — Phase 3, model-driven.
 - INT8 calibration — post-fp16.
+- C++20 baseline via GCC ≥ 14.x + CUDA ≥ 12.6 — see [PRODUCTION_PLAN](PRODUCTION_PLAN.md) Phase 5.
 - Xavier motion path (no OFA → classical bg-subtraction) — out of scope (Orin-first).
 - Why `NO_SHARE` was originally set: appears to be a conservative default (initial
   allocator commit, no rationale/IPC tie). Re-confirm nothing depends on the broken
