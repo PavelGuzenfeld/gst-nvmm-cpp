@@ -1,0 +1,17 @@
+# Host-independent CPU reference runtime for the golden test: runs yolo11n.onnx
+# via onnxruntime (fp32, CPU) with an independent letterbox/decode/NMS, to
+# cross-check the Jetson TRT path. No CUDA — runs anywhere (arm64/x86).
+#
+# Build:
+#   docker build --network=host -f docker/Dockerfile.yolo-reference -t yolo-reference:cpu .
+FROM python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1
+# Versions pinned: the reference is a stable oracle, so its decode/NMS must not
+# drift between rebuilds.
+RUN apt-get update && apt-get install -y --no-install-recommends libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install onnxruntime==1.26.0 opencv-python-headless==4.13.0.92 numpy==2.4.6
+
+WORKDIR /work
+CMD ["bash"]
