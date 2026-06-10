@@ -1,0 +1,28 @@
+# nvmminfer E2E image for Jetson JetPack 6 (L4T 36.4) — Orin.
+# Unlike the sibling Dockerfile.jetson-jp6 (l4t-base, no CUDA), this uses
+# l4t-jetpack so the base brings full CUDA + TensorRT + NPP dev that nvmminfer
+# links against. We add GStreamer (incl. x264 via
+# plugins-ugly for the streaming watch path) + meson. The plugins are BUILT at
+# `docker run` time under `--runtime nvidia` so the tegra BSP libs
+# (libnvbufsurftransform.so) and CUDA/TRT runtime libs are CSV-mounted & visible.
+#
+# Build on Jetson (the kernel here lacks the iptables 'raw' table, so the build
+# needs host networking):
+#   docker build --network=host -f docker/Dockerfile.jetson-jp6-infer -t gst-nvmm-infer:jp6 .
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra:/usr/local/cuda/lib64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential g++ pkg-config ninja-build python3 python3-pip \
+    libglib2.0-dev cmake git \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-ugly gstreamer1.0-plugins-bad gstreamer1.0-libav \
+    && pip3 install --no-cache-dir meson \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+CMD ["bash"]
