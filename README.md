@@ -2,15 +2,16 @@
 
 Zero-copy **NVMM-native** GStreamer elements for NVIDIA Jetson (Xavier, Orin).
 Wraps the Tegra-native `NvBufSurface` / NVMM memory model in proper GStreamer
-elements — hardware-accelerated crop, scale, format conversion, rotate/flip, and
-**inter-process video sharing with no CPU copies on the data path**.
+elements — hardware-accelerated video processing, TensorRT inference graphs
+(detect → track → classify, optical flow, fusion), and **inter-process video
+sharing with no CPU copies on the data path**.
 
 Built with **C++14** internals and a **C-ABI** boundary to GStreamer. LGPL,
 no DeepStream dependency.
 
 > 📖 **Full documentation:** <https://pavelguzenfeld.com/gst-nvmm-cpp/>
-> — elements & properties, getting started, the zero-copy IPC design, pipeline
-> examples, and hardware validation/benchmarks.
+> — elements & properties, getting started, inference graphs, the zero-copy
+> IPC design, pipeline examples, and hardware validation/benchmarks.
 
 ## The problem this solves
 
@@ -32,19 +33,50 @@ elements.
 
 ## Elements
 
+**Memory & IPC** — the allocator and the cross-process transport.
+
 | Element | Role |
 |---|---|
-| [`nvmmconvert`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip on the VIC |
-| [`nvmmcompositor`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmcompositor/) | Composite multiple NVMM inputs into one frame (mosaic / PiP) on the VIC |
-| [`nvmmofa`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmofa/) | Dense optical flow on the Orin OFA engine; flow rides as metadata (Orin only) |
+| [`nvmmalloc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface`; underpins the suite's buffer pools |
 | [`nvmmsink`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsink/) | Publish NVMM frames to a shared pool; pass DMA-buf fds to consumers |
 | [`nvmmappsrc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmappsrc/) | Import a producer's pool fds and read GPU memory in place |
-| [`nvmmalloc`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmalloc/) | `GstAllocator` for `NvBufSurface` |
 
-The headline capability NVIDIA ships no stock element for: **cross-process,
-zero-copy NVMM sharing** (`nvmmsink` → `nvmmappsrc`) — single GPU-side copy on
-the producer, zero-copy import on every consumer. See the
+**Video processing** — 2D operations on the VIC.
+
+| Element | Role |
+|---|---|
+| [`nvmmconvert`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmconvert/) | Crop / scale / format-convert / rotate-flip |
+| [`nvmmcompositor`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmcompositor/) | Composite multiple NVMM inputs into one frame (mosaic / PiP) |
+
+**Inference & analytics** — composable nodes for building
+[inference graphs](https://pavelguzenfeld.com/gst-nvmm-cpp/inference-graphs/);
+each passes the frame through untouched and reads or attaches metadata.
+
+| Element | Role |
+|---|---|
+| [`nvmminfer`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmminfer/) | TensorRT object detection; attaches detection metadata |
+| [`nvmmtracker`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmtracker/) | IOU multi-object tracking; assigns stable `tracker_id`s |
+| [`nvmmofa`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmofa/) | Dense optical flow on the Orin OFA engine; flow rides as metadata |
+| [`nvmmfusion`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmfusion/) | Joins detector + flow branches by PTS; computes per-object motion |
+| [`nvmmsecondaryinfer`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsecondaryinfer/) | Cascade classifier on detected objects, with per-track caching |
+| [`nvmmdrawdet`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmdrawdet/) | Renders boxes, ids, motion and classification onto the frame |
+
+Cross-process, zero-copy NVMM sharing (`nvmmsink` → `nvmmappsrc`) has no stock
+NVIDIA equivalent: a single GPU-side copy on the producer, zero-copy import on
+every consumer. See the
 [Zero-copy IPC](https://pavelguzenfeld.com/gst-nvmm-cpp/ipc/) docs.
+
+A full inference graph, wired entirely in GStreamer:
+
+```
+                ┌─ nvmminfer → nvmmtracker ─┐
+src → tee ──────┤                           ├─ nvmmfusion → nvmmsecondaryinfer → nvmmdrawdet → sink
+                └─ nvmmofa ─────────────────┘
+```
+
+The suite is extensible — see
+[Creating a new element](https://pavelguzenfeld.com/gst-nvmm-cpp/extending/),
+anchored by the in-tree example element in `gst/nvmmexample/`.
 
 ## Quick start
 
@@ -63,9 +95,12 @@ in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
 
 ## Status
 
-Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and native:
-**58 unit/integration tests + 13 on-hardware pipeline tests**, AddressSanitizer
-and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
+Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and
+native. The unit/integration suite runs on x86 CI against a mock
+`NvBufSurface` (in both C++14 and C++20 lanes) and on-device against the real
+stack; on-hardware pipeline tests cover transforms, IPC, and the inference
+graph. AddressSanitizer and ThreadSanitizer clean. Full results, benchmarks,
+and evidence images:
 [Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 
 | JetPack | L4T | Jetson | NvBufSurface | Status |
@@ -79,15 +114,23 @@ and ThreadSanitizer clean. Full results, benchmarks, and evidence images:
 ```
 gst-nvmm-cpp/
 ├── gst/
-│   ├── common/      # Shared C++ types, RAII NvBufSurface wrappers, mock API
-│   ├── nvmmalloc/   # GstNvmmAllocator plugin
-│   ├── nvmmconvert/ # nvmmconvert element
-│   ├── nvmmcompositor/ # nvmmcompositor element
-│   ├── nvmmofa/     # nvmmofa optical-flow element (Orin/VPI only)
-│   ├── nvmmsink/    # nvmmsink element
-│   └── nvmmappsrc/  # nvmmappsrc element
+│   ├── common/             # Shared types, metadata, RAII wrappers, mock API
+│   ├── nvmmalloc/          # GstAllocator plugin for NvBufSurface
+│   ├── nvmmconvert/        # VIC crop/scale/convert/rotate
+│   ├── nvmmcompositor/     # VIC multi-input compositor
+│   ├── nvmmsink/           # IPC producer (shared pool + fd passing)
+│   ├── nvmmappsrc/         # IPC consumer (zero-copy import)
+│   ├── nvmminfer/          # TensorRT detector (Jetson-only build)
+│   ├── nvmmtracker/        # IOU tracker (pure host)
+│   ├── nvmmofa/            # OFA optical flow (Orin/VPI only)
+│   ├── nvmmfusion/         # PTS join of detector + flow branches
+│   ├── nvmmsecondaryinfer/ # TensorRT cascade classifier (Jetson-only build)
+│   ├── nvmmdrawdet/        # detection overlay (Jetson-only build)
+│   └── nvmmexample/        # worked example element for docs/extending.md
 ├── tests/           # unit + integration tests
 ├── benchmarks/      # throughput benchmarks
+├── probes/          # standalone hardware feasibility probes
+├── scripts/         # Jetson validation, sanitizers, E2E test drivers
 ├── docs/            # documentation site (MkDocs)
 ├── docker/          # Dockerfiles for dev, JP5, JP6
 └── meson.build      # top-level build (auto-detects Jetson; CMake also provided)

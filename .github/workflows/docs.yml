@@ -56,5 +56,15 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The Pages API rejects a deployment while another is still settling, so
+      # near-simultaneous triggers (a v* tag pushed moments after a docs change
+      # lands on main) can fail the first attempt. Retry once after a pause.
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - name: Wait before retrying the deployment
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+      - id: deployment-retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
