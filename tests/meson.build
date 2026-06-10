@@ -36,6 +36,16 @@ test_ofa_meta = executable('test_optical_flow_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+# Pure-host YOLO parser test: compiles the parser directly (no CUDA/TRT/gst), so
+# the decode/NMS/letterbox-unmap math is covered on the x86 CI build, not only
+# on a Jetson during manual E2E.
+test_yolo_parser = executable('test_yolo_parser',
+  'test_yolo_parser.cpp',
+  '../gst/nvmminfer/yolo_parser.cpp',
+  include_directories : [config_inc, common_inc, include_directories('../gst/nvmminfer')],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
 rt_dep = cpp.find_library('rt', required : true)
 
 test_sink = executable('test_nvmm_sink',
@@ -73,6 +83,7 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
+test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test_appsrc = executable('test_nvmm_appsrc',
   'test_nvmm_appsrc.cpp',
   include_directories : [
