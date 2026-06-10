@@ -273,6 +273,11 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     gst_buffer_add_nvmm_det_meta(buf, &fm);
     GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %u detections",
                    fm.frame_number, fm.num_objects);
+    for (guint32 i = 0; i < fm.num_objects; i++) {
+        const NvmmDetObject &o = fm.objects[i];
+        GST_LOG_OBJECT(self, "  [%u] %s %.2f  box=(%.0f,%.0f %0.fx%.0f)",
+                       i, o.label, o.confidence, o.left, o.top, o.width, o.height);
+    }
     return GST_FLOW_OK;
 }
 

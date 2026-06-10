@@ -11,6 +11,7 @@
 
 #include <cuda_runtime.h>
 #include <nvbufsurface.h>
+#include <nvbufsurftransform.h>
 
 #include "yolo_parser.hpp"  // LetterboxInfo
 

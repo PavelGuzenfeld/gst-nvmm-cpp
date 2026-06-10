@@ -37,7 +37,8 @@ bool Preprocessor::configure(int net_w, int net_h, int frame_w, int frame_h,
     rgba_ = create_rgba(net_w, net_h, err);
     if (!rgba_) return false;
 
-    if (cudaMalloc((void **)&planes_, (size_t)3 * net_w * net_h) != cudaSuccess) {
+    /* 4 planes: NPP splits RGBA C4 -> P4 (no C4P3R); we use R,G,B and ignore A. */
+    if (cudaMalloc((void **)&planes_, (size_t)4 * net_w * net_h) != cudaSuccess) {
         err = "cudaMalloc(planes) failed";
         return false;
     }
@@ -98,17 +99,18 @@ bool Preprocessor::run(NvBufSurface *src, float *d_input, LetterboxInfo &lb,
     Npp8u *rgba = (Npp8u *)rgba_->surfaceList[0].dataPtr;
     const int pitch = (int)rgba_->surfaceList[0].pitch;
 
-    // RGBA (interleaved) -> 3 packed uint8 planes [R,G,B] (alpha dropped).
-    Npp8u *planes3[3] = {planes_, planes_ + (size_t)W * H, planes_ + 2 * (size_t)W * H};
-    if (nppiCopy_8u_C4P3R(rgba, pitch, planes3, W, roi) != NPP_SUCCESS) {
-        err = "nppiCopy_8u_C4P3R failed";
+    // RGBA (interleaved) -> 4 packed uint8 planes [R,G,B,A]; we use R,G,B.
+    Npp8u *planes4[4] = {planes_, planes_ + (size_t)W * H,
+                         planes_ + 2 * (size_t)W * H, planes_ + 3 * (size_t)W * H};
+    if (nppiCopy_8u_C4P4R(rgba, pitch, planes4, W, roi) != NPP_SUCCESS) {
+        err = "nppiCopy_8u_C4P4R failed";
         return false;
     }
 
-    // uint8 planes -> f32 NCHW (channel order RGB or BGR).
+    // uint8 planes -> f32 NCHW (channel order RGB or BGR; alpha plane unused).
     const int map[3] = {color_rgb_ ? 0 : 2, 1, color_rgb_ ? 2 : 0};
     for (int c = 0; c < 3; c++) {
-        if (nppiConvert_8u32f_C1R(planes3[map[c]], W,
+        if (nppiConvert_8u32f_C1R(planes4[map[c]], W,
                                   d_input + (size_t)c * W * H,
                                   W * (int)sizeof(float), roi) != NPP_SUCCESS) {
             err = "nppiConvert_8u32f_C1R failed";
