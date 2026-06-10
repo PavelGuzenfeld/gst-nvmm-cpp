@@ -33,9 +33,19 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
 }  // namespace
 
 bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scale,
+                                const float *offsets, const float *std_values,
                                 cudaStream_t stream, std::string &err) {
     net_w_ = net_w; net_h_ = net_h;
     color_rgb_ = color_rgb; scale_ = scale; stream_ = stream;
+    has_offsets_ = offsets != nullptr;
+    has_std_ = std_values != nullptr;
+    for (int c = 0; c < 3; c++) {
+        if (has_offsets_) offsets_[c] = offsets[c];
+        if (has_std_) {
+            if (std_values[c] == 0.f) { err = "std-values contains 0"; return false; }
+            std_[c] = std_values[c];
+        }
+    }
 
     rgba_ = create_rgba(net_w, net_h, err);
     if (!rgba_) return false;
@@ -156,6 +166,24 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
                               npp_ctx_) != NPP_SUCCESS) {
         err = "nppiMulC_32f_C1IR failed";
         return false;
+    }
+
+    // Optional per-channel normalization: y = (x*scale - offset[c]) / std[c]
+    // (e.g. Caffe-style mean subtraction, torchvision mean/std).
+    for (int c = 0; (has_offsets_ || has_std_) && c < 3; c++) {
+        Npp32f *plane = d_input + (size_t)c * W * H;
+        if (has_offsets_ &&
+            nppiSubC_32f_C1IR_Ctx((Npp32f)offsets_[c], plane,
+                                  W * (int)sizeof(float), roi, npp_ctx_) != NPP_SUCCESS) {
+            err = "nppiSubC_32f_C1IR failed";
+            return false;
+        }
+        if (has_std_ && std_[c] != 1.f &&
+            nppiDivC_32f_C1IR_Ctx((Npp32f)std_[c], plane,
+                                  W * (int)sizeof(float), roi, npp_ctx_) != NPP_SUCCESS) {
+            err = "nppiDivC_32f_C1IR failed";
+            return false;
+        }
     }
     return true;
 }

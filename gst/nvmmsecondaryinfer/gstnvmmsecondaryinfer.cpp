@@ -78,6 +78,8 @@ struct _GstNvmmSecondaryInfer {
     guint    max_track_age;   /* drop a cached track unseen this many frames */
     guint    min_roi;         /* skip boxes smaller than this (surface px) */
     gdouble  net_scale;       /* multiply pixels by this (e.g. 1/255) */
+    gchar   *offsets_str;     /* "v0,v1,v2" per-channel mean (engine order), or NULL */
+    gchar   *std_str;         /* "v0,v1,v2" per-channel std (engine order), or NULL */
     gint     color_order;     /* NVMM_SEC_{RGB,BGR} */
     gint     activation;      /* NVMM_SEC_ACT_* */
     gdouble  conf_threshold;  /* min top-1 score to attach a result */
@@ -101,6 +103,7 @@ G_DEFINE_TYPE(GstNvmmSecondaryInfer, gst_nvmm_secondary_infer, GST_TYPE_BASE_TRA
 
 enum { PROP_0, PROP_ENGINE_FILE, PROP_LABELS_FILE, PROP_INFER_INTERVAL,
        PROP_MAX_TRACK_AGE, PROP_MIN_ROI_SIZE, PROP_NET_SCALE_FACTOR,
+       PROP_OFFSETS, PROP_STD_VALUES,
        PROP_COLOR_ORDER, PROP_OUTPUT_ACTIVATION, PROP_CONF_THRESHOLD };
 
 /* Cascade node: fed from the decoded NV12 NVMM stream that already carries
@@ -133,6 +136,33 @@ surface_of(GstBuffer *buf)
 }
 
 static gboolean gst_nvmm_secondary_infer_stop(GstBaseTransform *bt);  /* unwind failed start */
+
+/* Parse "v0,v1,v2" (or ';'-separated) into out[3]. Empty/NULL -> FALSE with
+   ok=TRUE; malformed -> FALSE with ok=FALSE. */
+static gboolean
+parse_triplet(const gchar *str, float out[3], gboolean *ok)
+{
+    *ok = TRUE;
+    if (!str || !str[0])
+        return FALSE;
+    gchar **tok = g_strsplit_set(str, ",;", -1);
+    guint n = 0;
+    for (gchar **t = tok; *t && n <= 3; t++) {
+        gchar *s = g_strstrip(*t);
+        if (!s[0]) continue;
+        gchar *end = nullptr;
+        double v = g_ascii_strtod(s, &end);
+        if (end == s || *end != '\0') { n = 0; break; }
+        if (n < 3) out[n] = (float)v;
+        n++;
+    }
+    g_strfreev(tok);
+    if (n != 3) {
+        *ok = FALSE;
+        return FALSE;
+    }
+    return TRUE;
+}
 
 static gboolean
 load_labels(GstNvmmSecondaryInfer *self)
@@ -273,9 +303,31 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
         return FALSE;
     }
 
+    float offsets[3], std_values[3];
+    gboolean ok = TRUE;
+    const gboolean have_off = parse_triplet(self->offsets_str, offsets, &ok);
+    if (!ok) {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("offsets \"%s\" is not 3 comma-separated numbers",
+                           self->offsets_str), (nullptr));
+        gst_nvmm_secondary_infer_stop(bt);
+        return FALSE;
+    }
+    const gboolean have_std = parse_triplet(self->std_str, std_values, &ok);
+    if (!ok) {
+        GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
+                          ("std-values \"%s\" is not 3 comma-separated numbers",
+                           self->std_str), (nullptr));
+        gst_nvmm_secondary_infer_stop(bt);
+        return FALSE;
+    }
+
     if (!self->pre->configure(self->net_w, self->net_h,
                               self->color_order == NVMM_SEC_RGB,
-                              (float)self->net_scale, self->stream, err)) {
+                              (float)self->net_scale,
+                              have_off ? offsets : nullptr,
+                              have_std ? std_values : nullptr,
+                              self->stream, err)) {
         GST_ELEMENT_ERROR(self, LIBRARY, INIT, ("ROI preprocess configure failed"),
                           ("%s", err.c_str()));
         gst_nvmm_secondary_infer_stop(bt);
@@ -355,23 +407,26 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         const NvmmDetObject &o = m->objects[i];
         NvmmClassEntry &e = entries[i];
 
+        /* Baseline: the cached result (if any). lookup() also marks the track
+           seen, so a detection keeps its cache entry alive even on frames
+           where inference is skipped or fails — no label flicker, no
+           premature expiry. Untracked objects (tracker_id == 0) cannot be
+           cached and re-infer every frame. */
+        const nvmm::ClassResult *cached =
+            o.tracker_id ? self->cache->lookup(o.tracker_id, fno) : nullptr;
+        if (cached) {
+            e.class_id = cached->class_id;
+            e.confidence = cached->confidence;
+            e.fresh = 0;
+            g_strlcpy(e.label, cached->label, sizeof e.label);
+        }
+
         const float L = o.left * sx, T = o.top * sy;
         const float Wd = o.width * sx, Hd = o.height * sy;
         if (Wd < (float)self->min_roi || Hd < (float)self->min_roi)
-            continue;  /* too small to classify usefully; class_id stays -1 */
-
-        /* Cached result still valid for this track? Untracked objects
-           (tracker_id == 0) cannot be cached and re-infer every frame. */
-        if (o.tracker_id && !self->cache->due(o.tracker_id, fno)) {
-            const nvmm::ClassResult *r = self->cache->lookup(o.tracker_id, fno);
-            if (r) {
-                e.class_id = r->class_id;
-                e.confidence = r->confidence;
-                e.fresh = 0;
-                g_strlcpy(e.label, r->label, sizeof e.label);
-                continue;
-            }
-        }
+            continue;  /* too small to classify usefully; cached result stands */
+        if (cached && !self->cache->due(o.tracker_id, fno))
+            continue;  /* cache still valid for this track */
 
         std::string err;
         if (!self->pre->run(surf, L, T, Wd, Hd, self->d_input, err)) {
@@ -395,7 +450,7 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         float conf = 0.f;
         const int cls = top1(self, &conf);
         if (conf < (float)self->conf_threshold)
-            continue;  /* below threshold: no result, no cache — retried next frame */
+            continue;  /* below threshold: cached result stands; retried next frame */
 
         e.class_id = cls;
         e.confidence = conf;
@@ -441,6 +496,8 @@ gst_nvmm_secondary_infer_finalize(GObject *o)
     auto *self = GST_NVMM_SECONDARY_INFER(o);
     g_free(self->engine_file);
     g_free(self->labels_file);
+    g_free(self->offsets_str);
+    g_free(self->std_str);
     delete self->pre;
     delete self->cache;
     delete self->host_out;
@@ -461,6 +518,10 @@ gst_nvmm_secondary_infer_set_property(GObject *o, guint id, const GValue *v, GPa
         case PROP_MAX_TRACK_AGE:     self->max_track_age = g_value_get_uint(v); break;
         case PROP_MIN_ROI_SIZE:      self->min_roi = g_value_get_uint(v); break;
         case PROP_NET_SCALE_FACTOR:  self->net_scale = g_value_get_double(v); break;
+        case PROP_OFFSETS:           g_free(self->offsets_str);
+                                     self->offsets_str = g_value_dup_string(v); break;
+        case PROP_STD_VALUES:        g_free(self->std_str);
+                                     self->std_str = g_value_dup_string(v); break;
         case PROP_COLOR_ORDER:       self->color_order = g_value_get_enum(v); break;
         case PROP_OUTPUT_ACTIVATION: self->activation = g_value_get_enum(v); break;
         case PROP_CONF_THRESHOLD:    self->conf_threshold = g_value_get_double(v); break;
@@ -479,6 +540,8 @@ gst_nvmm_secondary_infer_get_property(GObject *o, guint id, GValue *v, GParamSpe
         case PROP_MAX_TRACK_AGE:     g_value_set_uint(v, self->max_track_age); break;
         case PROP_MIN_ROI_SIZE:      g_value_set_uint(v, self->min_roi); break;
         case PROP_NET_SCALE_FACTOR:  g_value_set_double(v, self->net_scale); break;
+        case PROP_OFFSETS:           g_value_set_string(v, self->offsets_str); break;
+        case PROP_STD_VALUES:        g_value_set_string(v, self->std_str); break;
         case PROP_COLOR_ORDER:       g_value_set_enum(v, self->color_order); break;
         case PROP_OUTPUT_ACTIVATION: g_value_set_enum(v, self->activation); break;
         case PROP_CONF_THRESHOLD:    g_value_set_double(v, self->conf_threshold); break;
@@ -523,6 +586,18 @@ gst_nvmm_secondary_infer_class_init(GstNvmmSecondaryInferClass *klass)
         g_param_spec_double("net-scale-factor", "Net scale factor",
             "Pixel scale applied during preprocess (e.g. 1/255)",
             0.0, G_MAXDOUBLE, 1.0 / 255.0, flags));
+    g_object_class_install_property(go, PROP_OFFSETS,
+        g_param_spec_string("offsets", "Offsets (mean)",
+            "Per-channel mean \"v0,v1,v2\" subtracted after scaling, in the "
+            "engine's channel order (e.g. Caffe BGR: \"102.98,115.95,122.77\" "
+            "with net-scale-factor=1); empty = none",
+            nullptr, flags));
+    g_object_class_install_property(go, PROP_STD_VALUES,
+        g_param_spec_string("std-values", "Std values",
+            "Per-channel std \"v0,v1,v2\" divided after offsets, in the "
+            "engine's channel order (torchvision: \"0.229,0.224,0.225\" with "
+            "net-scale-factor=1/255); empty = none",
+            nullptr, flags));
     g_object_class_install_property(go, PROP_COLOR_ORDER,
         g_param_spec_enum("color-order", "Color order",
             "Channel order the engine expects",
@@ -563,6 +638,8 @@ gst_nvmm_secondary_infer_init(GstNvmmSecondaryInfer *self)
     self->max_track_age  = 60;
     self->min_roi        = 16;
     self->net_scale      = 1.0 / 255.0;
+    self->offsets_str    = nullptr;
+    self->std_str        = nullptr;
     self->color_order    = NVMM_SEC_RGB;
     self->activation     = NVMM_SEC_ACT_SOFTMAX;
     self->conf_threshold = 0.0;
