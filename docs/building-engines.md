@@ -3,10 +3,15 @@
 [`nvmmsamurai`](elements/nvmmsamurai.md) loads five TensorRT engines plus a
 constants file, and [`nvmminfer`](elements/nvmminfer.md) loads a YOLO engine.
 **None of these are bundled in the repo** — you build them yourself from public,
-open-source weights. This page is the end-to-end recipe; the scripts live in
-[`tools/samurai/`](https://github.com/PavelGuzenfeld/gst-nvmm-cpp/tree/main/tools/samurai).
+open-source weights. This page is the end-to-end recipe. Everything runs in Docker.
 
-Everything runs in Docker.
+The scripts live in `tools/samurai/`:
+
+| Script | What it does |
+|---|---|
+| `export_onnx.py` | Export the 5 sub-models (image/prompt/mask-decoder/memory-encoder/memory-attention) to ONNX. Wraps the **stock** public SAM2 modules with synthetic trace inputs — no captured data; matches the `out1..out6` / dynamic-`sparse` contracts the C++ binds. |
+| `pack_consts.py` | Gather the out-of-engine learned constants (temporal pos-enc, no-mem/no-obj embeddings, obj-ptr projections, image PE, empty-prompt sparse/dense) into the self-describing `samurai_consts.bin`. |
+| `build_engines.sh` | `trtexec` the five ONNX → fp16 engines on the Jetson; profiles the mask-decoder dynamic `sparse` axis for `Np∈{2,3}`. |
 
 ## Open-source inputs
 
