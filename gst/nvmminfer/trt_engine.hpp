@@ -42,6 +42,11 @@ public:
     /// Bind a device pointer for a named tensor. False if the name is unknown.
     bool bind(const std::string &name, void *device_ptr);
 
+    /// Set the runtime shape of a dynamic input (e.g. the mask_decoder's variable
+    /// sparse-prompt axis). Must be called before infer() for any input with a -1
+    /// dim. `dims` is the full shape. False on failure.
+    bool set_input_shape(const std::string &name, const std::vector<int64_t> &dims);
+
     /// Enqueue inference on `stream` (async). All I/O addresses must be bound.
     bool infer(cudaStream_t stream);
 

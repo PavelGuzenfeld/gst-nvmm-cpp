@@ -4,6 +4,7 @@
 #include "nvmm_det_meta.h"
 #include "nvmm_motion_meta.h"
 #include "nvmm_class_meta.h"
+#include "nvmm_track_meta.h"
 #include "gstnvmmallocator.h"
 #include "font6x8.h"
 
@@ -12,6 +13,7 @@
 #include <cuda_runtime.h>
 #include <cuda_egl_interop.h>
 
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -27,13 +29,22 @@ struct _GstNvmmDrawDet {
     gint           width, height;
     gint           thickness;          /* property: box line thickness (px) */
     gboolean       draw_labels;        /* property: draw "label conf%" text */
+    gboolean       draw_det;           /* property: draw raw YOLO det boxes */
     NvBufSurface  *rgba;               /* VIC-native RGBA, full-frame */
     cudaGraphicsResource_t egl_res;    /* CUDA view of rgba via EGL */
+    /* SAMURAI/fusekf track-meta HUD: live FPS (EMA) + tracking coverage. */
+    gboolean       draw_track;         /* property: draw GstNvmmTrackMeta + HUD */
+    gdouble        fps_smoothing;      /* property: HUD FPS EMA weight on history (0..1) */
+    gint           font_scale_div;    /* property: font px = max(1, height/this) */
+    gint64         last_us;            /* monotonic time of previous frame */
+    double         ema_fps;
+    guint64        n_frames, n_valid;
 };
 
 G_DEFINE_TYPE(GstNvmmDrawDet, gst_nvmm_drawdet, GST_TYPE_BASE_TRANSFORM)
 
-enum { PROP_0, PROP_THICKNESS, PROP_DRAW_LABELS };
+enum { PROP_0, PROP_THICKNESS, PROP_DRAW_LABELS, PROP_DRAW_TRACK, PROP_DRAW_DET,
+       PROP_FPS_SMOOTHING, PROP_FONT_SCALE_DIV };
 
 static GstStaticPadTemplate sink_tmpl = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
@@ -260,9 +271,11 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
         return GST_FLOW_ERROR;
     }
 
-    /* Draw detection boxes (scaled from the meta's inference-frame space). */
+    /* Draw raw detection boxes (scaled from the meta's inference-frame space).
+       Off when draw-det=false — for the tracker result video we only want the
+       single fused track box, not the noisy per-frame YOLO detections. */
     GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(inbuf);
-    if (m && m->num_objects) {
+    if (self->draw_det && m && m->num_objects) {
         /* Motion annotation (from nvmmfusion): entries align by index. */
         GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
         /* Classifier annotation (from nvmmsecondaryinfer): same alignment. */
@@ -303,6 +316,34 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             draw_text((guint8 *)omap.data, W, H, bx + ts, ty, text, ts, r8, g8, b8);
         }
     }
+    /* SAMURAI/fusekf track-meta box (frame coords == W x H) + live HUD. */
+    if (self->draw_track) {
+        const gint64 now = g_get_monotonic_time();
+        if (self->last_us) {
+            const double inst = 1e6 / (double)(now - self->last_us);
+            const double a = self->fps_smoothing;   /* prop fps-smoothing (def 0.9) */
+            self->ema_fps = self->ema_fps > 0 ? a * self->ema_fps + (1.0 - a) * inst : inst;
+        }
+        self->last_us = now;
+        self->n_frames++;
+        GstNvmmTrackMeta *tm = gst_buffer_get_nvmm_track_meta(inbuf);
+        const int ts = MAX(1, H / self->font_scale_div);  /* prop font-scale-divisor (def 540) */
+        const int line = MAX(1, self->thickness);   /* thin track box (thickness prop) */
+        if (tm && tm->valid && tm->width > 0) {
+            self->n_valid++;
+            draw_rect((guint8 *)omap.data, W, H, (int)tm->left, (int)tm->top,
+                      (int)tm->width, (int)tm->height, line, 0, 255, 255);
+            char tl[32];
+            const double conf = 1.0 / (1.0 + exp(-(double)tm->object_score));
+            g_snprintf(tl, sizeof tl, "target %.0f%%", conf * 100.0);
+            int ty = (int)tm->top - FONT_H * ts - ts; if (ty < ts) ty = (int)tm->top + ts;
+            draw_text((guint8 *)omap.data, W, H, (int)tm->left + ts, ty, tl, ts, 0, 255, 255);
+        }
+        const double cov = 100.0 * self->n_valid / self->n_frames;  /* n_frames++ above guarantees >= 1 */
+        char hud[64];
+        g_snprintf(hud, sizeof hud, "FPS %.1f  TRACK %.0f%%", self->ema_fps, cov);
+        draw_text((guint8 *)omap.data, W, H, 8, 8, hud, ts, 0, 255, 0);
+    }
     gst_buffer_unmap(outbuf, &omap);
     return GST_FLOW_OK;
 }
@@ -313,6 +354,10 @@ gst_nvmm_drawdet_set_property(GObject *o, guint id, const GValue *v, GParamSpec 
     auto *self = GST_NVMM_DRAWDET(o);
     if (id == PROP_THICKNESS) self->thickness = g_value_get_int(v);
     else if (id == PROP_DRAW_LABELS) self->draw_labels = g_value_get_boolean(v);
+    else if (id == PROP_DRAW_TRACK) self->draw_track = g_value_get_boolean(v);
+    else if (id == PROP_DRAW_DET) self->draw_det = g_value_get_boolean(v);
+    else if (id == PROP_FPS_SMOOTHING) self->fps_smoothing = g_value_get_double(v);
+    else if (id == PROP_FONT_SCALE_DIV) self->font_scale_div = g_value_get_int(v);
     else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
 }
 static void
@@ -321,6 +366,10 @@ gst_nvmm_drawdet_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
     auto *self = GST_NVMM_DRAWDET(o);
     if (id == PROP_THICKNESS) g_value_set_int(v, self->thickness);
     else if (id == PROP_DRAW_LABELS) g_value_set_boolean(v, self->draw_labels);
+    else if (id == PROP_DRAW_TRACK) g_value_set_boolean(v, self->draw_track);
+    else if (id == PROP_DRAW_DET) g_value_set_boolean(v, self->draw_det);
+    else if (id == PROP_FPS_SMOOTHING) g_value_set_double(v, self->fps_smoothing);
+    else if (id == PROP_FONT_SCALE_DIV) g_value_set_int(v, self->font_scale_div);
     else G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p);
 }
 
@@ -349,10 +398,26 @@ gst_nvmm_drawdet_class_init(GstNvmmDrawDetClass *klass)
     g_object_class_install_property(go, PROP_THICKNESS,
         g_param_spec_int("thickness", "Box thickness", "Detection box line width (px)",
             1, 32, 3, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_DRAW_TRACK,
+        g_param_spec_boolean("draw-track", "Draw track + HUD",
+            "Draw the GstNvmmTrackMeta box + live FPS/coverage HUD", TRUE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_DRAW_DET,
+        g_param_spec_boolean("draw-det", "Draw raw detections",
+            "Draw the raw YOLO GstNvmmDetMeta boxes/labels", TRUE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
     g_object_class_install_property(go, PROP_DRAW_LABELS,
         g_param_spec_boolean("draw-labels", "Draw labels",
             "Draw the class label and confidence above each box", TRUE,
             (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_FPS_SMOOTHING,
+        g_param_spec_double("fps-smoothing", "HUD FPS smoothing",
+            "EMA weight on FPS history for the HUD (0 = instantaneous, ->1 = smoother)",
+            0.0, 1.0, 0.9, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(go, PROP_FONT_SCALE_DIV,
+        g_param_spec_int("font-scale-divisor", "Font scale divisor",
+            "Overlay font pixel size = max(1, frame_height / this)",
+            1, 10000, 540, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -377,6 +442,11 @@ gst_nvmm_drawdet_init(GstNvmmDrawDet *self)
     self->width = self->height = 0;
     self->thickness = 3;
     self->draw_labels = TRUE;
+    self->draw_track = TRUE;
+    self->draw_det = TRUE;
+    self->fps_smoothing = 0.9;
+    self->font_scale_div = 540;
+    self->last_us = 0; self->ema_fps = 0; self->n_frames = 0; self->n_valid = 0;
     self->rgba = nullptr;
     self->egl_res = nullptr;
 }
