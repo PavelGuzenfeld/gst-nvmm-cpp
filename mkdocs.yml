@@ -60,6 +60,7 @@ nav:
           - nvmmdrawdet: elements/nvmmdrawdet.md
   - Pipeline examples: pipelines.md
   - Single-object tracker pipeline: tracker-pipeline.md
+  - Building the SAMURAI engines: building-engines.md
   - Inference graphs: inference-graphs.md
   - Zero-copy IPC: ipc.md
   - Metadata over IPC: metadata-ipc.md

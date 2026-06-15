@@ -29,8 +29,8 @@ five engines and one constants file from `engine-dir`/`consts-file`:
 
 These are built from the public SAM 2.1 `base_plus` checkpoint and the public
 SAMURAI config; the export + build + pack chain is documented in
-**Building engines** (`tools/samurai/`). Nothing model-specific is shipped in
-this repo.
+[Building the SAMURAI engines](../building-engines.md). Nothing model-specific is
+shipped in this repo.
 
 ## Properties
 

@@ -27,8 +27,8 @@ default `0`) — nothing in it is application-specific.
   - `samurai_consts.bin` (learned out-of-engine constants)
 
   These are built entirely from public weights (Ultralytics YOLO + Meta SAM 2.1
-  `base_plus`) — see **Building engines** (`tools/samurai/`) for the export →
-  build → pack chain.
+  `base_plus`) — see [Building the SAMURAI engines](building-engines.md) for the
+  export → build → pack chain.
 - A test clip. Any `.mp4`/`.mkv` works; the SAM 2 sample videos or an
   Ultralytics sample asset are convenient public inputs.
 
