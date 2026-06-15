@@ -56,6 +56,8 @@ each passes the frame through untouched and reads or attaches metadata.
 |---|---|
 | [`nvmminfer`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmminfer/) | TensorRT object detection; attaches detection metadata |
 | [`nvmmtracker`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmtracker/) | IOU multi-object tracking; assigns stable `tracker_id`s |
+| [`nvmmsamurai`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsamurai/) | Single-object visual tracker (SAM2.1 / SAMURAI on TensorRT); attaches track metadata |
+| [`nvmmfusekf`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmfusekf/) | Master Kalman filter fusing the visual tracker with the detector (pure host) |
 | [`nvmmofa`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmofa/) | Dense optical flow on the Orin OFA engine; flow rides as metadata |
 | [`nvmmfusion`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmfusion/) | Joins detector + flow branches by PTS; computes per-object motion |
 | [`nvmmsecondaryinfer`](https://pavelguzenfeld.com/gst-nvmm-cpp/elements/nvmmsecondaryinfer/) | Cascade classifier on detected objects, with per-track caching |
@@ -91,7 +93,9 @@ ninja -C builddir
 ```
 
 Full build/install/run instructions, pipeline examples, and the IPC design are
-in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/).
+in the [documentation site](https://pavelguzenfeld.com/gst-nvmm-cpp/). For an
+end-to-end YOLO → SAMURAI → Kalman-fusion → overlay tracker, see the
+[single-object tracker pipeline](https://pavelguzenfeld.com/gst-nvmm-cpp/tracker-pipeline/).
 
 ## Status
 
@@ -122,6 +126,8 @@ gst-nvmm-cpp/
 │   ├── nvmmappsrc/         # IPC consumer (zero-copy import)
 │   ├── nvmminfer/          # TensorRT detector (Jetson-only build)
 │   ├── nvmmtracker/        # IOU tracker (pure host)
+│   ├── nvmmsamurai/        # SAM2.1/SAMURAI visual tracker (Jetson-only build)
+│   ├── nvmmfusekf/         # master Kalman fusion of tracker + detector (pure host)
 │   ├── nvmmofa/            # OFA optical flow (Orin/VPI only)
 │   ├── nvmmfusion/         # PTS join of detector + flow branches
 │   ├── nvmmsecondaryinfer/ # TensorRT cascade classifier (Jetson-only build)

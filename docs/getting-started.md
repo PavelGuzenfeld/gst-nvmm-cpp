@@ -16,6 +16,20 @@ The build auto-detects the real NVMM stack via `pkg-config`/library search. If
 `NvBufSurface` isn't found it errors unless you opt into the mock with
 `-Dmock=true` (host testing only — never production).
 
+### Build-time options (CUDA targets)
+
+The CUDA elements (`nvmmsamurai` and its probes) take two combo options so a bad
+value is rejected at `meson setup` rather than deep inside `nvcc`:
+
+| Option | Values | Default | Meaning |
+|--------|--------|---------|---------|
+| `gpu_arch` | `sm_72`…`sm_90` | `sm_87` | GPU arch — `sm_87` = Orin, `sm_72` = Xavier; a mismatch makes kernels fail to launch |
+| `gpu_cxx_std` | `c++17`, `c++20` | `c++20` | C++ standard for the CUDA kernels (`nvcc -std`); drop to `c++17` only for an older toolchain |
+
+```bash
+meson setup builddir -Dgpu_arch=sm_87 -Dgpu_cxx_std=c++20
+```
+
 ## Build & test (host, Docker, mock API)
 
 ```bash

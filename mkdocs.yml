@@ -52,11 +52,14 @@ nav:
       - Inference & analytics:
           - nvmminfer: elements/nvmminfer.md
           - nvmmtracker: elements/nvmmtracker.md
+          - nvmmsamurai: elements/nvmmsamurai.md
+          - nvmmfusekf: elements/nvmmfusekf.md
           - nvmmofa: elements/nvmmofa.md
           - nvmmfusion: elements/nvmmfusion.md
           - nvmmsecondaryinfer: elements/nvmmsecondaryinfer.md
           - nvmmdrawdet: elements/nvmmdrawdet.md
   - Pipeline examples: pipelines.md
+  - Single-object tracker pipeline: tracker-pipeline.md
   - Inference graphs: inference-graphs.md
   - Zero-copy IPC: ipc.md
   - Metadata over IPC: metadata-ipc.md

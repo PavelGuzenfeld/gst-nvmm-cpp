@@ -17,8 +17,17 @@ pulls the frame to host via EGL/CUDA, and draws on the CPU.
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
-| `thickness` | int | `3` | Box line width (px) |
+| `thickness` | int (1–32) | `3` | Box line width (px) |
+| `draw-track` | bool | `true` | Draw the `GstNvmmTrackMeta` box + live FPS/coverage HUD |
+| `draw-det` | bool | `true` | Draw the raw YOLO `GstNvmmDetMeta` boxes/labels |
 | `draw-labels` | bool | `true` | Draw the `label [#id] conf%` bar above each box |
+| `fps-smoothing` | double (0–1) | `0.9` | EMA weight on the HUD FPS (0 = instantaneous) |
+| `font-scale-divisor` | int | `540` | Overlay font px = `max(1, frame_height / this)` |
+
+When a [`nvmmfusekf`](nvmmfusekf.md) (or [`nvmmsamurai`](nvmmsamurai.md)) track
+is present, `draw-track` overlays the fused track box labelled `target conf%`
+plus a top-left `FPS / TRACK%` HUD (coverage = valid-track frames ÷ total).
+Set `draw-det=false` to show only the track box without the raw detections.
 
 When an upstream [`nvmmtracker`](nvmmtracker.md) has assigned a `tracker_id`,
 the label shows it (`car #4 82%`); otherwise just `car 82%`. When
