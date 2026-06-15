@@ -17,6 +17,12 @@ common_sources += files('nvmm_motion.cpp', 'nvmm_motion_meta.cpp')
 # Phase-3.2 cascade: the classifier-result sibling meta produced by
 # nvmmsecondaryinfer (pure GstMeta, unit-tested on x86).
 common_sources += files('nvmm_class_meta.cpp')
+# Phase-B: single-target SAMURAI track meta produced by nvmmsamurai and
+# overwritten by nvmmfusekf (pure GstMeta, unit-tested on x86).
+common_sources += files('nvmm_track_meta.cpp')
+# Phase-B: 8D constant-velocity Kalman filter (pure C++ port of SAMURAI's
+# kalman_filter.py) shared by nvmmsamurai (kf_score) and nvmmfusekf (master KF).
+common_sources += files('kalman_box.cpp')
 if build_mock
   mock_inc = include_directories('.')
 else

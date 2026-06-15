@@ -114,6 +114,16 @@ bool TrtEngine::bind(const std::string &name, void *device_ptr) {
     return ctx_->setTensorAddress(name.c_str(), device_ptr);
 }
 
+bool TrtEngine::set_input_shape(const std::string &name,
+                                const std::vector<int64_t> &dims) {
+    nvinfer1::Dims d;
+    d.nbDims = static_cast<int>(dims.size());
+    if (d.nbDims > nvinfer1::Dims::MAX_DIMS) return false;
+    for (int i = 0; i < d.nbDims; i++)
+        d.d[i] = dims[static_cast<size_t>(i)];
+    return ctx_->setInputShape(name.c_str(), d);
+}
+
 bool TrtEngine::infer(cudaStream_t stream) {
     return ctx_->enqueueV3(stream);
 }

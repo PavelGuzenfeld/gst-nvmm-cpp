@@ -102,6 +102,82 @@ test_det_meta = executable('test_nvmm_det_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+test_track_meta = executable('test_nvmm_track_meta',
+  'test_nvmm_track_meta.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [nvmm_common_dep, gst_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+# Pure-C++ Kalman filter (no gst/CUDA) — compile the unit under test directly.
+test_kalman_box = executable('test_kalman_box',
+  ['test_kalman_box.cpp', '../gst/common/kalman_box.cpp'],
+  include_directories : [common_inc],
+)
+
+# Header-only crop geometry (gst/nvmmsamurai/samurai_view.hpp); no CUDA/GST.
+test_samurai_view = executable('test_samurai_view',
+  ['test_samurai_view.cpp'],
+  include_directories : [include_directories('../gst/nvmmsamurai')],
+)
+
+# Seed mask-chain parity probe (bilinear + binarize) vs Phase-A golden; pure host.
+seed_math_probe = executable('seed_math_probe',
+  ['seed_math_probe.cpp'],
+  include_directories : [include_directories('../gst/nvmmsamurai')],
+)
+
+# MemoryBank assembly probe (samurai_memory.hpp) vs frame-60 golden; pure host.
+samurai_mem_probe = executable('samurai_mem_probe',
+  ['samurai_mem_probe.cpp'],
+  include_directories : [include_directories('../gst/nvmmsamurai')],
+)
+
+# SAMURAI encoder front-end parity probe (Jetson-only: TRT + real NVMM). Drives
+# the real SamuraiTracker (RoiCropper + image_encoder) on a controlled NV12 frame
+# so its crop + encoder outputs can be compared to the PyTorch reference. Built
+# but not registered as a test() — run manually with a frame + box + engine dir.
+if have_tensorrt and have_nvbufsurface
+  samurai_enc_probe = executable('samurai_enc_probe',
+    [
+      'samurai_enc_probe.cpp',
+      '../gst/nvmmsamurai/samurai_tracker.cpp',
+      '../gst/nvmmsamurai/samurai_kernels.cu',
+      '../gst/nvmmsecondaryinfer/roi_preprocess.cpp',
+      '../gst/nvmminfer/trt_engine.cpp',
+    ],
+    include_directories : [
+      config_inc, common_inc,
+      include_directories('../gst/nvmmalloc'),
+      include_directories('../gst/nvmminfer'),
+      include_directories('../gst/nvmmsecondaryinfer'),
+      include_directories('../gst/nvmmsamurai'),
+    ],
+    dependencies : [
+      nvmm_common_dep, gstnvmmalloc_dep,
+      gst_dep, gst_video_dep, gst_base_dep,
+      trt_dep, nvbufsurftransform_dep,
+    ],
+    cuda_args : samurai_cuda_base_args,
+  )
+
+  # Validates TrtEngine::set_input_shape + the dynamic mask_decoder binding in
+  # C++ against the Phase-A golden .dat inputs. Engine wrapper only.
+  trt_dec_probe = executable('trt_dec_probe',
+    ['trt_dec_probe.cpp', '../gst/nvmminfer/trt_engine.cpp'],
+    include_directories : [config_inc, include_directories('../gst/nvmminfer')],
+    dependencies : [trt_dep],
+  )
+
+  # Parity-checks the SAMURAI CUDA kernels vs their host references.
+  samurai_kernel_probe = executable('samurai_kernel_probe',
+    ['samurai_kernel_probe.cpp', '../gst/nvmmsamurai/samurai_kernels.cu'],
+    include_directories : [include_directories('../gst/nvmmsamurai')],
+    dependencies : [trt_dep],   # brings the CUDA include dir + cudart
+    cuda_args : samurai_cuda_base_args,
+  )
+endif
+
 # On a real-API (non-mock) build these two exercise closed NVIDIA libs that
 # ThreadSanitizer flags but we cannot fix: libnvbufsurftransform double-locks /
 # unlocks its own global mutex, and the CUDA allocator OOMs under TSan's shadow
@@ -118,6 +194,9 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
+test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
+test('kalman_box', test_kalman_box, protocol : 'exitcode')
+test('samurai_view', test_samurai_view, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')
