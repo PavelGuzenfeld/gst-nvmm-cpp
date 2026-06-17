@@ -213,6 +213,15 @@ configure_file(
 config_inc = include_directories('.')
 common_inc = include_directories('gst/common')
 
+# Optional OpenCV — enables the header-only motion-analytics components' unit tests.
+# analytics/ is header-only and always exposed; its OpenCV tests build only when
+# OpenCV is present, so a bare host/CI build without OpenCV still configures cleanly.
+opencv4_dep = dependency('opencv4', required : false)
+have_opencv = opencv4_dep.found()
+if have_opencv
+  message('OpenCV found — building the analytics component tests')
+endif
+
 # When NVMM libs not available, build mock versions for testing
 build_mock = not have_nvbufsurface
 if build_mock
@@ -220,6 +229,7 @@ if build_mock
 endif
 
 subdir('gst/common')
+subdir('analytics')        # header-only OpenCV motion-analytics components (tests gated on OpenCV)
 subdir('gst/nvmmalloc')
 subdir('gst/nvmmconvert')
 subdir('gst/nvmmcompositor')
