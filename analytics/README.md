@@ -18,9 +18,57 @@ These are distinct from `gst/common/nvmm_motion.hpp`, which scores detector boxe
 from a **precomputed optical-flow field**; the components here work directly on the
 raw grayscale frames.
 
-## Build
+## Enabling & building
 
-Header-only — just add `analytics_inc` to a target's `include_directories`. The unit
-tests build automatically when OpenCV is present (`have_opencv` in the top
-`meson.build`); a host/CI build without OpenCV configures and runs the rest fine
-(the pure-C++ `persistence_gate` test still builds).
+The components are **header-only and always available** — just include them. Their
+**unit tests and the OpenCV dependency are opt-in** via a meson feature that is
+**OFF by default**, so the normal (zero-copy NVMM) build pulls no OpenCV at all:
+
+```sh
+meson setup build -Danalytics=enabled     # build the analytics tests (requires OpenCV)
+meson test  -C build analytics_dual_homography analytics_detection_motion_gate \
+            analytics_persistence_gate analytics_low_texture_motion \
+            analytics_active_region analytics_motion_magnify
+```
+
+With the default `-Danalytics=disabled`, OpenCV is never searched and no analytics
+test is built; the headers stay on the include path for anyone who pulls them in.
+
+## Integrating
+
+Header-only, OpenCV-only (no GStreamer/CUDA). In a consumer target add the include
+dir and link OpenCV:
+
+```cpp
+#include "dual_homography.hpp"   // add analytics/ (analytics_inc) to include_directories
+```
+```meson
+dependencies : [dependency('opencv4')]
+```
+
+## Usage
+
+The flagship is the composed gate: feed the detector's boxes plus the current and
+two past grayscale frames, get back the index of the one detection that is moving
+**independently of the camera** (or −1):
+
+```cpp
+nvmm::motion::MovingObjectGate gate;                 // sensible defaults
+// each frame:
+std::vector<nvmm::track::Detection> boxes = /* {cx, cy, conf, /*supported=*/false} */;
+int i = gate.update(boxes, cur_gray, prev_gray, prev2_gray);
+if (i >= 0) seed_tracker(boxes[i]);                  // confirmed independent mover
+```
+
+The pieces are usable on their own too: `independent_motion_residual()` for a raw
+motion map, `active_region()` to trim letterbox/pillarbox before processing,
+`PersistenceGate` as a standalone track-before-detect confirmer, `MotionMagnifier`
+to reveal subtle periodic motion.
+
+## What it's useful for
+
+Seeding a tracker (SAM2/SAMURAI, …) onto the genuine moving target in a scene where
+the detector also fires on **static structure** under a **panning / handheld**
+camera — surveillance, inspection, search-and-track, any "find the thing that's
+actually moving, not the background" task. The independent-motion cue plus temporal
+persistence is what separates a real mover from detector false-positives on clutter.

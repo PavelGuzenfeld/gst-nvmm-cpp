@@ -21,3 +21,11 @@ option('gpu_cxx_std', type : 'combo',
   description : 'C++ standard for the SAMURAI CUDA kernels (nvcc -std). ' +
                 'Default c++20 (libcu++ on CUDA 12.6). Drop to c++17 only for ' +
                 'an older toolchain that cannot compile the kernels at c++20.')
+
+# Optional, OFF by default. The header-only motion-analytics components (analytics/)
+# are always available, but their OpenCV dependency and unit tests build only when
+# this feature is enabled (-Danalytics=enabled). Keeps the default / zero-copy NVMM
+# build free of any OpenCV (host cv::Mat) dependency.
+option('analytics', type : 'feature', value : 'disabled',
+  description : 'Build the OpenCV-backed motion-analytics component tests (analytics/). '+
+                'Default disabled; headers are available regardless. Requires OpenCV when enabled.')

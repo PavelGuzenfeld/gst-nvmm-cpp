@@ -213,13 +213,15 @@ configure_file(
 config_inc = include_directories('.')
 common_inc = include_directories('gst/common')
 
-# Optional OpenCV — enables the header-only motion-analytics components' unit tests.
-# analytics/ is header-only and always exposed; its OpenCV tests build only when
-# OpenCV is present, so a bare host/CI build without OpenCV still configures cleanly.
-opencv4_dep = dependency('opencv4', required : false)
-have_opencv = opencv4_dep.found()
-if have_opencv
-  message('OpenCV found — building the analytics component tests')
+# Optional analytics feature (OFF by default). The header-only motion-analytics
+# components (analytics/) are always exposed via analytics_inc; their OpenCV
+# dependency + unit tests build only when -Danalytics=enabled. A disabled feature
+# means OpenCV is never even searched, so the default / zero-copy build stays
+# OpenCV-free. Enabled => OpenCV is required (no silent half-state).
+opencv4_dep = dependency('opencv4', required : get_option('analytics'))
+have_analytics = opencv4_dep.found()
+if have_analytics
+  message('analytics feature enabled (OpenCV @0@)'.format(opencv4_dep.version()))
 endif
 
 # When NVMM libs not available, build mock versions for testing
