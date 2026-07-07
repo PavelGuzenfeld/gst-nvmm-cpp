@@ -1,3 +1,5 @@
+tests_inc = include_directories('.')
+
 test_buffer = executable('test_nvmm_buffer',
   'test_nvmm_buffer.cpp',
   include_directories : [config_inc, common_inc],
@@ -237,16 +239,43 @@ test('integration', test_integration, protocol : 'exitcode',
 
 # --- Reusable motion-analytics components (analytics/) -------------------------
 # All gated behind the single (default-disabled) `analytics` feature. The headers
-# are always available (analytics_inc); only these tests + the OpenCV dependency
-# are opt-in. persistence_gate is pure C++ but folded under the same switch so the
-# feature is one clean knob (off => nothing analytics builds, no OpenCV searched).
+# are always available (analytics_inc); only these tests are opt-in. Pure C++14 —
+# no OpenCV anywhere in this suite.
 if have_analytics
   foreach t : ['persistence_gate', 'dual_homography', 'low_texture_motion',
                'active_region', 'detection_motion_gate', 'motion_magnify']
     analytics_exe = executable('test_analytics_' + t, 'test_analytics_' + t + '.cpp',
       include_directories : [analytics_inc],
-      dependencies : [opencv4_dep],
     )
     test('analytics_' + t, analytics_exe, protocol : 'exitcode')
   endforeach
+endif
+
+# --- Golden comparisons: hand-rolled analytics vs OpenCV as reference oracle ----
+# The only OpenCV user in the tree, behind its own default-disabled feature.
+# Fused-stage tests pin the numerics (tolerances documented per stage in the
+# test files); component tests compare end-to-end behaviour on the same scenes.
+if have_analytics_golden
+  foreach t : ['image_ops', 'low_texture_motion', 'active_region', 'motion_magnify',
+               'dual_homography']
+    golden_exe = executable('test_golden_' + t, 'test_golden_' + t + '.cpp',
+      include_directories : [analytics_inc],
+      dependencies : [opencv4_dep],
+    )
+    test('golden_' + t, golden_exe, protocol : 'exitcode', timeout : 120)
+  endforeach
+endif
+
+# Parity-checks the CUDA low_texture_motion against the (golden-validated) host
+# implementation on deterministic synthetic scenes — self-contained. Real-GPU
+# test, tagged nvidia_hwlib like the samurai probe.
+if have_analytics_cuda
+  analytics_kernel_probe = executable('analytics_kernel_probe',
+    ['analytics_kernel_probe.cpp', '../analytics/analytics_kernels.cu'],
+    include_directories : [analytics_inc],
+    dependencies : [analytics_cuda_dep],
+    cuda_args : analytics_cuda_args,
+  )
+  test('analytics_kernels', analytics_kernel_probe, protocol : 'exitcode',
+    suite : 'nvidia_hwlib')
 endif

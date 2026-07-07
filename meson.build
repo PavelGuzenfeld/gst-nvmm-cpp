@@ -214,14 +214,38 @@ config_inc = include_directories('.')
 common_inc = include_directories('gst/common')
 
 # Optional analytics feature (OFF by default). The header-only motion-analytics
-# components (analytics/) are always exposed via analytics_inc; their OpenCV
-# dependency + unit tests build only when -Danalytics=enabled. A disabled feature
-# means OpenCV is never even searched, so the default / zero-copy build stays
-# OpenCV-free. Enabled => OpenCV is required (no silent half-state).
-opencv4_dep = dependency('opencv4', required : get_option('analytics'))
-have_analytics = opencv4_dep.found()
+# components (analytics/) are always exposed via analytics_inc and are pure C++14
+# — no OpenCV. The feature only gates their unit tests, so it needs no external
+# dependency at all.
+have_analytics = get_option('analytics').allowed()
 if have_analytics
-  message('analytics feature enabled (OpenCV @0@)'.format(opencv4_dep.version()))
+  message('analytics feature enabled (building analytics unit tests)')
+endif
+
+# Golden-comparison lane (OFF by default): builds the tests + benchmarks that
+# validate the hand-rolled analytics against OpenCV as a reference oracle. The
+# ONLY thing in the tree that needs OpenCV. Enabled => OpenCV is required (no
+# silent half-state).
+opencv4_dep = dependency('opencv4', required : get_option('analytics_golden'),
+  include_type : 'system')
+have_analytics_golden = opencv4_dep.found()
+if have_analytics_golden
+  message('analytics_golden enabled (OpenCV @0@ as reference oracle)'.format(opencv4_dep.version()))
+endif
+
+# CUDA analytics lane (OFF by default). A narrow nvcc+cudart gate — analytics
+# kernels need neither TensorRT nor NvBufSurface, so this is deliberately NOT
+# the Jetson-only have_tensorrt gate. Strict opt-in (enabled(), not allowed()):
+# requiring nvcc under 'auto' would break every non-CUDA host.
+have_analytics_cuda = false
+if get_option('analytics_cuda').enabled()
+  add_languages('cuda', native : false, required : true)
+  analytics_cuda_dep = dependency('cuda', required : true, modules : ['cudart'])
+  analytics_cuda_args = ['-std=' + get_option('gpu_cxx_std'),
+                         '--gpu-architecture=' + get_option('gpu_arch')]
+  have_analytics_cuda = true
+  message('analytics_cuda enabled (@0@, @1@)'.format(get_option('gpu_arch'),
+                                                     get_option('gpu_cxx_std')))
 endif
 
 # When NVMM libs not available, build mock versions for testing
@@ -231,7 +255,7 @@ if build_mock
 endif
 
 subdir('gst/common')
-subdir('analytics')        # header-only OpenCV motion-analytics components (tests gated on OpenCV)
+subdir('analytics')        # header-only motion-analytics components (pure C++14, no OpenCV)
 subdir('gst/nvmmalloc')
 subdir('gst/nvmmconvert')
 subdir('gst/nvmmcompositor')

@@ -16,14 +16,15 @@
 /// Self-latching: the expensive motion step runs only while SEARCHING; once a box is
 /// confirmed the persistence gate tracks it by association until lost, then re-engages.
 ///
-/// OpenCV-only, header-only. Composes dual_homography.hpp + low_texture_motion.hpp +
-/// persistence_gate.hpp.
+/// Pure C++14, header-only, no dependencies. Composes dual_homography.hpp +
+/// low_texture_motion.hpp + persistence_gate.hpp.
 #pragma once
-#include <opencv2/opencv.hpp>
+#include <cstdint>
 #include <vector>
-#include <algorithm>
 
 #include "dual_homography.hpp"
+#include "image.hpp"
+#include "image_ops.hpp"
 #include "low_texture_motion.hpp"
 #include "persistence_gate.hpp"
 
@@ -48,21 +49,22 @@ public:
     bool locked() const { return gate_.locked(); }
 
     /// One frame. `boxes` are detector centres (cx,cy,conf); `cur/ref_a/ref_b` are
-    /// single-channel CV_8U frames (e.g. current and two past frames). Returns the
+    /// single-channel u8 frames (e.g. current and two past frames). Returns the
     /// index into `boxes` of the confirmed independently-moving detection, or -1.
     int update(const std::vector<track::Detection> &boxes,
-               const cv::Mat &cur, const cv::Mat &ref_a, const cv::Mat &ref_b)
+               img::View<const uint8_t> cur, img::View<const uint8_t> ref_a,
+               img::View<const uint8_t> ref_b)
     {
         std::vector<track::Detection> dets = boxes;   // copy: we set the `supported` field
 
         if (!gate_.locked()) {                        // search phase: compute motion evidence
-            cv::Mat dh = p_.use_dualh
-                ? independent_motion_residual(cur, ref_a, ref_b, p_.dualh) : cv::Mat();
-            cv::Mat lt = p_.use_lowtex
-                ? low_texture_motion(cur, ref_a, ref_b, p_.lowtex) : cv::Mat();
+            img::Image<float> dh, lt;
+            if (p_.use_dualh) dh = independent_motion_residual(cur, ref_a, ref_b, p_.dualh);
+            if (p_.use_lowtex) lt = low_texture_motion(cur, ref_a, ref_b, p_.lowtex);
             for (auto &d : dets) {
-                bool moved = (sample(dh, d.cx, d.cy) >= p_.dualh_thresh) ||
-                             (sample(lt, d.cx, d.cy) >= p_.lowtex_thresh);
+                const bool moved =
+                    img::window_max(dh.view(), d.cx, d.cy, p_.sample_radius) >= p_.dualh_thresh ||
+                    img::window_max(lt.view(), d.cx, d.cy, p_.sample_radius) >= p_.lowtex_thresh;
                 d.supported = moved;
             }
         }
@@ -72,16 +74,6 @@ public:
     void reset() { gate_.reset(); }
 
 private:
-    float sample(const cv::Mat &m, float cx, float cy) const {
-        if (m.empty()) return 0.f;
-        int r = p_.sample_radius;
-        int x0 = std::max(0, (int)cx - r), y0 = std::max(0, (int)cy - r);
-        int x1 = std::min(m.cols, (int)cx + r), y1 = std::min(m.rows, (int)cy + r);
-        if (x1 <= x0 || y1 <= y0) return 0.f;
-        double mx = 0; cv::minMaxLoc(m(cv::Rect(x0, y0, x1 - x0, y1 - y0)), nullptr, &mx);
-        return (float)mx;
-    }
-
     MotionGateParams p_;
     track::PersistenceGate gate_;
 };
