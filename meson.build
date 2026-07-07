@@ -227,6 +227,7 @@ subdir('gst/nvmmsink')
 subdir('gst/nvmmappsrc')
 subdir('gst/nvmmtracker')  # pure-host det-meta tracker (no CUDA), builds everywhere
 subdir('gst/nvmmfusion')   # pure-host PTS branch fusion (no CUDA), builds everywhere
+subdir('gst/nvmmfusekf')   # pure-host master-KF YOLO+SAMURAI fusion (no CUDA)
 subdir('gst/nvmmexample')  # docs/extending.md worked example (built, never installed)
 # OFA optical flow (nvmmofa) + its flow-meta consumer — needs VPI + real NVMM
 # (Orin-only hardware; gated out of the x86 mock/CI build).
@@ -238,9 +239,20 @@ endif
 # gated out of the x86 mock/CI build, same as nvmmofa).
 if have_tensorrt and have_nvbufsurface
   message('TensorRT found — building nvmminfer (TRT inference)')
+  # CUDA language for the SAMURAI per-frame kernels (Jetson-only; x86 CI has no
+  # nvcc and doesn't build these elements). std/arch come from the cuda_std /
+  # cuda_arch build options (default c++20 / sm_87 = Orin on CUDA 12.6) and are
+  # passed per-target via cuda_args (nvmmsamurai + tests/meson.build).
+  add_languages('cuda', native : false, required : true)
+  # Shared CUDA std/arch flags for every .cu target (nvmmsamurai + the samurai
+  # test probes) — single source of truth so the probes can't compile against a
+  # different arch/std than the shipped library. Targets append their own flags.
+  samurai_cuda_base_args = ['-std=' + get_option('gpu_cxx_std'),
+                            '--gpu-architecture=' + get_option('gpu_arch')]
   subdir('gst/nvmminfer')
   subdir('gst/nvmmsecondaryinfer')  # Phase-3.2 cascade classifier (TRT)
   subdir('gst/nvmmdrawdet')  # detection overlay (demo/viz/E2E), uses CUDA+VIC
+  subdir('gst/nvmmsamurai')  # Phase-B SAM2.1 SAMURAI visual tracker (TRT)
 endif
 subdir('tests')
 subdir('benchmarks')

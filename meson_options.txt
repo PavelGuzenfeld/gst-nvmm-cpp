@@ -3,3 +3,21 @@ option('enable_deepstream_meta', type : 'boolean', value : false,
                 'so nvmmsink can serialize NvDsBatchMeta detections into the IPC ' +
                 'side-channel. The flat wire format and GstNvmmDetMeta stay ' +
                 'DeepStream-free regardless of this option.')
+
+# --- CUDA build-time parameters (consumed by every .cu target: nvmmsamurai +
+# the samurai test/benchmark probes). Combo-typed so meson rejects a bad value
+# at `meson setup` instead of failing deep inside nvcc. ---
+option('gpu_arch', type : 'combo',
+  choices : ['sm_72', 'sm_75', 'sm_80', 'sm_86', 'sm_87', 'sm_89', 'sm_90'],
+  value : 'sm_87',
+  description : 'GPU compute architecture for the SAMURAI CUDA kernels. ' +
+                'Jetson: sm_72 = Xavier, sm_87 = Orin (default). Set to match ' +
+                'the target board; a mismatch makes the kernels fail to launch. ' +
+                '(cuda_arch is a reserved meson name, hence gpu_arch.)')
+
+option('gpu_cxx_std', type : 'combo',
+  choices : ['c++17', 'c++20'],
+  value : 'c++20',
+  description : 'C++ standard for the SAMURAI CUDA kernels (nvcc -std). ' +
+                'Default c++20 (libcu++ on CUDA 12.6). Drop to c++17 only for ' +
+                'an older toolchain that cannot compile the kernels at c++20.')

@@ -102,6 +102,44 @@ test_det_meta = executable('test_nvmm_det_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
+test_track_meta = executable('test_nvmm_track_meta',
+  'test_nvmm_track_meta.cpp',
+  include_directories : [config_inc, common_inc],
+  dependencies : [nvmm_common_dep, gst_dep],
+  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+)
+
+# Pure-C++ Kalman filter (no gst/CUDA) — compile the unit under test directly.
+test_kalman_box = executable('test_kalman_box',
+  ['test_kalman_box.cpp', '../gst/common/kalman_box.cpp'],
+  include_directories : [common_inc],
+)
+
+# Header-only crop geometry (gst/nvmmsamurai/samurai_view.hpp); no CUDA/GST.
+test_samurai_view = executable('test_samurai_view',
+  ['test_samurai_view.cpp'],
+  include_directories : [include_directories('../gst/nvmmsamurai')],
+)
+
+# Parity-checks the SAMURAI CUDA kernels (transpose, add_per_channel, sigmoid/
+# threshold scale, bilinear upsample, mask bbox, memory assembly) against their
+# host references using deterministic synthetic inputs — no engines or golden
+# data, so it is a self-contained correctness test. CUDA-only, hence inside the
+# have_tensorrt block; the mock/x86 CI build skips it.
+if have_tensorrt and have_nvbufsurface
+  samurai_kernel_probe = executable('samurai_kernel_probe',
+    ['samurai_kernel_probe.cpp', '../gst/nvmmsamurai/samurai_kernels.cu'],
+    include_directories : [include_directories('../gst/nvmmsamurai')],
+    dependencies : [trt_dep],   # brings the CUDA include dir + cudart
+    cuda_args : samurai_cuda_base_args,
+  )
+  # Raw cudaMalloc — the same allocator that OOMs under TSan's shadow space, so
+  # tag 'nvidia_hwlib' (the on-device TSan run skips that suite). This is a
+  # real-GPU test; it only exists on the Jetson build.
+  test('samurai_kernels', samurai_kernel_probe, protocol : 'exitcode',
+    suite : 'nvidia_hwlib')
+endif
+
 # On a real-API (non-mock) build these two exercise closed NVIDIA libs that
 # ThreadSanitizer flags but we cannot fix: libnvbufsurftransform double-locks /
 # unlocks its own global mutex, and the CUDA allocator OOMs under TSan's shadow
@@ -118,6 +156,9 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
+test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
+test('kalman_box', test_kalman_box, protocol : 'exitcode')
+test('samurai_view', test_samurai_view, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')
