@@ -27,6 +27,12 @@ gstnvmmsamurai = library('gstnvmmsamurai',
   cuda_args : samurai_cuda_base_args +
               ['-Werror', 'all-warnings', '-Xcompiler', '-Wall,-Wextra'],
   cpp_args : ['-Werror'],   # host samurai code warnings-as-errors (already -Wall/-Wextra via level 2)
+  # Link with the C++ driver, not nvcc: for a mixed C++/CUDA target meson picks
+  # the CUDA linker, which emits the toolkit -Wl,-rpath unwrapped and nvcc then
+  # rejects ("Unknown option '-Wl,-rpath,...'"). The .cu.o objects link fine
+  # under g++; cudart arrives via trt_dep and the kernels use no relocatable
+  # device code, so no device-link step is dropped.
+  link_language : 'cpp',
   install : true,
   install_dir : get_option('libdir') / 'gstreamer-1.0',
 )

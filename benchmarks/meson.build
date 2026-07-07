@@ -30,6 +30,10 @@ if have_analytics_cuda
     include_directories : [analytics_inc],
     dependencies : [analytics_cuda_dep],
     cuda_args : analytics_cuda_args,
+    # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
+    # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via
+    # analytics_cuda_dep; the kernels use no relocatable device code.
+    link_language : 'cpp',
   )
   benchmark('analytics_cuda_operations', bench_analytics_cuda, protocol : 'exitcode',
     timeout : 600)
