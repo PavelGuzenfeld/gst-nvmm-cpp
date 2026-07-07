@@ -90,6 +90,29 @@ Point the pipeline at `<out_dir>` via `nvmmsamurai engine-dir=…` /
 `nvmminfer engine-file=…` — see the
 [tracker pipeline walkthrough](tracker-pipeline.md).
 
+## Generic engine builder
+
+`build_engines.sh` above is SAMURAI-specific (it names the five segments). For
+anything else — a YOLO detector, a re-exported encoder at a different crop, any
+one-off ONNX — `tools/build_engine.sh` is a thin `trtexec` wrapper that turns a
+single `.onnx` into an `.engine` on the box the element loads it on:
+
+```bash
+tools/build_engine.sh model.onnx model.engine            # fp16 by default
+# dynamic input axis (name it as the ONNX declares it):
+tools/build_engine.sh mask_decoder.onnx mask_decoder.engine \
+  --minShapes=sparse:1x2x256 --optShapes=sparse:1x3x256 --maxShapes=sparse:1x3x256
+# encoder exported with dynamic spatial dims — pin the crop at build time:
+tools/build_engine.sh image_encoder_384.onnx image_encoder.engine \
+  --shapes=input:1x3x384x384
+```
+
+Anything after the two paths is passed straight to `trtexec`. Because a
+serialized engine is locked to the TensorRT version and GPU arch that built it,
+run this on the target (or a container matching its TensorRT), not on a
+build host — an engine built elsewhere fails to deserialize with a version-tag
+mismatch.
+
 ## Note on licences
 
 The model weights are governed by their upstream licences (SAM 2.1 and the YOLO
