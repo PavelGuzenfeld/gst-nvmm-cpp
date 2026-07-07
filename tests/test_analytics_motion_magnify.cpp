@@ -4,9 +4,10 @@
 /// output peak-to-peak vs the input. An IN-BAND oscillation must be amplified; an
 /// OUT-OF-BAND one must pass through ~unchanged.
 #include "motion_magnify.hpp"
+#include "analytics_scene.h"
 #include "test_harness.h"
 
-#include <opencv2/opencv.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -19,10 +20,10 @@ float steady_pp(float f0, float low, float high, float alpha) {
     const int N = 150, settle = 100;
     float lo = 1e9f, hi = -1e9f;
     for (int n = 0; n < N; n++) {
-        float v = 128.f + 20.f * std::sin(2.f * (float)CV_PI * f0 * n / p.fps);
-        cv::Mat f(16, 16, CV_8U, cv::Scalar(cv::saturate_cast<uchar>(v)));
-        cv::Mat out = mag.process(f);
-        float c = out.at<float>(8, 8);
+        const float v = 128.f + 20.f * std::sin(2.f * 3.14159265f * f0 * n / p.fps);
+        nvmm::img::Image<uint8_t> f(16, 16, scene::clamp_u8(v));
+        nvmm::img::Image<float> out = mag.process(f);
+        const float c = out.at(8, 8);
         if (n >= settle) { lo = std::min(lo, c); hi = std::max(hi, c); }
     }
     return hi - lo;

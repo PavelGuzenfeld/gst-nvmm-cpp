@@ -1,8 +1,7 @@
 /// Synthetic unit test for analytics/active_region.hpp.
 #include "active_region.hpp"
+#include "analytics_scene.h"
 #include "test_harness.h"
-
-#include <opencv2/opencv.hpp>
 
 namespace {
 
@@ -10,24 +9,24 @@ namespace {
 // The range-based detector must keep the dark content and trim the bright bars —
 // a mean/brightness threshold would do the opposite.
 TEST(trims_uniform_bars_keeps_dark_textured_content) {
-    cv::Mat f(200, 200, CV_8U, cv::Scalar(128));   // uniform mid-gray everywhere (the "bars")
-    cv::RNG rng(7);
+    nvmm::img::Image<uint8_t> f(200, 200, 128);     // uniform mid-gray everywhere (the "bars")
+    scene::Rng rng(7);
     for (int i = 0; i < 120; i++) {                 // dark textured content in x[40,160)
-        int x = rng.uniform(42, 158), y = rng.uniform(4, 196);
-        cv::circle(f, {x, y}, rng.uniform(2, 4), cv::Scalar(rng.uniform(10, 60)), cv::FILLED);
+        const int x = rng.uniform(42, 158), y = rng.uniform(4, 196);
+        scene::fill_circle(f, x, y, rng.uniform(2, 4), (uint8_t)rng.uniform(10, 60));
     }
-    cv::GaussianBlur(f, f, {3, 3}, 0);
+    scene::gaussian_blur_u8(f, 3);
 
-    cv::Rect r = nvmm::video::active_region(f);
-    printf("[x=%d w=%d] ", r.x, r.width);
+    nvmm::img::Rect r = nvmm::video::active_region(f);
+    printf("[x=%d w=%d] ", r.x, r.w);
     ASSERT_TRUE(r.x >= 38 && r.x <= 44);            // left bar trimmed to ~x=40
-    ASSERT_TRUE(r.x + r.width >= 156 && r.x + r.width <= 162);  // right bar trimmed to ~x=160
+    ASSERT_TRUE(r.x + r.w >= 156 && r.x + r.w <= 162);  // right bar trimmed to ~x=160
 }
 
 TEST(uniform_frame_returns_full) {
-    cv::Mat f(120, 120, CV_8U, cv::Scalar(50));     // nothing but a bar -> degenerate, return full
-    cv::Rect r = nvmm::video::active_region(f);
-    ASSERT_TRUE(r.width == f.cols && r.height == f.rows);
+    nvmm::img::Image<uint8_t> f(120, 120, 50);      // nothing but a bar -> degenerate, return full
+    nvmm::img::Rect r = nvmm::video::active_region(f);
+    ASSERT_TRUE(r.w == f.width() && r.h == f.height());
 }
 
 }  // namespace
