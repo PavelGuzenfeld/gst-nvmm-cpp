@@ -292,3 +292,4 @@ if have_tensorrt and have_nvbufsurface
 endif
 subdir('tests')
 subdir('benchmarks')
+subdir('examples')     # programmatic-pipeline worked example (core gst, CI-run, never installed)
