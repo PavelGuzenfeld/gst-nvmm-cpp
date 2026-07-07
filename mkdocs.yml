@@ -65,6 +65,7 @@ nav:
   - Zero-copy IPC: ipc.md
   - Metadata over IPC: metadata-ipc.md
   - Creating a new element: extending.md
+  - Embedding a pipeline: embedding.md
   - Validation & benchmarks: validation.md
   - Validation harness: harness.md
   - Roadmap:
