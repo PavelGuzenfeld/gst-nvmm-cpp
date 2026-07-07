@@ -134,6 +134,10 @@ if have_tensorrt and have_nvbufsurface
     include_directories : [include_directories('../gst/nvmmsamurai')],
     dependencies : [trt_dep],   # brings the CUDA include dir + cudart
     cuda_args : samurai_cuda_base_args,
+    # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
+    # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via trt_dep;
+    # the kernels use no relocatable device code.
+    link_language : 'cpp',
   )
   # Raw cudaMalloc — the same allocator that OOMs under TSan's shadow space, so
   # tag 'nvidia_hwlib' (the on-device TSan run skips that suite). This is a
@@ -275,6 +279,10 @@ if have_analytics_cuda
     include_directories : [analytics_inc],
     dependencies : [analytics_cuda_dep],
     cuda_args : analytics_cuda_args,
+    # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
+    # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via
+    # analytics_cuda_dep; the kernels use no relocatable device code.
+    link_language : 'cpp',
   )
   test('analytics_kernels', analytics_kernel_probe, protocol : 'exitcode',
     suite : 'nvidia_hwlib')
