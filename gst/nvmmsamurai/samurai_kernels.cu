@@ -82,20 +82,21 @@ __device__ inline float sine_pe_elem(float x, int in)
     return in < pe_dim ? __sinf(v) : __cosf(v);
 }
 
-// Mirrors samurai_memory.hpp assemble_memory. 7232*64 outputs.
+// Mirrors samurai_memory.hpp assemble_memory. (7*tok+64)*64 outputs; tok = the
+// encoder grid token count ((crop/16)^2 — 1024 @512, 576 @384, 256 @256).
 __global__ void assemble_k(const float *const *maskmem, const float *objptr,
                            const float *pos_list, const float *maskmem_pos,
                            const float *tpos, const float *tposproj_w, const float *tposproj_b,
-                           float *memory, float *memory_pos)
+                           float *memory, float *memory_pos, int tok)
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    const int kMaskRows = 7 * 1024, kTotal = 7232;
+    const int kMaskRows = 7 * tok, kTotal = kMaskRows + 64;
     if (idx >= kTotal * 64) return;
     const int row = idx / 64, ch = idx % 64;
     if (row < kMaskRows) {                       // maskmem block
-        const int s = row / 1024, i = row % 1024;
-        memory[idx] = maskmem[s][ch * 1024 + i];
-        memory_pos[idx] = maskmem_pos[ch * 1024 + i] + tpos[(6 - s) * 64 + ch];
+        const int s = row / tok, i = row % tok;
+        memory[idx] = maskmem[s][ch * tok + i];
+        memory_pos[idx] = maskmem_pos[ch * tok + i] + tpos[(6 - s) * 64 + ch];
     } else {                                     // obj_ptr block
         const int o = row - kMaskRows, p = o / 4, k = o % 4;
         memory[idx] = objptr[p * 256 + k * 64 + ch];
@@ -129,8 +130,8 @@ void k_mask_bbox(const float *mask, int h, int w, int *d_box, cudaStream_t s)
 void k_assemble_memory(const float *const *maskmem, const float *objptr,
                        const float *pos_list, const float *maskmem_pos,
                        const float *tpos, const float *tposproj_w, const float *tposproj_b,
-                       float *memory, float *memory_pos, cudaStream_t s)
-{ assemble_k<<<grid(7232 * 64), kBlk, 0, s>>>(maskmem, objptr, pos_list, maskmem_pos,
-                                              tpos, tposproj_w, tposproj_b, memory, memory_pos); }
+                       float *memory, float *memory_pos, int tok, cudaStream_t s)
+{ assemble_k<<<grid((7 * tok + 64) * 64), kBlk, 0, s>>>(maskmem, objptr, pos_list, maskmem_pos,
+                                              tpos, tposproj_w, tposproj_b, memory, memory_pos, tok); }
 
 }  // namespace nvmm

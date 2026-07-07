@@ -36,16 +36,17 @@ void k_bilinear(const float *src, float *dst, int hi, int wi, int ho, int wo,
 /// {w, h, -1, -1}. Uses atomics.
 void k_mask_bbox(const float *mask, int h, int w, int *d_box, cudaStream_t s);
 
-/// Assemble the static 7232x1x64 memory + memory_pos on-device (device-ring path;
-/// mirrors host assemble_memory in samurai_memory.hpp).
-///   maskmem : device array of 7 device pointers (each 64*1024), slot 0=cond.
+/// Assemble the static (7*tok+64)x1x64 memory + memory_pos on-device (device-ring
+/// path; mirrors host assemble_memory in samurai_memory.hpp). tok = encoder grid
+/// token count ((crop/16)^2 — 1024 @512 crop, 576 @384, 256 @256).
+///   maskmem : device array of 7 device pointers (each 64*tok), slot 0=cond.
 ///   objptr  : packed device (16*256), p=0 = cond.
 ///   pos_list: device (16) signed temporal positions.
-///   maskmem_pos (64*1024), tpos (7*64), tposproj_w (64*256), tposproj_b (64): device consts.
-///   memory, memory_pos: device outputs (7232*64).
+///   maskmem_pos (64*tok), tpos (7*64), tposproj_w (64*256), tposproj_b (64): device consts.
+///   memory, memory_pos: device outputs ((7*tok+64)*64).
 void k_assemble_memory(const float *const *maskmem, const float *objptr,
                        const float *pos_list, const float *maskmem_pos,
                        const float *tpos, const float *tposproj_w, const float *tposproj_b,
-                       float *memory, float *memory_pos, cudaStream_t s);
+                       float *memory, float *memory_pos, int tok, cudaStream_t s);
 
 }  // namespace nvmm

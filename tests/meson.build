@@ -123,6 +123,12 @@ test_samurai_view = executable('test_samurai_view',
   include_directories : [include_directories('../gst/nvmmsamurai')],
 )
 
+# Header-only ViT grid-token count (gst/common/vit_grid.hpp); no CUDA/GST.
+test_vit_grid = executable('test_vit_grid',
+  ['test_vit_grid.cpp'],
+  include_directories : [common_inc],
+)
+
 # Parity-checks the SAMURAI CUDA kernels (transpose, add_per_channel, sigmoid/
 # threshold scale, bilinear upsample, mask bbox, memory assembly) against their
 # host references using deterministic synthetic inputs — no engines or golden
@@ -165,6 +171,7 @@ test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 test('kalman_box', test_kalman_box, protocol : 'exitcode')
 test('samurai_view', test_samurai_view, protocol : 'exitcode')
+test('vit_grid', test_vit_grid, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')

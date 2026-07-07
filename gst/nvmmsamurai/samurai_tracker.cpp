@@ -20,6 +20,7 @@
 #include "samurai_kernels.hpp"    // per-frame CUDA kernels (zero-copy on-device)
 #include "samurai_gmc.hpp"        // camera-motion (GMC) estimator (header-only)
 #include "kalman_box.hpp"         // gst/common
+#include "vit_grid.hpp"           // gst/common: ViT grid-token count from crop
 
 #include <nvbufsurftransform.h>
 #include "trt_engine.hpp"         // gst/nvmminfer
@@ -164,6 +165,13 @@ struct SamuraiTracker::Impl {
     int64_t frame_idx = 0;  // cond = 0; tracking frames increment
 
     int crop_size = 512;
+    // Dims derived from crop_size (the engine set must be exported to match):
+    // encoder grid = crop/16, token count = grid^2 (mem-attention rows; the memory
+    // bank is 7*tok+64), low-res mask = crop/4. One knob keeps every per-token
+    // buffer consistent with the crop instead of baking in the 512-crop values.
+    int grid() const { return vit_grid_side(crop_size, 16); }
+    int tok()  const { return vit_grid_tokens(crop_size, 16); }
+    int mlow() const { return crop_size / 4; }
     SamuraiView view{};  // last crop view (frame coords) for un-view
     TrackBox last;       // last known box (echoed until downstream is built)
 
@@ -219,15 +227,16 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
 // run_encoder() already populated d_image_embed / d_feat_s0 / d_feat_s1.
 bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err)
 {
-    constexpr int M = 128, HI = 512, MM = 64 * 32 * 32, T = 256;
-    // 1. box corners in crop coords (no scale: crop == image_size == 512).
+    const int M = mlow(), HI = crop_size, TOK = tok(), MM = 64 * TOK;
+    constexpr int T = 256;
+    // 1. box corners in crop coords (no scale: crop == the export's image_size).
     const float coords[4] = {box.left - view.x,             box.top - view.y,
                              box.left + box.width - view.x, box.top + box.height - view.y};
     cudaMemcpyAsync(d_coords, coords, sizeof(coords), cudaMemcpyHostToDevice, stream);
     if (!prompt->infer(stream)) { err = "prompt_encoder infer failed"; return false; }
     // 1b. decoder image_embed = out6 + no_mem_embed — the seed's pix_feat_with_mem
     //     (directly_add_no_mem_embed path). [device kernel]
-    k_add_per_channel(d_image_embed, d_no_mem, d_dec_embed, 256, 1024, stream);
+    k_add_per_channel(d_image_embed, d_no_mem, d_dec_embed, 256, TOK, stream);
     // 2. mask_decoder with the seed prompt (sparse Np=3).
     decoder->bind("sparse", d_psparse);
     decoder->bind("dense", d_pdense);
@@ -285,8 +294,8 @@ bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err
         cudaMemcpy(cond_maskmem_feat.data(), d_maskmem_feat, MM * sizeof(float), cudaMemcpyDeviceToHost);
         const float *noe = consts.data("no_obj_embed_spatial");
         for (int c = 0; c < 64; c++)
-            for (int s = 0; s < 32 * 32; s++)
-                cond_maskmem_feat[(size_t)c * 32 * 32 + s] += noe[c];
+            for (int s = 0; s < TOK; s++)
+                cond_maskmem_feat[(size_t)c * TOK + s] += noe[c];
         cudaMemcpy(d_cond_maskmem, cond_maskmem_feat.data(), MM * sizeof(float), cudaMemcpyHostToDevice);
     }
     cudaMemcpy(d_const_maskmem_pos, d_maskmem_pos, MM * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -323,8 +332,9 @@ bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err
 // MaskToBox -> memory_encoder push. Assumes run_encoder() already ran.
 bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
 {
-    using namespace memdims;  // kTok, kMem, kHid, kMask, kPtr, kObjTok
-    constexpr int M = 128, HI = 512, CH = kHid, HW = kTok;
+    using namespace memdims;  // kMem, kHid, kMask, kPtr, kObjTok (resolution-independent)
+    const int M = mlow(), HI = crop_size, HW = tok();
+    constexpr int CH = kHid;
     frame_idx++;
 
     // 1. memory_attention curr/curr_pos = out6/out3 transposed (C,HW)->(HW,C). [host]
@@ -366,7 +376,7 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     cudaMemcpyAsync(d_pos_list, pos_list, sizeof(pos_list), cudaMemcpyHostToDevice, stream);
     k_assemble_memory(reinterpret_cast<const float *const *>(d_mm_ptrs), d_objptr_packed,
                       d_pos_list, d_const_maskmem_pos, d_tpos, d_tposproj_w, d_tposproj_b,
-                      d_ma_memory, d_ma_memory_pos, stream);
+                      d_ma_memory, d_ma_memory_pos, HW, stream);
 
     // 3. memory_attention -> attn (HW,C); reshape to decoder image_embed (C,HW). [device]
     if (!mem_attn->infer(stream)) { err = "memory_attention infer failed"; return false; }
@@ -498,13 +508,13 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     //    no_obj_embed_spatial add for occlusion is rare -> host fixup path).
     float *slot = d_ring_bufs[ring_write];
     if (appearing) {
-        cudaMemcpy(slot, d_maskmem_feat, (size_t)kMem * kTok * sizeof(float), cudaMemcpyDeviceToDevice);
+        cudaMemcpy(slot, d_maskmem_feat, (size_t)kMem * HW * sizeof(float), cudaMemcpyDeviceToDevice);
     } else {
-        std::vector<float> nf((size_t)kMem * kTok);
+        std::vector<float> nf((size_t)kMem * HW);
         cudaMemcpy(nf.data(), d_maskmem_feat, nf.size() * sizeof(float), cudaMemcpyDeviceToHost);
         const float *noe = consts.data("no_obj_embed_spatial");
         for (int c = 0; c < kMem; c++)
-            for (int s = 0; s < kTok; s++) nf[(size_t)c * kTok + s] += noe[c];
+            for (int s = 0; s < HW; s++) nf[(size_t)c * HW + s] += noe[c];
         cudaMemcpy(slot, nf.data(), nf.size() * sizeof(float), cudaMemcpyHostToDevice);
     }
     ring_write = (ring_write + 1) % (kMask - 1);
@@ -719,22 +729,24 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
       impl_->no_mem_embed.assign(nme->data.begin(), nme->data.end()); }  // (256,)
     // device scratch for the on-device per-frame kernels (zero-copy).
     if (cudaMalloc((void **)&impl_->d_no_mem, 256 * sizeof(float)) != cudaSuccess ||
-        cudaMalloc((void **)&impl_->d_high, (size_t)512 * 512 * sizeof(float)) != cudaSuccess ||
+        cudaMalloc((void **)&impl_->d_high, (size_t)impl_->crop_size * impl_->crop_size * sizeof(float)) != cudaSuccess ||
         cudaMalloc((void **)&impl_->d_box, 4 * sizeof(int)) != cudaSuccess) {
         err = "cudaMalloc(kernel scratch) failed"; return false;
     }
     cudaMemcpy(impl_->d_no_mem, impl_->no_mem_embed.data(), 256 * sizeof(float), cudaMemcpyHostToDevice);
-    // device-ring MemoryBank buffers + assemble-kernel constants.
-    bool ok = cudaMalloc((void **)&impl_->d_cond_maskmem, (size_t)64 * 1024 * sizeof(float)) == cudaSuccess
+    // device-ring MemoryBank buffers + assemble-kernel constants. Each maskmem
+    // slot is kMem(64) * tok floats — tok scales with the crop.
+    const size_t mm_floats = (size_t)64 * impl_->tok();
+    bool ok = cudaMalloc((void **)&impl_->d_cond_maskmem, mm_floats * sizeof(float)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_mm_ptrs, 7 * sizeof(float *)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_objptr_packed, (size_t)16 * 256 * sizeof(float)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_pos_list, 16 * sizeof(float)) == cudaSuccess
-        && cudaMalloc((void **)&impl_->d_const_maskmem_pos, (size_t)64 * 1024 * sizeof(float)) == cudaSuccess
+        && cudaMalloc((void **)&impl_->d_const_maskmem_pos, mm_floats * sizeof(float)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_tpos, (size_t)7 * 64 * sizeof(float)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_tposproj_w, (size_t)64 * 256 * sizeof(float)) == cudaSuccess
         && cudaMalloc((void **)&impl_->d_tposproj_b, 64 * sizeof(float)) == cudaSuccess;
     for (int r = 0; r < 6 && ok; r++)
-        ok = cudaMalloc((void **)&impl_->d_ring_bufs[r], (size_t)64 * 1024 * sizeof(float)) == cudaSuccess;
+        ok = cudaMalloc((void **)&impl_->d_ring_bufs[r], mm_floats * sizeof(float)) == cudaSuccess;
     if (!ok) { err = "cudaMalloc(device ring) failed"; return false; }
     cudaMemcpy(impl_->d_tpos, impl_->consts.data("maskmem_tpos_enc"), (size_t)7 * 64 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(impl_->d_tposproj_w, impl_->consts.data("obj_ptr_tpos_proj.weight"), (size_t)64 * 256 * sizeof(float), cudaMemcpyHostToDevice);
