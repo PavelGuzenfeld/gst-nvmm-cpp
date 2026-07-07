@@ -66,6 +66,7 @@ nav:
   - Metadata over IPC: metadata-ipc.md
   - Creating a new element: extending.md
   - Validation & benchmarks: validation.md
+  - Validation harness: harness.md
   - Roadmap:
       - Hardware-acceleration plan: HW_ACCEL_EXPLORATION.md
       - Production plan: PRODUCTION_PLAN.md
