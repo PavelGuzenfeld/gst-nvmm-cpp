@@ -1,3 +1,5 @@
+tests_inc = include_directories('.')
+
 test_buffer = executable('test_nvmm_buffer',
   'test_nvmm_buffer.cpp',
   include_directories : [config_inc, common_inc],

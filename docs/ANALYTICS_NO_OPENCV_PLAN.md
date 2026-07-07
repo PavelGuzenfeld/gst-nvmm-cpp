@@ -19,11 +19,11 @@ of design is the fused stage, not the OpenCV op.
 ## Resolved design decisions
 
 1. **Buffer type**: new analytics-local header (`analytics/image.hpp`): owning
-   `Image<T>` + non-owning strided `ImageView<T>`, `uint8_t`/`float`, sub-rect
-   views, indexing only — no elementwise-op method surface (ops live inside the
-   fused stages). `gst/common/nvmm_buffer.hpp` was evaluated and rejected: it is
-   an RAII handle over NVIDIA's `NvBufSurface` (dma-buf, plane mapping), not a
-   host algorithm buffer.
+   `img::Image<T>` + non-owning strided `img::View<T>`, `uint8_t`/`float`,
+   sub-rect views, indexing only — no elementwise-op method surface (ops live
+   inside the fused stages). `gst/common/nvmm_buffer.hpp` was evaluated and
+   rejected: it is an RAII handle over NVIDIA's `NvBufSurface` (dma-buf, plane
+   mapping), not a host algorithm buffer.
 2. **Existing behavioral tests**: keep, but port their synthetic-scene
    generators off OpenCV (onto `Image<T>`), so every `-Danalytics=enabled` build
    runs them with zero OpenCV. The `analytics` meson option description changes
@@ -74,7 +74,7 @@ of design is the fused stage, not the OpenCV op.
    Primary CUDA candidate: every stage is embarrassingly parallel and fusion
    pays most on GPU (avoids global-memory round trips).
 4. **detection_motion_gate.hpp** — cv::Mat plumbing + `minMaxLoc` on a sub-rect.
-   → trivial max-over-window helper on `ImageView`; falls out once #1–#3 land.
+   → trivial max-over-window helper on `img::View`; falls out once #1–#3 land.
 5. **dual_homography.hpp** — hardest, last. Fusions independent of the feature
    pipeline choice:
    - `residual()` currently does warp + absdiff + second ones-warp + compare +
@@ -100,6 +100,20 @@ kernels need neither TensorRT nor NvBufSurface, so do **not** reuse the
 `add_languages('cuda', ...)`/`gpu_arch`/`gpu_cxx_std`/`cuda_args` conventions
 and the `tests/samurai_kernel_probe` host-vs-CUDA parity-test pattern.
 
+**Resolved**: only `low_texture_motion` got a CUDA kernel
+(`analytics_kernels.hpp`/`.cu`). The benchmark evidence closed the
+dual_homography question — its fused CPU `small_motion` pipeline already beat
+OpenCV's own ORB path (1.4x, see the PR #58 benchmarks), so there was no
+latency gap left for a CUDA port to close.
+
+**Added after the initial design** (Jetson/plugin-zoo interop requirement):
+`run_device(DevicePlane<...>, ..., cudaStream_t)` takes pitched DEVICE
+pointers directly — e.g. the CUDA mapping of an NvBufSurface luma plane — and
+enqueues all work on the caller's stream with no host round-trip. `run()`
+(upload/execute/download host buffers) is a convenience wrapper over it for
+tests and benchmarks; `DevicePlane<T>` is the pitched-pointer type shared by
+both.
+
 ## Testing & benchmarks
 
 1. **Behavioral tests** (existing, ported): scene generators rewritten on
@@ -109,10 +123,19 @@ and the `tests/samurai_kernel_probe` host-vs-CUDA parity-test pattern.
    requires OpenCV): fused-stage + component level per decision 3; tolerance
    and metric documented per stage in the test file.
 3. **Benchmarks** (new, in `benchmarks/`, `bench_nvmm.cpp` CSV convention,
-   meson `benchmark()`): OpenCV vs fused-CPU vs CUDA (where built) at
-   representative frame sizes; both dual_homography pipelines measured. Losing
-   to an OpenCV SIMD kernel on some op is a legitimate finding to report, but
-   the headline metric is per-component end-to-end latency, where fusion is
+   meson `benchmark()`), as two separate tools rather than one — the golden
+   lane doesn't need CUDA and the CUDA lane doesn't need OpenCV, so a single
+   binary would force an unwanted dependency on one lane or the other:
+   - `bench_analytics` (`-Danalytics_golden`, needs OpenCV): OpenCV vs
+     fused-CPU at representative frame sizes; both dual_homography pipelines
+     measured against OpenCV's ORB path.
+   - `bench_analytics_cuda` (`-Danalytics_cuda`, needs the CUDA toolkit):
+     fused-CPU vs CUDA for the one component with a GPU path
+     (low_texture_motion).
+   A three-way OpenCV/fused-CPU/CUDA comparison is assembled by hand from the
+   two CSVs when both lanes are available (see the PR description). Losing to
+   an OpenCV SIMD kernel on some op is a legitimate finding to report, but the
+   headline metric is per-component end-to-end latency, where fusion is
    expected to win.
 
 ## Conventions

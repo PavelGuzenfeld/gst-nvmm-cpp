@@ -106,8 +106,6 @@ inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
 // ---------------------------------------------------------------------------
 
 struct SmallMotionParams {
-    int fast_thresh = 20;
-    int max_corners = 800;
     int search_radius = 32;   // max displacement searched (px)
     int patch_r = 5;          // ZNCC patch half-size (patch is 2r+1 square)
     int coarse_step = 3;      // SAD grid step of the coarse search
@@ -213,7 +211,6 @@ struct OrbParams {
     int nlevels = 8;
     float scale_factor = 1.2f;
     int fast_thresh = 20;
-    float ratio = 0.75f;  // Lowe ratio for KNN(2) matching
 };
 
 struct OrbFeature {

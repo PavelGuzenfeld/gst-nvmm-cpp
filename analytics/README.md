@@ -3,8 +3,11 @@
 Header-only, dependency-free (pure C++14) building blocks for finding and
 confirming an **independently-moving object** under a **panning/translating
 camera**, where a plain detector also fires on static structure. No
-OpenCV/GStreamer/CUDA — each header stands alone and unit-tests on the host
-(see `../tests/test_analytics_*.cpp`).
+OpenCV/GStreamer required — each header stands alone and unit-tests on the
+host (see `../tests/test_analytics_*.cpp`). One component additionally ships
+an opt-in CUDA implementation (see `analytics_kernels.hpp` in the table
+below) for the one case where the fused CPU path still trails OpenCV's SIMD
+kernels; everything else is CPU-only.
 
 The implementations are **fused**: instead of mirroring the classic OpenCV op
 chains 1:1, each component collapses its pipeline into a few single-pass sweeps
@@ -24,6 +27,7 @@ against it.
 | `persistence_gate.hpp` | Causal **track-before-detect** confirmation: commit only to a detection that persists *and* carries caller-supplied "support" for K consecutive frames, then latch onto it. |
 | `detection_motion_gate.hpp` | The composition: detector boxes **∩ independent motion** (dual-homography or low-texture) → persistence gate → the index of the confirmed moving detection. Self-latching (the heavy motion step runs only while searching). |
 | `motion_magnify.hpp` | Eulerian video magnification (Wu et al. 2012, linear/IIR variant), streaming, one fused pass per frame. Reference tool. **Caveat:** magnifies small periodic motion against a static/slow background; it does *not* survive large camera motion/parallax — for that use `dual_homography.hpp`. |
+| `analytics_kernels.hpp` / `.cu` | **Opt-in CUDA** implementation of `low_texture_motion` — the fused CPU path still trails OpenCV's SIMD kernels there. Zero-copy device API (`run_device`, pitched device pointers + a stream) so a caller holding a CUDA-mapped NvBufSurface plane runs the kernel with no host round-trip; a host-buffer convenience wrapper (`run`) is also provided. Gated behind `-Danalytics_cuda` — needs the CUDA toolkit, not OpenCV. |
 
 These are distinct from `gst/common/nvmm_motion.hpp`, which scores detector boxes
 from a **precomputed optical-flow field**; the components here work directly on the
@@ -44,10 +48,16 @@ meson test  -C build --suite '' analytics_dual_homography analytics_detection_mo
 meson setup build -Danalytics_golden=enabled   # golden comparisons vs OpenCV (requires OpenCV)
 meson test  -C build golden_image_ops golden_low_texture_motion golden_active_region \
             golden_motion_magnify golden_dual_homography
+
+meson setup build -Danalytics_cuda=enabled     # CUDA low_texture_motion + parity probe (requires CUDA toolkit)
+meson test  -C build analytics_kernels
+meson compile -C build bench_analytics_cuda && ./build/benchmarks/bench_analytics_cuda
 ```
 
-With the defaults (both disabled) nothing analytics-related is built and OpenCV is
-never searched; the headers stay on the include path for anyone who pulls them in.
+With the defaults (all three disabled) nothing analytics-related is built and
+neither OpenCV nor the CUDA toolkit is ever searched; the headers stay on the
+include path for anyone who pulls them in. The three features are independent
+and can be combined (e.g. `-Danalytics_golden=enabled -Danalytics_cuda=enabled`).
 
 ## Integrating
 

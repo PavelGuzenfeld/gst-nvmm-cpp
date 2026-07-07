@@ -26,13 +26,16 @@
 namespace nvmm {
 namespace motion {
 
-/// Pitched single-channel device plane. `pitch` in ELEMENTS of T (a mapped
-/// NvBufSurface plane's pitch is in bytes — divide by sizeof(T)).
+/// Pitched single-channel device plane — the device-pointer counterpart of
+/// img::View<T>, with the same field names (`stride` in ELEMENTS of T; a
+/// mapped NvBufSurface plane's pitch is in bytes — divide by sizeof(T)). Kept
+/// as its own type rather than reusing View<T> directly so host code can't
+/// accidentally dereference a device pointer through View::at()/row().
 template <typename T>
 struct DevicePlane {
     T *data = nullptr;
     int width = 0, height = 0;
-    std::ptrdiff_t pitch = 0;
+    std::ptrdiff_t stride = 0;
 };
 
 /// Device-resident fused low_texture_motion. Owns its device SCRATCH buffers

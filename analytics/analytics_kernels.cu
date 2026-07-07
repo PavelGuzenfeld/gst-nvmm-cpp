@@ -31,12 +31,7 @@ __constant__ float c_blur[kMaxKernel];
 
 namespace {
 
-__device__ __forceinline__ int reflect101(int i, int n)
-{
-    if (i < 0) return -i;
-    if (i >= n) return 2 * n - 2 - i;
-    return i;
-}
+using img::reflect101;
 
 __global__ void k_sobel_mag(const uint8_t *src, long spitch, float *mag, int w, int h)
 {
@@ -215,7 +210,7 @@ bool LowTextureMotionCuda::run_device(DevicePlane<const uint8_t> cur,
     const dim3 grd((unsigned)(w + 31) / 32, (unsigned)(h + 7) / 8);
 
     // 1. gradient magnitude
-    k_sobel_mag<<<grd, blk, 0, stream>>>(cur.data, (long)cur.pitch, impl_->d_a, w, h);
+    k_sobel_mag<<<grd, blk, 0, stream>>>(cur.data, (long)cur.stride, impl_->d_a, w, h);
 
     // 2. blur + fused threshold -> binary mask
     const std::vector<float> kg = img::gaussian_kernel(p.grad_blur);
@@ -236,9 +231,9 @@ bool LowTextureMotionCuda::run_device(DevicePlane<const uint8_t> cur,
     // 4. masked min-diff (final pass when no output blur follows)
     const bool blur_out = p.diff_blur > 0;
     k_masked_min_diff<<<grd, blk, 0, stream>>>(
-        cur.data, (long)cur.pitch, ref_a.data, (long)ref_a.pitch, ref_b.data,
-        (long)ref_b.pitch, impl_->d_mask, blur_out ? impl_->d_a : out.data,
-        blur_out ? (long)w : (long)out.pitch, w, h, blur_out ? 0 : p.border);
+        cur.data, (long)cur.stride, ref_a.data, (long)ref_a.stride, ref_b.data,
+        (long)ref_b.stride, impl_->d_mask, blur_out ? impl_->d_a : out.data,
+        blur_out ? (long)w : (long)out.stride, w, h, blur_out ? 0 : p.border);
 
     // 5. optional output blur, border zero fused into its column pass
     if (blur_out) {
@@ -247,7 +242,7 @@ bool LowTextureMotionCuda::run_device(DevicePlane<const uint8_t> cur,
                                                0, cudaMemcpyHostToDevice, stream)))
             return false;
         k_blur_rows<<<grd, blk, 0, stream>>>(impl_->d_a, impl_->d_b, w, h, p.diff_blur);
-        k_blur_cols_out<<<grd, blk, 0, stream>>>(impl_->d_b, out.data, (long)out.pitch, w, h,
+        k_blur_cols_out<<<grd, blk, 0, stream>>>(impl_->d_b, out.data, (long)out.stride, w, h,
                                                  p.diff_blur, p.border);
     }
     return impl_->ok(cudaGetLastError());

@@ -125,15 +125,16 @@ inline img::Image<uint8_t> low_texture_mask(img::View<const uint8_t> cur,
         low_sum.add_row(y, [&](int x) { return row[x] < p.grad_thresh ? 1u : 0u; });
     });
 
-    // close = erode(dilate): box sums make both O(1)/px and exact on a binary mask
+    // close = erode(dilate): box sums make both O(1)/px and exact on a binary mask.
+    // The dilated value at each x is needed only to feed dil_sum's running row
+    // sum, so compute it inline rather than materialising a whole dilated frame.
     const int r = p.close_k / 2;
     BoxSum dil_sum(w, h);
-    img::Image<uint8_t> dil(w, h);
     for (int y = 0; y < h; y++) {
-        uint8_t *dr = dil.row(y);
         int area;
-        for (int x = 0; x < w; x++) dr[x] = low_sum.window(x, y, r, area) > 0 ? 1 : 0;
-        dil_sum.add_row(y, [&](int x) { return (uint32_t)dr[x]; });
+        dil_sum.add_row(y, [&](int x) {
+            return low_sum.window(x, y, r, area) > 0 ? 1u : 0u;
+        });
     }
     img::Image<uint8_t> closed(w, h);
     for (int y = 0; y < h; y++) {

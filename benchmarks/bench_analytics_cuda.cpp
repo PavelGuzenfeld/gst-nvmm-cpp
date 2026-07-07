@@ -6,34 +6,13 @@
 #include <cstdio>
 
 #include "analytics_kernels.hpp"
+#include "bench_scene.h"
 #include "low_texture_motion.hpp"
 
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double, std::micro>;
 
 namespace {
-
-struct Lcg {
-    unsigned s;
-    explicit Lcg(unsigned seed) : s(seed) {}
-    unsigned next() { s = s * 1664525u + 1013904223u; return s >> 8; }
-    int uniform(int lo, int hi) { return lo + (int)(next() % (unsigned)(hi - lo)); }
-};
-
-nvmm::img::Image<uint8_t> textured(int w, int h, unsigned seed)
-{
-    Lcg rng(seed);
-    nvmm::img::Image<uint8_t> f(w, h, 100);
-    for (int i = 0; i < w * h / 400; i++) {
-        const int cx = rng.uniform(6, w - 6), cy = rng.uniform(6, h - 6);
-        const int r = rng.uniform(2, 5);
-        const uint8_t v = (uint8_t)rng.uniform(60, 240);
-        for (int y = cy - r; y <= cy + r; y++)
-            for (int x = cx - r; x <= cx + r; x++)
-                if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) f.at(y, x) = v;
-    }
-    return f;
-}
 
 template <typename Fn>
 void bench(const char *impl, int w, int h, int iters, Fn &&fn)
@@ -61,9 +40,9 @@ int main()
     for (const auto &sz : sizes) {
         const int w = sz[0], h = sz[1];
         const int iters = w >= 1920 ? 30 : 60;
-        nvmm::img::Image<uint8_t> frame = textured(w, h, 5);
-        nvmm::img::Image<uint8_t> ra = textured(w, h, 6);
-        nvmm::img::Image<uint8_t> rb = textured(w, h, 7);
+        nvmm::img::Image<uint8_t> frame = bench_scene::textured(w, h, 5);
+        nvmm::img::Image<uint8_t> ra = bench_scene::textured(w, h, 6);
+        nvmm::img::Image<uint8_t> rb = bench_scene::textured(w, h, 7);
 
         nvmm::motion::LowTextureMotionParams p;
         bench("cpu", w, h, iters,

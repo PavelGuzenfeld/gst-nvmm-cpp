@@ -76,6 +76,14 @@ struct Plane {
     bool ok = false;
 };
 
+inline OrbParams make_orb_params(const DualHomographyParams &p)
+{
+    OrbParams op;
+    op.nfeatures = p.features;
+    op.fast_thresh = p.fast_thresh;
+    return op;
+}
+
 /// H1 = dominant plane of the correspondences, H2 = parallax plane (RANSAC outliers).
 /// `fw`/`fh` are the frame dimensions (for the H2 extent gate).
 inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
@@ -189,17 +197,11 @@ inline void pipeline_matches(img::View<const uint8_t> cur, img::View<const uint8
     p1.clear(); p2.clear();
     if (p.pipeline == FeaturePipeline::small_motion) {
         SmallMotionParams sp;
-        sp.fast_thresh = p.fast_thresh;
-        sp.max_corners = p.max_corners;
         sp.search_radius = p.search_radius;
         sp.zncc_min = p.zncc_min;
         small_motion_matches(cur, ref, cur_corners, sp, p1, p2);
     } else {
-        OrbParams op;
-        op.nfeatures = p.features;
-        op.fast_thresh = p.fast_thresh;
-        op.ratio = p.ratio;
-        std::vector<OrbFeature> ref_orb = orb_detect(ref, op);
+        std::vector<OrbFeature> ref_orb = orb_detect(ref, make_orb_params(p));
         orb_match(cur_orb, ref_orb, p.ratio, p1, p2);
     }
 }
@@ -223,11 +225,7 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
         // corners must keep patch room for the ZNCC window
         cur_corners = detail::fast_corners(cur, p.fast_thresh, p.max_corners, 8);
     } else {
-        detail::OrbParams op;
-        op.nfeatures = p.features;
-        op.fast_thresh = p.fast_thresh;
-        op.ratio = p.ratio;
-        cur_orb = detail::orb_detect(cur, op);
+        cur_orb = detail::orb_detect(cur, detail::make_orb_params(p));
     }
 
     std::vector<detail::Pt> p1, p2;
@@ -244,11 +242,16 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
         detail::plane_pair_residual(cur, ref_a, ha2, ref_b, hb2, p.valid_margin, r2);
 
     if (p.blur > 0) {
+        const std::vector<float> k = img::gaussian_kernel(p.blur);
         img::Image<float> tmp;
-        img::gaussian_blur<float>(r1.view(), tmp, r1.view(), p.blur);
+        if (tmp.width() != r1.width() || tmp.height() != r1.height())
+            tmp = img::Image<float>(r1.width(), r1.height());
+        img::convolve_rows<float>(r1.view(), tmp.view(), k);
+        img::convolve_cols(tmp.view(), k, [&](int y, const float *row, int w) {
+            std::copy(row, row + w, r1.row(y));
+        });
         if (have_r2) {
             // fuse r2's vertical blur pass with the cross-plane min into r1
-            const std::vector<float> k = img::gaussian_kernel(p.blur);
             img::convolve_rows<float>(r2.view(), tmp.view(), k);
             img::convolve_cols(tmp.view(), k, [&](int y, const float *row, int w) {
                 float *d = r1.row(y);

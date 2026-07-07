@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "active_region.hpp"
+#include "bench_scene.h"
 #include "dual_homography.hpp"
+#include "golden_util.h"
 #include "low_texture_motion.hpp"
 #include "motion_magnify.hpp"
 
@@ -17,36 +19,6 @@ using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double, std::micro>;
 
 namespace {
-
-struct Lcg {
-    unsigned s;
-    explicit Lcg(unsigned seed) : s(seed) {}
-    unsigned next() { s = s * 1664525u + 1013904223u; return s >> 8; }
-    int uniform(int lo, int hi) { return lo + (int)(next() % (unsigned)(hi - lo)); }
-};
-
-nvmm::img::Image<uint8_t> textured(int w, int h, unsigned seed)
-{
-    Lcg rng(seed);
-    nvmm::img::Image<uint8_t> f(w, h, 100);
-    for (int i = 0; i < w * h / 400; i++) {
-        const int cx = rng.uniform(6, w - 6), cy = rng.uniform(6, h - 6);
-        const int r = rng.uniform(2, 5);
-        const uint8_t v = (uint8_t)rng.uniform(60, 240);
-        for (int y = cy - r; y <= cy + r; y++)
-            for (int x = cx - r; x <= cx + r; x++)
-                if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) f.at(y, x) = v;
-    }
-    return f;
-}
-
-cv::Mat to_cv(const nvmm::img::Image<uint8_t> &im)
-{
-    cv::Mat m(im.height(), im.width(), CV_8U);
-    for (int y = 0; y < im.height(); y++)
-        for (int x = 0; x < im.width(); x++) m.at<uchar>(y, x) = im.at(y, x);
-    return m;
-}
 
 template <typename Fn>
 void bench(const char *component, const char *impl, int w, int h, int iters, Fn &&fn)
@@ -200,10 +172,11 @@ int main()
         const int w = sz[0], h = sz[1];
         const int iters = w >= 1920 ? 20 : 50;
 
-        nvmm::img::Image<uint8_t> frame = textured(w, h, 5);
+        nvmm::img::Image<uint8_t> frame = bench_scene::textured(w, h, 5);
         nvmm::img::Image<uint8_t> ref_a = shift(frame, 6, 4);
         nvmm::img::Image<uint8_t> ref_b = shift(frame, 12, 8);
-        cv::Mat cv_frame = to_cv(frame), cv_ra = to_cv(ref_a), cv_rb = to_cv(ref_b);
+        cv::Mat cv_frame = golden::to_cv(frame), cv_ra = golden::to_cv(ref_a),
+                cv_rb = golden::to_cv(ref_b);
 
         // active_region
         bench("active_region", "fused", w, h, iters,

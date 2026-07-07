@@ -17,13 +17,22 @@
 
 #include "image.hpp"
 
+// Lets analytics_kernels.cu call this file's border/kernel helpers directly
+// from CUDA device code instead of keeping a second copy in sync by hand.
+// A no-op qualifier outside nvcc, so plain C++14 TUs are unaffected.
+#if defined(__CUDACC__)
+#define NVMM_ANALYTICS_HD __host__ __device__
+#else
+#define NVMM_ANALYTICS_HD
+#endif
+
 namespace nvmm {
 namespace img {
 
 /// BORDER_REFLECT_101 index fold: gfedcb|abcdefgh|gfedcba. Valid for n > 1 and
 /// any index one kernel-radius out of range (the analytics kernels are far
 /// smaller than the frames).
-inline int reflect101(int i, int n)
+NVMM_ANALYTICS_HD inline int reflect101(int i, int n)
 {
     if (i < 0) return -i;
     if (i >= n) return 2 * n - 2 - i;
