@@ -47,10 +47,10 @@ def run_once(pipeline_str, probe_name, timeout_s=0.0):
     pipeline = Gst.parse_launch(pipeline_str)
     elem = pipeline.get_by_name(probe_name)
     if elem is None:
-        raise SystemExit(f"no element named '{probe_name}' in pipeline")
+        raise RuntimeError(f"no element named '{probe_name}' in pipeline")
     pad = elem.get_static_pad("src")
     if pad is None:
-        raise SystemExit(f"element '{probe_name}' has no static src pad")
+        raise RuntimeError(f"element '{probe_name}' has no static src pad")
 
     stats = {"n": 0, "first": None, "last": None}
 
@@ -120,19 +120,29 @@ def main():
 
     Gst.init(None)
     runs = []
+    error = None
     for i in range(args.iterations):
-        frames, elapsed, fps = run_once(args.pipeline, args.probe, args.timeout)
+        try:
+            frames, elapsed, fps = run_once(args.pipeline, args.probe, args.timeout)
+        except RuntimeError as exc:
+            error = f"iter {i}: {exc}"
+            print(f"error: {error}", file=sys.stderr)
+            break
         runs.append({"iter": i, "frames": frames,
                      "seconds": round(elapsed, 3), "fps": round(fps, 2)})
         print(f"iter {i}: {frames} frames  {elapsed:.2f}s  {fps:.2f} fps")
 
-    mean_fps = sum(r["fps"] for r in runs) / len(runs)
-    print(f"mean: {mean_fps:.2f} fps over {args.iterations} iteration(s)")
+    mean_fps = round(sum(r["fps"] for r in runs) / len(runs), 2) if runs else 0.0
+    if runs:
+        print(f"mean: {mean_fps:.2f} fps over {len(runs)} iteration(s)")
     if args.json:
+        result = {"probe": args.probe, "iterations": args.iterations,
+                  "completed": len(runs), "mean_fps": mean_fps, "runs": runs}
+        if error:
+            result["error"] = error
         with open(args.json, "w") as f:
-            json.dump({"probe": args.probe, "iterations": args.iterations,
-                       "mean_fps": round(mean_fps, 2), "runs": runs}, f, indent=2)
-    return 0
+            json.dump(result, f, indent=2)
+    return 1 if error else 0
 
 
 if __name__ == "__main__":
