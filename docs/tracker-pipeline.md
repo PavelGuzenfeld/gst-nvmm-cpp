@@ -123,8 +123,28 @@ filesrc → demux → h264parse → nvv4l2decoder → queue
 - **[`nvmmdrawdet`](elements/nvmmdrawdet.md)** draws the fused track box + a live
   FPS / coverage HUD.
 
-`queue` elements between stages give pipeline parallelism (each stage on its own
-thread) — a real throughput win, keep them.
+### Queues: throughput and freshest-frame
+
+`queue` elements between stages give pipeline parallelism — each stage runs on
+its own thread, so decode, preprocess, inference and the tracker overlap instead
+of the pipeline carrying one frame end-to-end at a time. It is a real throughput
+win: on Orin, adding a single `queue` ahead of `nvmminfer` roughly doubled
+wall-clock throughput (≈38→69 fps at 640², ≈14→25 fps at 4K). Keep them, and
+measure your own graph with [`pipeline_bench.py`](harness.md) — not the on-screen
+HUD, which is an EMA and over-reports 2-3× on bursty queue drains.
+
+For a **live** source that produces frames faster than the pipeline consumes
+them, make the source-side queue leaky:
+
+```
+... ! queue leaky=2 max-size-buffers=2 ! nvmminfer ! ...
+```
+
+`leaky=2` (downstream) drops the *oldest* queued buffer when the queue is full,
+so the pipeline always picks up the freshest frame instead of working through a
+growing backlog — bounded latency at the cost of skipped frames. This is a
+real-time-source pattern only: on file playback a leaky queue silently drops
+frames you actually wanted, so leave file pipelines non-leaky.
 
 ---
 
