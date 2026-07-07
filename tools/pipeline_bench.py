@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Measure the real frame throughput of a GStreamer pipeline.
 
-Counts the buffers crossing a named element's src pad and divides by the
-wall-clock run time -- the honest end-to-end rate. This deliberately ignores
-any in-band FPS HUD (for example an overlay's exponential-moving-average
-counter): an EMA of inter-frame gaps over-reports 2-3x when a queue drains in a
-burst, so it is the wrong number to judge throughput by. To know how fast a
-pipeline actually processes frames, count buffers at a pad.
+Counts the buffers crossing a named element's src pad and times the window from
+the first such buffer to the last -- the honest steady-state rate. Timing from
+the first buffer (rather than from the set_state(PLAYING) call) excludes
+pipeline preroll and one-time engine/CUDA warmup, which would otherwise be
+folded into the wall-clock and depress the rate by a different amount for every
+clip length. This also deliberately ignores any in-band FPS HUD (for example an
+overlay's exponential-moving-average counter): an EMA of inter-frame gaps
+over-reports 2-3x when a queue drains in a burst, so it is the wrong number to
+judge throughput by. To know how fast a pipeline actually processes frames,
+count buffers at a pad.
 
     pipeline_bench.py --probe infer --iterations 3 \\
         --pipeline "filesrc location=clip.mp4 ! parsebin ! nvv4l2decoder
@@ -28,7 +32,14 @@ from gi.repository import GLib, Gst  # noqa: E402
 
 
 def run_once(pipeline_str, probe_name):
-    """Run the pipeline to EOS, return (frames, seconds, fps)."""
+    """Run the pipeline to EOS, return (frames, seconds, fps).
+
+    ``seconds`` is the window from the first buffer at the probe pad to the
+    last, and ``fps`` is measured across it as ``(frames - 1) / seconds`` --
+    the count of inter-frame intervals over their span. Warmup before the first
+    buffer (preroll, engine deserialization, CUDA context) is excluded by
+    construction, so short and long clips are directly comparable.
+    """
     pipeline = Gst.parse_launch(pipeline_str)
     elem = pipeline.get_by_name(probe_name)
     if elem is None:
@@ -37,10 +48,14 @@ def run_once(pipeline_str, probe_name):
     if pad is None:
         raise SystemExit(f"element '{probe_name}' has no static src pad")
 
-    count = {"n": 0}
+    stats = {"n": 0, "first": None, "last": None}
 
     def on_buffer(_pad, _info):
-        count["n"] += 1
+        now = time.monotonic()
+        if stats["first"] is None:
+            stats["first"] = now
+        stats["last"] = now
+        stats["n"] += 1
         return Gst.PadProbeReturn.OK
 
     pad.add_probe(Gst.PadProbeType.BUFFER, on_buffer)
@@ -61,16 +76,17 @@ def run_once(pipeline_str, probe_name):
     bus.connect("message", on_msg)
 
     pipeline.set_state(Gst.State.PLAYING)
-    t0 = time.monotonic()
     try:
         loop.run()
     finally:
         pipeline.set_state(Gst.State.NULL)
-    elapsed = time.monotonic() - t0
     if state["error"]:
         raise RuntimeError(state["error"])
-    fps = count["n"] / elapsed if elapsed > 0 else 0.0
-    return count["n"], elapsed, fps
+    n = stats["n"]
+    # First-to-last buffer span: n buffers bound n-1 inter-frame intervals.
+    elapsed = (stats["last"] - stats["first"]) if n >= 2 else 0.0
+    fps = (n - 1) / elapsed if elapsed > 0 else 0.0
+    return n, elapsed, fps
 
 
 def main():

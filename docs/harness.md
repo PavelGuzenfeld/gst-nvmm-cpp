@@ -7,8 +7,11 @@ detector, a tracker, a converter -- anything you can express as a pipeline.
 
 ## `tools/pipeline_bench.py` — honest frame throughput
 
-Counts the buffers crossing a named element's src pad and divides by wall-clock
-time. It deliberately ignores any in-band FPS HUD (for example an overlay's
+Counts the buffers crossing a named element's src pad and times the window from
+the first such buffer to the last, so the rate reflects steady-state processing
+and excludes pipeline preroll and one-time engine/CUDA warmup (which would
+otherwise depress the number by a different amount for every clip length). It
+also deliberately ignores any in-band FPS HUD (for example an overlay's
 exponential-moving-average counter): an EMA of inter-frame gaps over-reports
 2-3x when a queue drains in a burst, so it is the wrong number to judge
 throughput by. Count buffers at a pad instead.
