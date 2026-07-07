@@ -31,7 +31,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
 
 
-def run_once(pipeline_str, probe_name):
+def run_once(pipeline_str, probe_name, timeout_s=0.0):
     """Run the pipeline to EOS, return (frames, seconds, fps).
 
     ``seconds`` is the window from the first buffer at the probe pad to the
@@ -39,6 +39,10 @@ def run_once(pipeline_str, probe_name):
     the count of inter-frame intervals over their span. Warmup before the first
     buffer (preroll, engine deserialization, CUDA context) is excluded by
     construction, so short and long clips are directly comparable.
+
+    ``timeout_s`` > 0 bounds a single run: if neither EOS nor an error arrives
+    within that wall-clock budget the run is abandoned and raised as an error,
+    so a stalled or non-prerolling pipeline cannot hang an unattended sweep.
     """
     pipeline = Gst.parse_launch(pipeline_str)
     elem = pipeline.get_by_name(probe_name)
@@ -75,7 +79,20 @@ def run_once(pipeline_str, probe_name):
 
     bus.connect("message", on_msg)
 
-    pipeline.set_state(Gst.State.PLAYING)
+    if timeout_s > 0:
+        def on_timeout():
+            state["error"] = (
+                f"timed out after {timeout_s:g}s "
+                f"(reached {stats['n']} frames, no EOS)"
+            )
+            loop.quit()
+            return False  # one-shot
+        GLib.timeout_add(int(timeout_s * 1000), on_timeout)
+
+    ret = pipeline.set_state(Gst.State.PLAYING)
+    if ret == Gst.StateChangeReturn.FAILURE:
+        pipeline.set_state(Gst.State.NULL)
+        raise RuntimeError("pipeline failed to start (state change to PLAYING failed)")
     try:
         loop.run()
     finally:
@@ -95,13 +112,16 @@ def main():
     ap.add_argument("--probe", required=True,
                     help="name= of the element whose src pad to count")
     ap.add_argument("--iterations", type=int, default=1)
+    ap.add_argument("--timeout", type=float, default=0.0,
+                    help="per-iteration wall-clock budget in seconds; "
+                         "0 (default) waits indefinitely for EOS")
     ap.add_argument("--json", help="write metrics JSON to this path")
     args = ap.parse_args()
 
     Gst.init(None)
     runs = []
     for i in range(args.iterations):
-        frames, elapsed, fps = run_once(args.pipeline, args.probe)
+        frames, elapsed, fps = run_once(args.pipeline, args.probe, args.timeout)
         runs.append({"iter": i, "frames": frames,
                      "seconds": round(elapsed, 3), "fps": round(fps, 2)})
         print(f"iter {i}: {frames} frames  {elapsed:.2f}s  {fps:.2f} fps")

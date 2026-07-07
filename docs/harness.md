@@ -34,7 +34,9 @@ tools/pipeline_bench.py --probe infer --iterations 3 --json infer.json \
 ```
 
 `--probe` is the `name=` of the element whose src pad is counted. Exit 0 if
-every iteration reached EOS, 1 on a pipeline error.
+every iteration reached EOS, 1 on a pipeline error. For an unattended sweep pass
+`--timeout <seconds>` so a stalled or non-prerolling pipeline is abandoned and
+reported as an error instead of hanging the batch.
 
 ## `tools/score_pr.py` — precision / recall vs ground truth
 
