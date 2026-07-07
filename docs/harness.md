@@ -54,7 +54,9 @@ tools/score_pr.py --pred pred.jsonl --gt gt.jsonl --iou 0.5 --conf 0.3 --json pr
 ```
 
 Prints precision, recall, F1 and mean matched IoU. It scores; it does not gate
-(always exit 0).
+(always exit 0). If the two files barely share frame indices it warns on stderr:
+that usually means they number frames differently (an off-by-one), which would
+otherwise show up as a silent precision/recall of zero.
 
 ## Recording an overlay clip alongside a run
 

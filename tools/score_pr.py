@@ -72,6 +72,21 @@ def main():
     args = ap.parse_args()
 
     pred, gt = load(args.pred), load(args.gt)
+
+    # A near-empty frame-key overlap almost always means the two files number
+    # frames differently (a common off-by-one), not that the tracker missed
+    # everything -- warn rather than silently reporting precision=recall=0.
+    if pred and gt:
+        shared = set(pred) & set(gt)
+        if not shared:
+            print(f"warning: --pred and --gt share 0 frame indices "
+                  f"({len(pred)} pred, {len(gt)} gt) -- check frame numbering",
+                  file=sys.stderr)
+        elif len(shared) < 0.5 * min(len(pred), len(gt)):
+            print(f"warning: --pred and --gt share only {len(shared)} frame "
+                  f"indices ({len(pred)} pred, {len(gt)} gt) -- check frame "
+                  f"numbering", file=sys.stderr)
+
     tp = fp = fn = 0
     all_iou = []
     for frame in sorted(set(pred) | set(gt)):
