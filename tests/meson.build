@@ -234,3 +234,19 @@ test_integration = executable('test_integration',
 test('integration', test_integration, protocol : 'exitcode',
   is_parallel : false, suite : 'plugin',
   env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
+
+# --- Reusable motion-analytics components (analytics/) -------------------------
+# All gated behind the single (default-disabled) `analytics` feature. The headers
+# are always available (analytics_inc); only these tests + the OpenCV dependency
+# are opt-in. persistence_gate is pure C++ but folded under the same switch so the
+# feature is one clean knob (off => nothing analytics builds, no OpenCV searched).
+if have_analytics
+  foreach t : ['persistence_gate', 'dual_homography', 'low_texture_motion',
+               'active_region', 'detection_motion_gate', 'motion_magnify']
+    analytics_exe = executable('test_analytics_' + t, 'test_analytics_' + t + '.cpp',
+      include_directories : [analytics_inc],
+      dependencies : [opencv4_dep],
+    )
+    test('analytics_' + t, analytics_exe, protocol : 'exitcode')
+  endforeach
+endif
