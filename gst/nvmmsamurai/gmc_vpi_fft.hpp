@@ -29,6 +29,10 @@ namespace nvmm {
 
 class GmcVpiFft {
 public:
+    GmcVpiFft() = default;
+    GmcVpiFft(const GmcVpiFft &) = delete;             // owns VPI handles + device mem
+    GmcVpiFft &operator=(const GmcVpiFft &) = delete;
+
     // Cheap availability probe: create+destroy a CUDA FFT payload. Confirms VPI +
     // cuFFT are usable on this box (the FFT payload dlopens cuFFT). Static so the
     // tracker can decide the backend before allocating anything.
@@ -48,6 +52,9 @@ public:
     bool init(int n, std::string &err) {
         n_ = n;
         const size_t n2 = (size_t)n * n;
+        // Dedicated CUDA stream for the window/cross-power kernels + copies, so GMC
+        // never issues a device-wide sync that would stall SAM2.1's concurrent stream.
+        if (cudaStreamCreate(&cs_) != cudaSuccess) { err = "cudaStreamCreate(gmc fft)"; return false; }
         if (vpiStreamCreate(VPI_BACKEND_CUDA, &stream_) != VPI_SUCCESS) { err = "vpiStreamCreate(CUDA)"; return false; }
         if (vpiCreateFFT(VPI_BACKEND_CUDA, n, n, VPI_IMAGE_FORMAT_2F32, VPI_IMAGE_FORMAT_2F32, &fft_) != VPI_SUCCESS) { err = "vpiCreateFFT"; return false; }
         if (vpiCreateIFFT(VPI_BACKEND_CUDA, n, n, VPI_IMAGE_FORMAT_2F32, VPI_IMAGE_FORMAT_2F32, &ifft_) != VPI_SUCCESS) { err = "vpiCreateIFFT"; return false; }
@@ -62,7 +69,7 @@ public:
         std::vector<float> hann((size_t)n);
         for (int i = 0; i < n; i++)
             hann[(size_t)i] = 0.5f * (1.f - std::cos(2.f * 3.14159265358979323846f * i / (n - 1)));
-        cudaMemcpy(d_hann_, hann.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+        if (cudaMemcpy(d_hann_, hann.data(), n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { err = "cudaMemcpy(hann)"; return false; }
         if (!wrap(d_prevwin_, img_prevwin_) || !wrap(d_currwin_, img_currwin_) ||
             !wrap(d_aspec_, img_aspec_) || !wrap(d_bspec_, img_bspec_) ||
             !wrap(d_corr_, img_corr_)) { err = "vpiImageCreateWrapper(gmc fft)"; return false; }
@@ -76,22 +83,28 @@ public:
     PhaseShift estimate(const uint8_t *prev, const uint8_t *curr) {
         const int n = n_;
         const size_t n2 = (size_t)n * n;
-        cudaMemcpy(d_yp_, prev, n2, cudaMemcpyHostToDevice);
-        cudaMemcpy(d_yc_, curr, n2, cudaMemcpyHostToDevice);
-        k_gmc_window(d_yp_, n, n, d_hann_, d_prevwin_, 0);
-        k_gmc_window(d_yc_, n, n, d_hann_, d_currwin_, 0);
-        cudaDeviceSynchronize();                       // windows done before VPI reads them
-        vpiSubmitFFT(stream_, VPI_BACKEND_CUDA, fft_, img_prevwin_, img_aspec_, 0);
-        vpiSubmitFFT(stream_, VPI_BACKEND_CUDA, fft_, img_currwin_, img_bspec_, 0);
-        vpiStreamSync(stream_);
-        k_gmc_cross_power(d_aspec_, d_bspec_, (int)n2, 0);  // A = FFT(prev)*conj(FFT(curr))/|.|
-        cudaDeviceSynchronize();
-        vpiSubmitIFFT(stream_, VPI_BACKEND_CUDA, ifft_, img_aspec_, img_corr_, 0);
-        vpiStreamSync(stream_);
-        cudaMemcpy(h_corr_.data(), d_corr_, n2 * sizeof(float2), cudaMemcpyDeviceToHost);
+        // All kernels + copies on cs_; sync is stream-scoped (cudaStreamSynchronize),
+        // never device-wide, so a concurrent TRT stream (SAM2.1) is not stalled. Any
+        // CUDA/VPI failure returns {} — gated out by the caller (no garbage shift).
+        if (cudaMemcpyAsync(d_yp_, prev, n2, cudaMemcpyHostToDevice, cs_) != cudaSuccess ||
+            cudaMemcpyAsync(d_yc_, curr, n2, cudaMemcpyHostToDevice, cs_) != cudaSuccess) return {};
+        k_gmc_window(d_yp_, n, n, d_hann_, d_prevwin_, cs_);
+        k_gmc_window(d_yc_, n, n, d_hann_, d_currwin_, cs_);
+        if (cudaStreamSynchronize(cs_) != cudaSuccess) return {};   // windows done before VPI reads them
+        if (vpiSubmitFFT(stream_, VPI_BACKEND_CUDA, fft_, img_prevwin_, img_aspec_, 0) != VPI_SUCCESS ||
+            vpiSubmitFFT(stream_, VPI_BACKEND_CUDA, fft_, img_currwin_, img_bspec_, 0) != VPI_SUCCESS ||
+            vpiStreamSync(stream_) != VPI_SUCCESS) return {};
+        k_gmc_cross_power(d_aspec_, d_bspec_, (int)n2, cs_);  // A = FFT(prev)*conj(FFT(curr))/|.|
+        if (cudaStreamSynchronize(cs_) != cudaSuccess) return {};
+        if (vpiSubmitIFFT(stream_, VPI_BACKEND_CUDA, ifft_, img_aspec_, img_corr_, 0) != VPI_SUCCESS ||
+            vpiStreamSync(stream_) != VPI_SUCCESS) return {};
+        if (cudaMemcpyAsync(h_corr_.data(), d_corr_, n2 * sizeof(float2), cudaMemcpyDeviceToHost, cs_) != cudaSuccess ||
+            cudaStreamSynchronize(cs_) != cudaSuccess) return {};
         // VPI's inverse FFT is 1/N-scaled; PhaseCorrelator uses an UNscaled inverse.
         // Rescale by N so `response` lands on the same scale as fft-cpu (the shift is
         // scale-invariant) and a single confidence gate works for both FFT backends.
+        // (This ties the conf scale to VPI's 1/N convention — see the confidence-model
+        // follow-up in the plan; the shift itself is unaffected by any scaling.)
         const double nrm = (double)n2;
         for (size_t i = 0; i < n2; i++) real_[i] = (double)h_corr_[2 * i] * nrm;  // real part
         return refine_correlation_peak(real_, n, n);
@@ -117,6 +130,7 @@ private:
         if (fft_)    { vpiPayloadDestroy(fft_);   fft_ = nullptr; }
         if (ifft_)   { vpiPayloadDestroy(ifft_);  ifft_ = nullptr; }
         if (stream_) { vpiStreamDestroy(stream_); stream_ = nullptr; }
+        if (cs_)     { cudaStreamDestroy(cs_);    cs_ = nullptr; }
         for (void **p : {(void **)&d_yp_, (void **)&d_yc_, (void **)&d_hann_,
                          (void **)&d_prevwin_, (void **)&d_currwin_, (void **)&d_aspec_,
                          (void **)&d_bspec_, (void **)&d_corr_})
@@ -124,6 +138,7 @@ private:
     }
 
     int n_ = 0;
+    cudaStream_t cs_ = nullptr;    // dedicated stream for kernels+copies (no device sync)
     VPIStream stream_ = nullptr;
     VPIPayload fft_ = nullptr, ifft_ = nullptr;
     VPIImage img_prevwin_ = nullptr, img_currwin_ = nullptr, img_aspec_ = nullptr,

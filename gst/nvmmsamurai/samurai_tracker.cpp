@@ -166,7 +166,8 @@ struct SamuraiTracker::Impl {
     bool gmc_have_prev = false;
     float gmc_scale = 1.f;                     // small-px -> full-px
     int   gmc_n_ = 128;                        // patch side (set from backend at init)
-    static constexpr int kGmcSearch = 24;      // NCC brute-force radius (128 patch)
+    static constexpr int kGmcSearch = 24;      // NCC brute-force radius, tuned for the
+                                               // 128-px ncc patch; rescale if gmc_n_ changes
 
     int stable_frames = 0;
     int stable_frames_threshold = 10;
@@ -261,6 +262,16 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
         // Per-backend confidence gate — ignore low-confidence (textureless / scene
         // change). NCC conf is peak correlation [-1,1]; FFT conf is the (rescaled)
         // phase-correlation response; PVA conf is the fraction of corners tracked.
+        // The FFT gate is a single response threshold; a scale-invariant confidence
+        // (PSR) would decouple it from VPI's 1/N scaling, but it would NOT fix the
+        // known limitation below, so that unification is a deferred follow-up.
+        //
+        // KNOWN LIMITATION (follow-up): on a STATIC camera with a moving target in the
+        // center patch, the FFT backends can report a confident but spurious ~1-2px
+        // shift (the phase peak is genuinely sharp, so no confidence threshold — PSR
+        // included — rejects it); ncc/pva stay faithful (~0). A robust fix is
+        // target-aware GMC (mask the tracked box out of the patch) or a temporal-
+        // consistency check, not a threshold. Prefer pva on static-camera deployments.
         float min_conf = 0.05f;                                  // fft-cpu / fft-cuda
         if (gmc_backend == GmcBackend::Ncc) min_conf = 0.3f;
         else if (gmc_backend == GmcBackend::Pva) min_conf = 0.3f;  // >=30% corners tracked

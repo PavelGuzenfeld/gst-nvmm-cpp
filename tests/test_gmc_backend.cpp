@@ -44,9 +44,10 @@ int main() {
           "auto -> pva when only pva available");
     check(resolve_gmc_backend(GmcBackend::Auto, false, false) == GmcBackend::FftCpu,
           "auto -> fft-cpu when no accelerator");
-    // explicit requests degrade DOWN, never silently up
-    check(resolve_gmc_backend(GmcBackend::FftCuda, false, true) == GmcBackend::Pva,
-          "fft-cuda unavailable -> pva");
+    // an explicit accelerator request degrades to fft-cpu (same algorithm as
+    // fft-cuda), NOT across to a different algorithm (pva); only `auto` walks the chain
+    check(resolve_gmc_backend(GmcBackend::FftCuda, false, true) == GmcBackend::FftCpu,
+          "fft-cuda unavailable -> fft-cpu (not pva)");
     check(resolve_gmc_backend(GmcBackend::FftCuda, false, false) == GmcBackend::FftCpu,
           "fft-cuda unavailable, no pva -> fft-cpu");
     check(resolve_gmc_backend(GmcBackend::Pva, false, false) == GmcBackend::FftCpu,

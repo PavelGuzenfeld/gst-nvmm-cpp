@@ -36,6 +36,10 @@ namespace nvmm {
 
 class GmcVpiPva {
 public:
+    GmcVpiPva() = default;
+    GmcVpiPva(const GmcVpiPva &) = delete;             // owns VPI handles
+    GmcVpiPva &operator=(const GmcVpiPva &) = delete;
+
     // Cheap availability probe: create+destroy the PVA Harris + PyrLK payloads.
     static bool available() {
         VPIStream s = nullptr;
@@ -74,8 +78,7 @@ public:
     // PhaseCorrelator: content motion prev -> curr. conf = tracked fraction [0,1].
     GmcShift estimate(const uint8_t *prev, const uint8_t *curr) {
         GmcShift out;  // {0,0,0} on any failure -> gated out by the caller
-        fill_u8(prev_u8_, prev);
-        fill_u8(cur_u8_, curr);
+        if (!fill_u8(prev_u8_, prev) || !fill_u8(cur_u8_, curr)) return out;
         VPIHarrisCornerDetectorParams hp;
         vpiInitHarrisCornerDetectorParams(&hp);
         hp.minNMSDistance = 8;  // required on PVA
@@ -119,14 +122,16 @@ private:
         std::sort(v.begin(), v.end());
         return v[v.size() / 2];
     }
-    void fill_u8(VPIImage img, const uint8_t *src) {
+    bool fill_u8(VPIImage img, const uint8_t *src) {
         VPIImageData d;
-        if (vpiImageLockData(img, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d) != VPI_SUCCESS) return;
+        if (vpiImageLockData(img, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d) != VPI_SUCCESS)
+            return false;   // don't estimate on stale/zero data
         const VPIImagePlanePitchLinear &pl = d.buffer.pitch.planes[0];
         uint8_t *p = (uint8_t *)pl.data;
         for (int y = 0; y < n_; y++)
             std::memcpy(p + (size_t)y * pl.pitchBytes, src + (size_t)y * n_, (size_t)n_);
         vpiImageUnlock(img);
+        return true;
     }
     void destroy() {
         for (VPIImage *p : {&prev_u8_, &cur_u8_, &prev_s16_}) if (*p) { vpiImageDestroy(*p); *p = nullptr; }

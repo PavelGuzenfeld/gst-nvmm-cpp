@@ -46,9 +46,10 @@ inline GmcBackend gmc_backend_from_string(const char *s) {
 inline GmcBackend resolve_gmc_backend(GmcBackend requested, bool have_cuda_fft,
                                       bool have_pva) {
     switch (requested) {
-        case GmcBackend::FftCuda: return have_cuda_fft ? GmcBackend::FftCuda
-                                : have_pva            ? GmcBackend::Pva
-                                                      : GmcBackend::FftCpu;
+        // An explicit accelerator request that's unavailable degrades to fft-cpu (the
+        // portable CPU FFT — same algorithm as fft-cuda), NOT across to a different
+        // algorithm (pva); `auto` is the only mode that walks the full chain.
+        case GmcBackend::FftCuda: return have_cuda_fft ? GmcBackend::FftCuda : GmcBackend::FftCpu;
         case GmcBackend::Pva:     return have_pva ? GmcBackend::Pva : GmcBackend::FftCpu;
         case GmcBackend::FftCpu:  return GmcBackend::FftCpu;
         case GmcBackend::Ncc:     return GmcBackend::Ncc;
