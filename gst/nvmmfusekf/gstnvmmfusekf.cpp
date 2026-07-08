@@ -36,10 +36,19 @@ struct _GstNvmmFuseKf {
     gboolean ever_valid;       /* had a track at least once (gates reseed-on-loss) */
     FILE    *csv;              /* $NVMMFUSEKF_CSV per-frame box dump (eval/overlay) */
     guint64  frame_n;
+
+    /* flush-BB: SAM2.1's mask is diffuse on a tiny target, so the fused box balloons
+       well past the true target. When an on-target YOLO det is available and the
+       emitted box is materially larger than that det box, publish the tight det box
+       instead — SAMURAI still owns the temporal lock + reseed timing, this only
+       sharpens the emitted geometry. On by default. */
+    gboolean flush_bb;
+    gdouble  flush_ratio;   /* emit det box when fused_area > flush_ratio * det_area */
+    gdouble  flush_gate;    /* flush-det proximity radius (px) to KF prediction; 0=gate-threshold */
 };
 
 enum { PROP_0, PROP_TARGET_CLASS, PROP_DET_CONF, PROP_GATE_THRESH, PROP_MAX_LOST,
-       PROP_RESEED_COOLDOWN };
+       PROP_RESEED_COOLDOWN, PROP_FLUSH_BB, PROP_FLUSH_RATIO, PROP_FLUSH_GATE };
 
 #define NVMM_NV12_CAPS \
     "video/x-raw(memory:NVMM), format=(string)NV12, " \
@@ -111,6 +120,7 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
        size, so for tiny targets gating only the secondary keeps the master KF
        from starving. */
     int updated = 0, fused_yolo = 0;
+    double pred_cx = 0, pred_cy = 0; gboolean have_pred = FALSE;
     if (!self->kf->initiated()) {
         /* Init ONLY from the SAMURAI primary (it owns seeding incl. seed-delay /
            seed-roi). Initing from a lone YOLO det would jump the gun and lock onto
@@ -123,6 +133,7 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
            ~5px target the Mahalanobis gate is useless (reject-all / accept-all). A
            pixel radius cleanly fuses on-target YOLO dets and rejects far ones. */
         double pcx, pcy, pw, ph; self->kf->box(pcx, pcy, pw, ph);
+        pred_cx = pcx; pred_cy = pcy; have_pred = TRUE;
         const double yd = std::hypot(yc - pcx, yy - pcy);
         const gboolean yolo_ok = has_yolo && yd < self->gate_thresh;
         if (has_sam) { self->kf->update(sam_cx, sam_cy, sam_w, sam_h); updated++; }
@@ -141,6 +152,26 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
         if (!tm->target_id) tm->target_id = ++self->target_id;
     } else {
         tm->valid = FALSE;  /* lost */
+    }
+
+    /* Flush-BB: the fused box tracks SAM2.1's diffuse mask, which balloons on a tiny
+       target; when an on-target YOLO det is available and the emitted box is
+       materially larger than the det box, publish the tight det box so the emitted
+       BB is flush. Gate the det against the KF PREDICTION (velocity-propagated, not
+       the current diffuse SAMURAI update that ballooned + drifted the emitted center)
+       with a dedicated radius, so a det the diffuse box has drifted away from is still
+       recovered while an off-target distractor is rejected. */
+    if (self->flush_bb && tm->valid && has_yolo && yw > 0 && yh > 0) {
+        const double fcx = tm->left + tm->width / 2.0, fcy = tm->top + tm->height / 2.0;
+        const double rcx = have_pred ? pred_cx : fcx, rcy = have_pred ? pred_cy : fcy;
+        const double gate = self->flush_gate > 0.0 ? self->flush_gate : self->gate_thresh;
+        const double yd2 = std::hypot(yc - rcx, yy - rcy);
+        const double fused_area = (double)tm->width * tm->height;
+        const double det_area = yw * yh;
+        if (yd2 < gate && fused_area > self->flush_ratio * det_area) {
+            tm->left = (float)(yc - yw / 2.0); tm->top = (float)(yy - yh / 2.0);
+            tm->width = (float)yw; tm->height = (float)yh;
+        }
     }
 
     /* Re-seed authority: when the track is lost and a fresh YOLO det is available,
@@ -207,6 +238,9 @@ static void gst_nvmm_fusekf_set_property(GObject *o, guint id, const GValue *v, 
     case PROP_GATE_THRESH:  self->gate_thresh = g_value_get_double(v); break;
     case PROP_MAX_LOST:     self->max_lost = g_value_get_int(v); break;
     case PROP_RESEED_COOLDOWN: self->reseed_cooldown_frames = g_value_get_int(v); break;
+    case PROP_FLUSH_BB:    self->flush_bb = g_value_get_boolean(v); break;
+    case PROP_FLUSH_RATIO: self->flush_ratio = g_value_get_double(v); break;
+    case PROP_FLUSH_GATE:  self->flush_gate = g_value_get_double(v); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -220,6 +254,9 @@ static void gst_nvmm_fusekf_get_property(GObject *o, guint id, GValue *v, GParam
     case PROP_GATE_THRESH:  g_value_set_double(v, self->gate_thresh); break;
     case PROP_MAX_LOST:     g_value_set_int(v, self->max_lost); break;
     case PROP_RESEED_COOLDOWN: g_value_set_int(v, self->reseed_cooldown_frames); break;
+    case PROP_FLUSH_BB:    g_value_set_boolean(v, self->flush_bb); break;
+    case PROP_FLUSH_RATIO: g_value_set_double(v, self->flush_ratio); break;
+    case PROP_FLUSH_GATE:  g_value_set_double(v, self->flush_gate); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -249,6 +286,18 @@ static void gst_nvmm_fusekf_class_init(GstNvmmFuseKfClass *klass)
         g_param_spec_int("reseed-cooldown", "Reseed cooldown (frames)",
             "Frames to wait after emitting an upstream reseed before emitting another",
             0, 10000, 15, f));
+    g_object_class_install_property(go, PROP_FLUSH_BB,
+        g_param_spec_boolean("flush-bb", "Flush bounding box",
+            "Publish the tight on-target YOLO det box when SAMURAI's fused mask box is "
+            "materially larger (diffuse-mask guard) so the emitted BB is flush", TRUE, f));
+    g_object_class_install_property(go, PROP_FLUSH_RATIO,
+        g_param_spec_double("flush-ratio", "Flush area ratio",
+            "Emit the det box when the fused box area exceeds flush-ratio * det box area",
+            1.0, 100.0, 1.5, f));
+    g_object_class_install_property(go, PROP_FLUSH_GATE,
+        g_param_spec_double("flush-gate", "Flush det gate (px)",
+            "Proximity radius (px) from the KF prediction within which a det may be "
+            "flushed to; 0 = reuse gate-threshold", 0.0, 8192.0, 250.0, f));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -269,6 +318,10 @@ static void gst_nvmm_fusekf_init(GstNvmmFuseKf *self)
     self->gate_thresh = 100.0;   /* pixels */
     self->max_lost = 30;
     self->reseed_cooldown_frames = 15;
+    self->flush_bb = TRUE;       /* flush BB on tiny/diffuse-mask targets */
+    self->flush_ratio = 1.5;     /* emit det box when fused area > 1.5x det area */
+    self->flush_gate = 250.0;    /* px to KF prediction; wide enough to recover a det
+                                    the diffuse SAMURAI box has drifted away from */
     self->kf = nullptr;
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
     gst_base_transform_set_passthrough(GST_BASE_TRANSFORM(self), FALSE);
