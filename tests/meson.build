@@ -117,6 +117,12 @@ test_kalman_box = executable('test_kalman_box',
   include_directories : [common_inc],
 )
 
+# Header-only FFT phase correlation (gst/common/phase_correlation.hpp); no CUDA/GST.
+test_phase_correlation = executable('test_phase_correlation',
+  'test_phase_correlation.cpp',
+  include_directories : [common_inc],
+)
+
 # Header-only crop geometry (gst/nvmmsamurai/samurai_view.hpp); no CUDA/GST.
 test_samurai_view = executable('test_samurai_view',
   ['test_samurai_view.cpp'],
@@ -170,6 +176,7 @@ test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 test('kalman_box', test_kalman_box, protocol : 'exitcode')
+test('phase_correlation', test_phase_correlation, protocol : 'exitcode')
 test('samurai_view', test_samurai_view, protocol : 'exitcode')
 test('vit_grid', test_vit_grid, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
