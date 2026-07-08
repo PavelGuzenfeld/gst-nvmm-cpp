@@ -38,7 +38,7 @@ shipped in this repo.
 |---|---|---|---|
 | `engine-dir` | string | — | Directory with the 5 SAMURAI `.engine` files (required) |
 | `consts-file` | string | — | Packed learned constants, `samurai_consts.bin` (required) |
-| `crop-size` | int (64–2048) | `512` | Square encoder input size |
+| `crop-size` | int (64–2048) | `512` | Square encoder input size; the engine set must be exported to match (see note) |
 | `max-kf` | int (0–30) | `2` | Max consecutive Kalman-only frames between full inferences |
 | `kf-score-weight` | double (0–1) | `0.25` | Stable-regime score: `w·kf_iou + (1−w)·iou` |
 | `iou-threshold` | double (0–1) | `0.5` | Min selected-candidate IoU to accept a Kalman update |
@@ -50,6 +50,17 @@ shipped in this repo.
 | `seed-roi` | string | — | Force the initial seed at `"x,y,w,h"` (pixels), bypassing YOLO |
 | `seed-delay` | uint | `0` | Don't auto-seed before this frame (skip an unstable lead-in) |
 | `gmc` | bool | `false` | Camera-motion compensation — shift KF/crop to cancel camera translation (handheld / moving camera) |
+
+!!! note "Non-default `crop-size`"
+    `crop-size` drives the encoder token grid (`(crop/16)²`) at runtime, so a
+    non-512 crop is supported — but the five engines must be exported/built at
+    that size (`image_encoder` is spatial-dynamic and rebuilds at any size; the
+    others are baked per crop — see [building engines](../building-engines.md)).
+    Tracking *quality* is unchanged from the 512 default only if the target
+    stays in the crop: on a moving camera enable `gmc`, and pair the tracker
+    with a detector so it re-seeds. A frame whose mask-decoder objectness comes
+    back non-finite (target fully out of crop) coasts on the last box and skips
+    the memory update — it never corrupts tracker state.
 
 ## Logging
 
