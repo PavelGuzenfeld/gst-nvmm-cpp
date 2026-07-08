@@ -18,7 +18,10 @@
 #include "samurai_seed_math.hpp"  // bilinear/mask_to_box/mlp3 (host ref / scalars)
 #include "samurai_memory.hpp"     // MemoryBank assemble (header-only)
 #include "samurai_kernels.hpp"    // per-frame CUDA kernels (zero-copy on-device)
-#include "samurai_gmc.hpp"        // camera-motion (GMC) estimator (header-only)
+#include "samurai_gmc.hpp"        // camera-motion (GMC) NCC estimator (header-only)
+#include "phase_correlation.hpp"  // gst/common: FFT phase-correlation GMC estimator
+#include "gmc_vpi_fft.hpp"        // fft-cuda GMC backend (VPI FFT; NVMM_HAVE_VPI)
+#include "gmc_vpi_pva.hpp"        // pva GMC backend (VPI Harris+PyrLK; NVMM_HAVE_VPI)
 #include "kalman_box.hpp"         // gst/common
 #include "vit_grid.hpp"           // gst/common: ViT grid-token count from crop
 
@@ -149,13 +152,21 @@ struct SamuraiTracker::Impl {
 
     KalmanBox kf;
     // GMC (camera-motion compensation): VIC-downscale the frame center to a small
-    // grayscale patch, zero-mean NCC vs the previous patch -> frame-to-frame shift.
+    // grayscale patch, estimate the frame-to-frame scene shift, shift last box + KF.
+    // Backend (resolved from cfg at init) selects the estimator; the patch side
+    // (gmc_n_) is backend-dependent (128 for ncc/fft, 256 for PVA's Harris min).
     bool gmc_enabled = false;
-    NvBufSurface *gmc_surf = nullptr;     // 128x128 NV12 (VIC dst)
-    std::vector<uint8_t> gmc_prev, gmc_curr;  // 128*128 Y
+    GmcBackend gmc_backend = GmcBackend::Ncc;
+    NvBufSurface *gmc_surf = nullptr;         // gmc_n_ x gmc_n_ NV12 (VIC dst)
+    std::vector<uint8_t> gmc_prev, gmc_curr;  // gmc_n_^2 Y
+    std::vector<float>   gmc_pf, gmc_cf;      // gmc_n_^2 float (fft-cpu input)
+    std::unique_ptr<PhaseCorrelator> gmc_pc; // fft-cpu correlator (gmc_n_ pow2)
+    std::unique_ptr<GmcVpiFft> gmc_fft;      // fft-cuda backend (VPI FFT)
+    std::unique_ptr<GmcVpiPva> gmc_pva;      // pva backend (VPI Harris+PyrLK)
     bool gmc_have_prev = false;
-    float gmc_scale = 1.f;                 // small-px -> full-px
-    static constexpr int kGmcN = 128, kGmcSearch = 24;
+    float gmc_scale = 1.f;                     // small-px -> full-px
+    int   gmc_n_ = 128;                        // patch side (set from backend at init)
+    static constexpr int kGmcSearch = 24;      // NCC brute-force radius (128 patch)
 
     int stable_frames = 0;
     int stable_frames_threshold = 10;
@@ -182,10 +193,47 @@ struct SamuraiTracker::Impl {
     bool seed_cond_frame(const TrackBox &box, std::string &err);  // post-encoder
     bool track_frame(TrackResult &out, std::string &err);         // post-encoder
     void apply_gmc(NvBufSurface *frame);  // estimate + apply camera-motion shift
+    GmcShift gmc_estimate();              // dispatch to the resolved GMC backend
 };
 
-// GMC: VIC-downscale the frame's center square to kGmcN x kGmcN NV12, read the Y
-// plane, zero-mean NCC vs the previous patch -> frame-to-frame scene shift, and
+// Estimate the frame-to-frame scene shift on two gmc_n_ x gmc_n_ grayscale patches
+// using the resolved backend. Both estimators return the SAME sign convention:
+// the content's motion prev->curr, i.e. curr[y,x] ~= prev[y-dy, x-dx]. A flipped
+// sign here would *double* camera motion via kf.shift instead of cancelling it.
+GmcShift SamuraiTracker::Impl::gmc_estimate()
+{
+    switch (gmc_backend) {
+        case GmcBackend::Pva:
+            return gmc_pva->estimate(gmc_prev.data(), gmc_curr.data());
+        case GmcBackend::FftCuda: {
+            const PhaseShift s = gmc_fft->estimate(gmc_prev.data(), gmc_curr.data());
+            GmcShift out;
+            out.dx = (float)s.x; out.dy = (float)s.y; out.conf = (float)s.response;
+            return out;
+        }
+        case GmcBackend::FftCpu: {
+            // uint8 -> float, then FFT phase correlation. response is the FFT
+            // confidence analogue (unscaled-IFFT peak mass), gated separately.
+            const size_t n2 = (size_t)gmc_n_ * gmc_n_;
+            gmc_pf.resize(n2); gmc_cf.resize(n2);
+            for (size_t i = 0; i < n2; i++) {
+                gmc_pf[i] = (float)gmc_prev[i];
+                gmc_cf[i] = (float)gmc_curr[i];
+            }
+            const PhaseCorrelator::Shift s = gmc_pc->correlate(gmc_pf.data(), gmc_cf.data());
+            GmcShift out;
+            out.dx = (float)s.x; out.dy = (float)s.y; out.conf = (float)s.response;
+            return out;
+        }
+        case GmcBackend::Ncc:
+        default:
+            // CPU zero-mean NCC brute-force (baseline). conf is peak NCC in [-1,1].
+            return estimate_shift(gmc_prev.data(), gmc_curr.data(), gmc_n_, kGmcSearch);
+    }
+}
+
+// GMC: VIC-downscale the frame's center square to gmc_n_ x gmc_n_ NV12, read the Y
+// plane, estimate the frame-to-frame scene shift with the resolved backend, and
 // shift the last box + KF by it (cancel camera motion before the crop/predict).
 void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
 {
@@ -203,18 +251,25 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
     NvBufSurfaceSyncForCpu(gmc_surf, 0, 0);
     const uint8_t *y = (const uint8_t *)gmc_surf->surfaceList[0].mappedAddr.addr[0];
     const int pitch = gmc_surf->surfaceList[0].planeParams.pitch[0];
-    for (int r = 0; r < kGmcN; r++)
-        std::memcpy(gmc_curr.data() + (size_t)r * kGmcN, y + (size_t)r * pitch, kGmcN);
+    for (int r = 0; r < gmc_n_; r++)
+        std::memcpy(gmc_curr.data() + (size_t)r * gmc_n_, y + (size_t)r * pitch, gmc_n_);
     NvBufSurfaceUnMap(gmc_surf, 0, 0);
-    gmc_scale = (float)sq / kGmcN;
+    gmc_scale = (float)sq / gmc_n_;
 
     if (gmc_have_prev) {
-        GmcShift s = estimate_shift(gmc_prev.data(), gmc_curr.data(), kGmcN, kGmcSearch);
-        if (s.conf > 0.3f) {  // ignore low-confidence (textureless / scene change)
+        const GmcShift s = gmc_estimate();
+        // Per-backend confidence gate — ignore low-confidence (textureless / scene
+        // change). NCC conf is peak correlation [-1,1]; FFT conf is the (rescaled)
+        // phase-correlation response; PVA conf is the fraction of corners tracked.
+        float min_conf = 0.05f;                                  // fft-cpu / fft-cuda
+        if (gmc_backend == GmcBackend::Ncc) min_conf = 0.3f;
+        else if (gmc_backend == GmcBackend::Pva) min_conf = 0.3f;  // >=30% corners tracked
+        if (s.conf > min_conf) {
             const float dx = s.dx * gmc_scale, dy = s.dy * gmc_scale;
             last.left += dx; last.top += dy;
             kf.shift(dx, dy);
-            GST_LOG("gmc shift (%.1f,%.1f) conf=%.2f", dx, dy, s.conf);
+            GST_LOG("gmc[%s] shift (%.1f,%.1f) conf=%.3f",
+                    gmc_backend_name(gmc_backend), dx, dy, s.conf);
         }
     }
     gmc_curr.swap(gmc_prev);
@@ -764,17 +819,46 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
     cudaMemcpy(impl_->d_tpos, impl_->consts.data("maskmem_tpos_enc"), (size_t)7 * 64 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(impl_->d_tposproj_w, impl_->consts.data("obj_ptr_tpos_proj.weight"), (size_t)64 * 256 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(impl_->d_tposproj_b, impl_->consts.data("obj_ptr_tpos_proj.bias"), 64 * sizeof(float), cudaMemcpyHostToDevice);
-    // GMC: small NV12 surface for the VIC-downscaled center patch.
+    // GMC: resolve the backend BEFORE allocating the patch surface, since the patch
+    // side (128 vs 256) and estimator depend on it. VPI FFT/PVA backends are wired
+    // in later phases; until then their availability is false, so `auto` and any
+    // explicit fft-cuda/pva request degrade to fft-cpu (never silently to a lower
+    // tier that changes behavior unexpectedly). See gmc_backend.hpp.
     impl_->gmc_enabled = cfg.gmc;
     if (cfg.gmc) {
+        // Probe accelerator availability only when the request could actually use one
+        // (auto, or an explicit accelerator backend). A plain ncc/fft-cpu request must
+        // NOT probe — creating a PVA payload can spin up PVA firmware (seconds) and
+        // emit VPI errors on boxes without PVA. VPI FFT's probe also dlopens cuFFT.
+        bool have_cuda_fft = false, have_pva = false;
+        if (cfg.gmc_backend != GmcBackend::Ncc && cfg.gmc_backend != GmcBackend::FftCpu) {
+            have_cuda_fft = GmcVpiFft::available();
+            have_pva      = GmcVpiPva::available();
+        }
+        impl_->gmc_backend = resolve_gmc_backend(cfg.gmc_backend, have_cuda_fft, have_pva);
+        impl_->gmc_n_ = gmc_patch_size(impl_->gmc_backend);
         NvBufSurfaceCreateParams cp{};
-        cp.width = Impl::kGmcN; cp.height = Impl::kGmcN;
+        cp.width = (uint32_t)impl_->gmc_n_; cp.height = (uint32_t)impl_->gmc_n_;
         cp.colorFormat = NVBUF_COLOR_FORMAT_NV12;
         cp.layout = NVBUF_LAYOUT_PITCH; cp.memType = NVBUF_MEM_DEFAULT; cp.gpuId = 0;
         if (NvBufSurfaceCreate(&impl_->gmc_surf, 1, &cp) != 0) { err = "gmc surface create failed"; return false; }
         impl_->gmc_surf->numFilled = 1;
-        impl_->gmc_prev.assign((size_t)Impl::kGmcN * Impl::kGmcN, 0);
-        impl_->gmc_curr.assign((size_t)Impl::kGmcN * Impl::kGmcN, 0);
+        impl_->gmc_prev.assign((size_t)impl_->gmc_n_ * impl_->gmc_n_, 0);
+        impl_->gmc_curr.assign((size_t)impl_->gmc_n_ * impl_->gmc_n_, 0);
+        if (impl_->gmc_backend == GmcBackend::FftCpu)
+            impl_->gmc_pc = std::make_unique<PhaseCorrelator>(impl_->gmc_n_, impl_->gmc_n_);
+        if (impl_->gmc_backend == GmcBackend::FftCuda) {
+            impl_->gmc_fft = std::make_unique<GmcVpiFft>();
+            std::string ferr;
+            if (!impl_->gmc_fft->init(impl_->gmc_n_, ferr)) { err = "gmc fft-cuda init: " + ferr; return false; }
+        }
+        if (impl_->gmc_backend == GmcBackend::Pva) {
+            impl_->gmc_pva = std::make_unique<GmcVpiPva>();
+            std::string perr;
+            if (!impl_->gmc_pva->init(impl_->gmc_n_, perr)) { err = "gmc pva init: " + perr; return false; }
+        }
+        GST_INFO("SamuraiTracker GMC backend=%s patch=%d",
+                 gmc_backend_name(impl_->gmc_backend), impl_->gmc_n_);
     }
     // mask_decoder: persistent inputs (dec_embed, image_pe const, feat from encoder)
     // + outputs. sparse/dense are rebound per frame (seed vs tracking).

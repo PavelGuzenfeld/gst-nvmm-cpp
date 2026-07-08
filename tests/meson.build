@@ -129,6 +129,13 @@ test_samurai_view = executable('test_samurai_view',
   include_directories : [include_directories('../gst/nvmmsamurai')],
 )
 
+# GMC backend selection (gmc_backend.hpp) + NCC-vs-FFT sign-agreement parity
+# (samurai_gmc.hpp + gst/common/phase_correlation.hpp); no CUDA/GST.
+test_gmc_backend = executable('test_gmc_backend',
+  ['test_gmc_backend.cpp'],
+  include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
+)
+
 # Header-only ViT grid-token count (gst/common/vit_grid.hpp); no CUDA/GST.
 test_vit_grid = executable('test_vit_grid',
   ['test_vit_grid.cpp'],
@@ -177,6 +184,7 @@ test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 test('kalman_box', test_kalman_box, protocol : 'exitcode')
 test('phase_correlation', test_phase_correlation, protocol : 'exitcode')
+test('gmc_backend', test_gmc_backend, protocol : 'exitcode')
 test('samurai_view', test_samurai_view, protocol : 'exitcode')
 test('vit_grid', test_vit_grid, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')

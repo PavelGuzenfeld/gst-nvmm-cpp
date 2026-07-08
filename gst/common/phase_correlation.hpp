@@ -25,6 +25,42 @@
 
 namespace nvmm {
 
+struct PhaseShift { double x = 0.0, y = 0.0, response = 0.0; };
+
+// Refine a real correlation surface (w*h row-major, NOT yet fft-shifted) into a
+// sub-pixel translation: fft-shift so DC lands at the centre, locate the peak,
+// then a 5x5 weighted centroid (cv::weightedCentroid). Shared by PhaseCorrelator
+// (CPU) and the VPI/CUDA FFT GMC backend so both use identical refinement. `surf`
+// is shifted in place. Even dims only (GMC uses pow2). shift = centre − sub-pixel
+// peak; response = centroid mass / (w·h).
+inline PhaseShift refine_correlation_peak(std::vector<double> &surf, int w, int h) {
+    const int hw = w / 2, hh = h / 2;
+    for (int y = 0; y < hh; y++)
+        for (int x = 0; x < w; x++) {
+            const int xs = (x + hw) % w, ys = y + hh;
+            std::swap(surf[(size_t)y * w + x], surf[(size_t)ys * w + xs]);
+        }
+    int px = 0, py = 0; double best = -1e300;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            const double v = surf[(size_t)y * w + x];
+            if (v > best) { best = v; px = x; py = y; }
+        }
+    double cx = 0.0, cy = 0.0, sum = 0.0;
+    for (int y = std::max(0, py - 2); y <= std::min(h - 1, py + 2); y++)
+        for (int x = std::max(0, px - 2); x <= std::min(w - 1, px + 2); x++) {
+            const double v = surf[(size_t)y * w + x];
+            cx += x * v; cy += y * v; sum += v;
+        }
+    PhaseShift out;
+    out.response = sum / ((double)w * h);
+    sum += 1e-15;
+    cx /= sum; cy /= sum;
+    out.x = (double)w / 2.0 - cx;
+    out.y = (double)h / 2.0 - cy;
+    return out;
+}
+
 class PhaseCorrelator {
 public:
     struct Shift { double x = 0.0, y = 0.0, response = 0.0; };
@@ -70,30 +106,13 @@ public:
             A_[i] = m > 1e-12 ? r / m : cd(0.0, 0.0);
         }
         fft2d(A_, true);   // unscaled inverse (matches cv::idft without DFT_SCALE)
-        fftshift(A_);
-
-        // peak of the real correlation surface
-        int px = 0, py = 0; double best = -1e300;
-        for (int y = 0; y < h_; y++)
-            for (int x = 0; x < w_; x++) {
-                const double v = A_[(size_t)y * w_ + x].real();
-                if (v > best) { best = v; px = x; py = y; }
-            }
-        // 5x5 weighted centroid around the peak (cv::weightedCentroid)
-        double cx = 0.0, cy = 0.0, sum = 0.0;
-        for (int y = std::max(0, py - 2); y <= std::min(h_ - 1, py + 2); y++)
-            for (int x = std::max(0, px - 2); x <= std::min(w_ - 1, px + 2); x++) {
-                const double v = A_[(size_t)y * w_ + x].real();
-                cx += x * v; cy += y * v; sum += v;
-            }
-        Shift out;
-        out.response = sum / ((double)w_ * h_);
-        sum += 1e-15;
-        cx /= sum; cy /= sum;
-        // shift = image centre − sub-pixel peak
-        out.x = (double)w_ / 2.0 - cx;
-        out.y = (double)h_ / 2.0 - cy;
-        return out;
+        // Hand the real correlation surface to the shared refiner — the VPI/CUDA
+        // FFT GMC backend fetches its IFFT result the same way, so both paths use
+        // identical fft-shift + peak + 5x5-centroid refinement.
+        real_.resize(A_.size());
+        for (size_t i = 0; i < A_.size(); i++) real_[i] = A_[i].real();
+        const PhaseShift ps = refine_correlation_peak(real_, w_, h_);
+        return Shift{ps.x, ps.y, ps.response};
     }
 
 private:
@@ -132,19 +151,10 @@ private:
         }
     }
 
-    // Swap quadrants so DC moves to (w/2, h/2). Even dims only (GMC uses pow2).
-    void fftshift(std::vector<cd> &a) {
-        const int hw = w_ / 2, hh = h_ / 2;
-        for (int y = 0; y < hh; y++)
-            for (int x = 0; x < w_; x++) {
-                const int xs = (x + hw) % w_, ys = y + hh;
-                std::swap(a[(size_t)y * w_ + x], a[(size_t)ys * w_ + xs]);
-            }
-    }
-
     int w_, h_;
     std::vector<double> wx_, wy_;
     std::vector<cd> A_, B_, col_;
+    std::vector<double> real_;  // scratch: real part of the IFFT surface for refine
 };
 
 }  // namespace nvmm

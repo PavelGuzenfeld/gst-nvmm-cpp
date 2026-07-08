@@ -107,7 +107,36 @@ __global__ void assemble_k(const float *const *maskmem, const float *objptr,
         memory_pos[idx] = acc;
     }
 }
+// GMC fft-cuda: window a uint8 patch by a separable Hann into complex 2F32.
+__global__ void gmc_window_k(const unsigned char *y, int pitch, int n,
+                             const float *hann, float2 *out)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n * n) return;
+    const int r = idx / n, c = idx % n;
+    const float win = hann[r] * hann[c];
+    out[idx] = make_float2((float)y[(size_t)r * pitch + c] * win, 0.f);
+}
+
+// GMC fft-cuda: normalized cross-power a = R/|R|, R = a * conj(b), in place.
+__global__ void gmc_cross_power_k(float2 *a, const float2 *b, int n2)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n2) return;
+    const float2 av = a[i], bv = b[i];
+    const float rx = av.x * bv.x + av.y * bv.y;   // Re(a * conj(b))
+    const float ry = av.y * bv.x - av.x * bv.y;   // Im(a * conj(b))
+    const float m = sqrtf(rx * rx + ry * ry);
+    a[i] = m > 1e-12f ? make_float2(rx / m, ry / m) : make_float2(0.f, 0.f);
+}
 }  // namespace
+
+void k_gmc_window(const unsigned char *y, int pitch, int n, const float *hann,
+                  float2 *out, cudaStream_t s)
+{ gmc_window_k<<<grid(n * n), kBlk, 0, s>>>(y, pitch, n, hann, out); }
+
+void k_gmc_cross_power(float2 *a, const float2 *b, int n2, cudaStream_t s)
+{ gmc_cross_power_k<<<grid(n2), kBlk, 0, s>>>(a, b, n2); }
 
 void k_transpose(const float *in, float *out, int rows, int cols, cudaStream_t s)
 { transpose_k<<<grid(rows * cols), kBlk, 0, s>>>(in, out, rows, cols); }

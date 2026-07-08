@@ -49,4 +49,15 @@ void k_assemble_memory(const float *const *maskmem, const float *objptr,
                        const float *tpos, const float *tposproj_w, const float *tposproj_b,
                        float *memory, float *memory_pos, int tok, cudaStream_t s);
 
+/// GMC fft-cuda backend helpers (gmc_vpi_fft.hpp). Window an n x n uint8 grayscale
+/// patch (row stride `pitch`) by a separable Hann window (`hann` length n) into a
+/// complex 2F32 image (out[i] = {y*win, 0}), matching PhaseCorrelator's windowing
+/// so the CUDA and CPU FFT paths are directly comparable.
+void k_gmc_window(const unsigned char *y, int pitch, int n, const float *hann,
+                  float2 *out, cudaStream_t s);
+
+/// Normalized cross-power spectrum in place: a[i] = R/|R|, R = a[i] * conj(b[i])
+/// (or {0,0} if |R| ~ 0). Same convention as PhaseCorrelator's cross-power step.
+void k_gmc_cross_power(float2 *a, const float2 *b, int n2, cudaStream_t s);
+
 }  // namespace nvmm

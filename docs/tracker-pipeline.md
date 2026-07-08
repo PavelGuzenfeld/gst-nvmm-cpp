@@ -84,8 +84,8 @@ All knobs are environment variables (defaults shown):
 Examples:
 
 ```bash
-# stream H.264/RTP over UDP to a viewer at 192.168.1.10:5600
-INPUT=/v/clip.mp4 SINK=udp DST=192.168.1.10 bash /src/run.sh
+# stream H.264/RTP over UDP to a viewer at <viewer-ip>:5600
+INPUT=/v/clip.mp4 SINK=udp DST=<viewer-ip> bash /src/run.sh
 
 # write an annotated .mp4
 INPUT=/v/clip.mp4 SINK=file OUTFILE=/o/results/clip_tracked.mp4 bash /src/run.sh
