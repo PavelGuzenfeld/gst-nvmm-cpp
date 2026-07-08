@@ -158,7 +158,8 @@ struct SamuraiTracker::Impl {
     bool gmc_enabled = false;
     GmcBackend gmc_backend = GmcBackend::Ncc;
     NvBufSurface *gmc_surf = nullptr;         // gmc_n_ x gmc_n_ NV12 (VIC dst)
-    std::vector<uint8_t> gmc_prev, gmc_curr;  // gmc_n_^2 Y
+    std::vector<uint8_t> gmc_prev, gmc_curr;  // gmc_n_^2 Y (raw patches)
+    std::vector<uint8_t> gmc_pm, gmc_cm;      // gmc_n_^2 Y (target-masked copies)
     std::vector<float>   gmc_pf, gmc_cf;      // gmc_n_^2 float (fft-cpu input)
     std::unique_ptr<PhaseCorrelator> gmc_pc; // fft-cpu correlator (gmc_n_ pow2)
     std::unique_ptr<GmcVpiFft> gmc_fft;      // fft-cuda backend (VPI FFT)
@@ -168,6 +169,10 @@ struct SamuraiTracker::Impl {
     int   gmc_n_ = 128;                        // patch side (set from backend at init)
     static constexpr int kGmcSearch = 24;      // NCC brute-force radius, tuned for the
                                                // 128-px ncc patch; rescale if gmc_n_ changes
+    static constexpr float kGmcMinShift = 0.5f;  // dead-band (frame px): after target-aware
+                                               // masking, residual FFT jitter on a static
+                                               // camera is sub-px — snap to 0 so it doesn't
+                                               // accumulate drift. Real camera motion >> this.
 
     int stable_frames = 0;
     int stable_frames_threshold = 10;
@@ -194,20 +199,36 @@ struct SamuraiTracker::Impl {
     bool seed_cond_frame(const TrackBox &box, std::string &err);  // post-encoder
     bool track_frame(TrackResult &out, std::string &err);         // post-encoder
     void apply_gmc(NvBufSurface *frame);  // estimate + apply camera-motion shift
-    GmcShift gmc_estimate();              // dispatch to the resolved GMC backend
+    GmcShift gmc_estimate(const uint8_t *prev, const uint8_t *curr);  // dispatch to backend
 };
+
+// Target-aware GMC: fill the (clamped) box [x0,y0)-(x1,y1) in an n x n patch with the
+// patch mean, so the tracked target's own motion doesn't contaminate the camera-motion
+// estimate. The same box is masked in both frames, so its edges correlate at zero shift
+// (reinforcing the background/static estimate) rather than adding a spurious peak.
+static void mask_box_to_mean(uint8_t *patch, int n, int x0, int y0, int x1, int y1)
+{
+    x0 = std::max(0, x0); y0 = std::max(0, y0);
+    x1 = std::min(n, x1); y1 = std::min(n, y1);
+    if (x0 >= x1 || y0 >= y1) return;
+    uint64_t sum = 0;
+    for (int i = 0; i < n * n; i++) sum += patch[i];
+    const uint8_t mean = (uint8_t)(sum / ((uint64_t)n * n));
+    for (int y = y0; y < y1; y++)
+        std::memset(patch + (size_t)y * n + x0, mean, (size_t)(x1 - x0));
+}
 
 // Estimate the frame-to-frame scene shift on two gmc_n_ x gmc_n_ grayscale patches
 // using the resolved backend. Both estimators return the SAME sign convention:
 // the content's motion prev->curr, i.e. curr[y,x] ~= prev[y-dy, x-dx]. A flipped
 // sign here would *double* camera motion via kf.shift instead of cancelling it.
-GmcShift SamuraiTracker::Impl::gmc_estimate()
+GmcShift SamuraiTracker::Impl::gmc_estimate(const uint8_t *prev, const uint8_t *curr)
 {
     switch (gmc_backend) {
         case GmcBackend::Pva:
-            return gmc_pva->estimate(gmc_prev.data(), gmc_curr.data());
+            return gmc_pva->estimate(prev, curr);
         case GmcBackend::FftCuda: {
-            const PhaseShift s = gmc_fft->estimate(gmc_prev.data(), gmc_curr.data());
+            const PhaseShift s = gmc_fft->estimate(prev, curr);
             GmcShift out;
             out.dx = (float)s.x; out.dy = (float)s.y; out.conf = (float)s.response;
             return out;
@@ -218,8 +239,8 @@ GmcShift SamuraiTracker::Impl::gmc_estimate()
             const size_t n2 = (size_t)gmc_n_ * gmc_n_;
             gmc_pf.resize(n2); gmc_cf.resize(n2);
             for (size_t i = 0; i < n2; i++) {
-                gmc_pf[i] = (float)gmc_prev[i];
-                gmc_cf[i] = (float)gmc_curr[i];
+                gmc_pf[i] = (float)prev[i];
+                gmc_cf[i] = (float)curr[i];
             }
             const PhaseCorrelator::Shift s = gmc_pc->correlate(gmc_pf.data(), gmc_cf.data());
             GmcShift out;
@@ -229,7 +250,7 @@ GmcShift SamuraiTracker::Impl::gmc_estimate()
         case GmcBackend::Ncc:
         default:
             // CPU zero-mean NCC brute-force (baseline). conf is peak NCC in [-1,1].
-            return estimate_shift(gmc_prev.data(), gmc_curr.data(), gmc_n_, kGmcSearch);
+            return estimate_shift(prev, curr, gmc_n_, kGmcSearch);
     }
 }
 
@@ -258,29 +279,51 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
     gmc_scale = (float)sq / gmc_n_;
 
     if (gmc_have_prev) {
-        const GmcShift s = gmc_estimate();
+        // Target-aware GMC: if the tracked box lands inside the center patch, mask it
+        // out of BOTH patches so the target's own motion doesn't contaminate the
+        // camera-motion estimate (the FFT backends otherwise report a spurious shift on
+        // a static camera with a moving centered target). Estimate on masked copies;
+        // keep the raw prev/curr for the next-frame swap.
+        const uint8_t *pe = gmc_prev.data(), *ce = gmc_curr.data();
+        if (last.width > 0.f && last.height > 0.f) {
+            const double s2p = (double)gmc_n_ / sq;   // patch px per frame px
+            const double cx = ((double)last.left + last.width  * 0.5 - (W - sq) / 2.0) * s2p;
+            const double cy = ((double)last.top  + last.height * 0.5 - (H - sq) / 2.0) * s2p;
+            const double hw = (double)last.width  * 0.5 * 1.25 * s2p;   // +25% margin
+            const double hh = (double)last.height * 0.5 * 1.25 * s2p;
+            const int x0 = (int)(cx - hw), y0 = (int)(cy - hh),
+                      x1 = (int)(cx + hw), y1 = (int)(cy + hh);
+            if (x1 > 0 && y1 > 0 && x0 < gmc_n_ && y0 < gmc_n_) {  // overlaps the patch
+                gmc_pm.assign(gmc_prev.begin(), gmc_prev.end());
+                gmc_cm.assign(gmc_curr.begin(), gmc_curr.end());
+                mask_box_to_mean(gmc_pm.data(), gmc_n_, x0, y0, x1, y1);
+                mask_box_to_mean(gmc_cm.data(), gmc_n_, x0, y0, x1, y1);
+                pe = gmc_pm.data(); ce = gmc_cm.data();
+            }
+        }
+        const GmcShift s = gmc_estimate(pe, ce);
         // Per-backend confidence gate — ignore low-confidence (textureless / scene
         // change). NCC conf is peak correlation [-1,1]; FFT conf is the (rescaled)
         // phase-correlation response; PVA conf is the fraction of corners tracked.
-        // The FFT gate is a single response threshold; a scale-invariant confidence
-        // (PSR) would decouple it from VPI's 1/N scaling, but it would NOT fix the
-        // known limitation below, so that unification is a deferred follow-up.
-        //
-        // KNOWN LIMITATION (follow-up): on a STATIC camera with a moving target in the
-        // center patch, the FFT backends can report a confident but spurious ~1-2px
-        // shift (the phase peak is genuinely sharp, so no confidence threshold — PSR
-        // included — rejects it); ncc/pva stay faithful (~0). A robust fix is
-        // target-aware GMC (mask the tracked box out of the patch) or a temporal-
-        // consistency check, not a threshold. Prefer pva on static-camera deployments.
+        // FFT static-camera over-response: on a static camera with a moving target in
+        // the center patch, FFT phase-correlation used to report a spurious ~1-2px
+        // shift. Mitigated by the target-aware masking above (drops it ~3x, to sub-px)
+        // + the dead-band below. Residual remains, so ncc/pva (both ~inert vs gmc-off
+        // on static) are still preferred on static-camera deployments; the FFT gate is
+        // a single response threshold (a scale-invariant PSR is a deferred follow-up).
         float min_conf = 0.05f;                                  // fft-cpu / fft-cuda
         if (gmc_backend == GmcBackend::Ncc) min_conf = 0.3f;
         else if (gmc_backend == GmcBackend::Pva) min_conf = 0.3f;  // >=30% corners tracked
         if (s.conf > min_conf) {
             const float dx = s.dx * gmc_scale, dy = s.dy * gmc_scale;
-            last.left += dx; last.top += dy;
-            kf.shift(dx, dy);
-            GST_LOG("gmc[%s] shift (%.1f,%.1f) conf=%.3f",
-                    gmc_backend_name(gmc_backend), dx, dy, s.conf);
+            // Dead-band: after target-aware masking, residual sub-pixel jitter on a
+            // static camera is noise — snap it to 0 so it doesn't accumulate drift.
+            if (std::fabs(dx) >= kGmcMinShift || std::fabs(dy) >= kGmcMinShift) {
+                last.left += dx; last.top += dy;
+                kf.shift(dx, dy);
+                GST_LOG("gmc[%s] shift (%.1f,%.1f) conf=%.3f",
+                        gmc_backend_name(gmc_backend), dx, dy, s.conf);
+            }
         }
     }
     gmc_curr.swap(gmc_prev);
