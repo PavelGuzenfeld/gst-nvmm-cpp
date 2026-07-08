@@ -400,7 +400,14 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     float ious[4] = {0}, obj_score = 0.f;
     cudaMemcpy(ious, d_dious, sizeof(ious), cudaMemcpyDeviceToHost);
     cudaMemcpy(&obj_score, d_dobj, sizeof(float), cudaMemcpyDeviceToHost);
-    const bool appearing = obj_score > -1.0f;
+    // A numerically degenerate memory-attention frame can emit a non-finite
+    // objectness (observed at smaller crops once the target has drifted out of
+    // the crop — this port has no GMC to recenter). Treat it as not-appearing
+    // and, below, skip the memory-ring/state update entirely: writing a NaN
+    // maskmem would poison every subsequent assemble and never recover. Coasting
+    // instead lets the tracker resume if a later frame is finite again.
+    const bool finite_obj = std::isfinite(obj_score);
+    const bool appearing = finite_obj && obj_score > -1.0f;
 
     // 5. per-candidate (engine idx 1,2,3) high-res mask + box, un-viewed to FRAME
     //    coords (the KF runs in frame coords — crop-move invariant; this port has
@@ -481,6 +488,12 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     }
     out.stable_frames = (uint32_t)stable_frames;
     out.target_id = 1;
+
+    if (!finite_obj) {           // coast on the last box; do NOT touch the memory ring
+        GST_WARNING("track f=%ld: non-finite objectness, coasting (skipped memory update)",
+                    (long)frame_idx);
+        return true;
+    }
 
     // 8. obj_ptr (selected token) + memory mask (tracking: sigmoid, NOT binarize).
     std::vector<float> token(CH);
