@@ -118,7 +118,7 @@ int main()
         float *dptrs; cudaMalloc(&dptrs, sizeof(dmm)); cudaMemcpy(dptrs, dmm, sizeof(dmm), cudaMemcpyHostToDevice);
         float *dop = dev(objpack), *dpos = dev(pos), *dcm = dev(cmpos), *dtp = dev(tpos), *dtw = dev(tpw), *dtb = dev(tpb);
         float *dmem, *dmp; cudaMalloc(&dmem, hm.size() * sizeof(float)); cudaMalloc(&dmp, hp.size() * sizeof(float));
-        nvmm::k_assemble_memory(reinterpret_cast<const float *const *>(dptrs), dop, dpos, dcm, dtp, dtw, dtb, dmem, dmp, s);
+        nvmm::k_assemble_memory(reinterpret_cast<const float *const *>(dptrs), dop, dpos, dcm, dtp, dtw, dtb, dmem, dmp, kTok, s);
         cudaStreamSynchronize(s);
         auto gm = host(dmem, hm.size()), gp = host(dmp, hp.size());
         report("assemble.mem", maxabs(gm, hm), 1e-4);
