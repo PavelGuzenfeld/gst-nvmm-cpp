@@ -129,11 +129,26 @@ test_samurai_view = executable('test_samurai_view',
   include_directories : [include_directories('../gst/nvmmsamurai')],
 )
 
+# Strict flags for the host-only GMC tests (element already builds -Werror; hold the
+# unit/fuzz tests to the same bar).
+gmc_test_args = ['-Wall', '-Wextra', '-Werror']
+
 # GMC backend selection (gmc_backend.hpp) + NCC-vs-FFT sign-agreement parity
 # (samurai_gmc.hpp + gst/common/phase_correlation.hpp); no CUDA/GST.
 test_gmc_backend = executable('test_gmc_backend',
   ['test_gmc_backend.cpp'],
   include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
+  cpp_args : gmc_test_args,
+)
+
+# Fuzz + sanitizer harness for the GMC estimator core (phase_correlation.hpp +
+# samurai_gmc.hpp). Standalone LCG sweep; registered as a test so scripts/
+# run-sanitizers.sh exercises it under ASan+UBSan. (libFuzzer variant: build
+# tests/fuzz_gmc.cpp with clang -DGMC_LIBFUZZER -fsanitize=fuzzer — see its header.)
+test_fuzz_gmc = executable('test_fuzz_gmc',
+  ['fuzz_gmc.cpp'],
+  include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
+  cpp_args : gmc_test_args,
 )
 
 # Header-only ViT grid-token count (gst/common/vit_grid.hpp); no CUDA/GST.
@@ -185,6 +200,7 @@ test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 test('kalman_box', test_kalman_box, protocol : 'exitcode')
 test('phase_correlation', test_phase_correlation, protocol : 'exitcode')
 test('gmc_backend', test_gmc_backend, protocol : 'exitcode')
+test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300)
 test('samurai_view', test_samurai_view, protocol : 'exitcode')
 test('vit_grid', test_vit_grid, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
