@@ -38,3 +38,25 @@ if have_analytics_cuda
   benchmark('analytics_cuda_operations', bench_analytics_cuda, protocol : 'exitcode',
     timeout : 600)
 endif
+
+# GMC estimator micro-bench (ncc / fft-cpu / fft-cuda / pva): us/frame + shift
+# error on synthetic known-shift patches, isolated from the pipeline. Needs nvcc
+# for the GMC CUDA kernels (samurai_kernels.cu); VPI enables the fft-cuda + pva
+# backends. Jetson-only (real CUDA/VPI); also gates numeric correctness (exitcode).
+if have_tensorrt
+  bench_gmc_deps = [trt_dep]
+  bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Werror']
+  if have_vpi
+    bench_gmc_deps += vpi_dep
+    bench_gmc_cpp_args += '-DNVMM_HAVE_VPI'
+  endif
+  bench_gmc = executable('bench_gmc',
+    ['bench_gmc.cpp', '../gst/nvmmsamurai/samurai_kernels.cu'],
+    include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
+    dependencies : bench_gmc_deps,
+    cuda_args : samurai_cuda_base_args,
+    cpp_args : bench_gmc_cpp_args,
+    link_language : 'cpp',
+  )
+  benchmark('gmc_estimators', bench_gmc, protocol : 'exitcode', timeout : 120)
+endif

@@ -45,6 +45,7 @@ struct _GstNvmmSamurai {
     gchar  *seed_roi;           /* "x,y,w,h" frame coords: force initial seed here,
                                    bypassing YOLO (for targets the detector misses) */
     gboolean gmc;               /* camera-motion compensation (handheld clips) */
+    gint     gmc_backend;       /* nvmm::GmcBackend enum value (auto resolves at init) */
 
     /* runtime */
     nvmm::SamuraiTracker *tracker;
@@ -62,8 +63,30 @@ enum {
     PROP_0, PROP_ENGINE_DIR, PROP_CONSTS_FILE, PROP_CROP_SIZE, PROP_MAX_KF,
     PROP_KF_SCORE_WEIGHT, PROP_STABLE_FRAMES_THRESHOLD, PROP_IOU_THRESHOLD,
     PROP_KF_MIN_AREA, PROP_TARGET_CLASS, PROP_SEED_CONF, PROP_SEED_PREFER_CENTER,
-    PROP_SEED_ROI, PROP_SEED_DELAY, PROP_GMC,
+    PROP_SEED_ROI, PROP_SEED_DELAY, PROP_GMC, PROP_GMC_BACKEND,
 };
+
+/* GMC backend as a GEnum so gst-inspect lists the choices. Values mirror
+   nvmm::GmcBackend (gmc_backend.hpp); "auto" resolves to the best available at
+   tracker init. */
+#define GST_TYPE_NVMM_GMC_BACKEND (gst_nvmm_gmc_backend_get_type())
+static GType gst_nvmm_gmc_backend_get_type(void)
+{
+    static gsize id = 0;
+    if (g_once_init_enter(&id)) {
+        static const GEnumValue vals[] = {
+            {(gint)nvmm::GmcBackend::Auto,    "Best available at init",    "auto"},
+            {(gint)nvmm::GmcBackend::Ncc,     "CPU NCC brute-force",       "ncc"},
+            {(gint)nvmm::GmcBackend::FftCpu,  "CPU FFT phase correlation", "fft-cpu"},
+            {(gint)nvmm::GmcBackend::FftCuda, "VPI FFT (CUDA)",            "fft-cuda"},
+            {(gint)nvmm::GmcBackend::Pva,     "VPI Harris+PyrLK (PVA)",    "pva"},
+            {0, nullptr, nullptr},
+        };
+        const GType t = g_enum_register_static("GstNvmmGmcBackend", vals);
+        g_once_init_leave(&id, t);
+    }
+    return (GType)id;
+}
 
 #define NVMM_NV12_CAPS \
     "video/x-raw(memory:NVMM), format=(string)NV12, " \
@@ -110,6 +133,7 @@ static gboolean gst_nvmm_samurai_start(GstBaseTransform *bt)
     cfg.kf_min_area = (float)self->kf_min_area;
     cfg.target_class = self->target_class;
     cfg.gmc = self->gmc;
+    cfg.gmc_backend = (nvmm::GmcBackend)self->gmc_backend;
 
     self->tracker = new nvmm::SamuraiTracker();
     std::string err;
@@ -289,6 +313,7 @@ static void gst_nvmm_samurai_set_property(GObject *o, guint id, const GValue *v,
     case PROP_SEED_ROI: g_free(self->seed_roi); self->seed_roi = g_value_dup_string(v); break;
     case PROP_SEED_DELAY: self->seed_delay = g_value_get_uint(v); break;
     case PROP_GMC: self->gmc = g_value_get_boolean(v); break;
+    case PROP_GMC_BACKEND: self->gmc_backend = g_value_get_enum(v); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -311,6 +336,7 @@ static void gst_nvmm_samurai_get_property(GObject *o, guint id, GValue *v, GPara
     case PROP_SEED_ROI: g_value_set_string(v, self->seed_roi); break;
     case PROP_SEED_DELAY: g_value_set_uint(v, self->seed_delay); break;
     case PROP_GMC: g_value_set_boolean(v, self->gmc); break;
+    case PROP_GMC_BACKEND: g_value_set_enum(v, self->gmc_backend); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -381,6 +407,12 @@ static void gst_nvmm_samurai_class_init(GstNvmmSamuraiClass *klass)
         g_param_spec_boolean("gmc", "Camera-motion compensation",
             "Estimate per-frame camera translation and shift the KF/crop to cancel "
             "it (for handheld / moving-camera clips)", FALSE, f));
+    g_object_class_install_property(go, PROP_GMC_BACKEND,
+        g_param_spec_enum("gmc-backend", "GMC backend",
+            "Camera-motion estimator: auto (best available), ncc (CPU brute-force), "
+            "fft-cpu (CPU phase correlation), fft-cuda (VPI/CUDA), pva (VPI Harris+PyrLK). "
+            "Only used when gmc=true.",
+            GST_TYPE_NVMM_GMC_BACKEND, (gint)nvmm::GmcBackend::Ncc, f));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -409,6 +441,7 @@ static void gst_nvmm_samurai_init(GstNvmmSamurai *self)
     self->seed_roi = nullptr;
     self->seed_delay = 0;
     self->gmc = FALSE;
+    self->gmc_backend = (gint)nvmm::GmcBackend::Ncc;
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
     gst_base_transform_set_passthrough(GST_BASE_TRANSFORM(self), FALSE);
 }

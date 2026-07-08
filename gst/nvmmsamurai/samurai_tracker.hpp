@@ -27,6 +27,8 @@
 #include <cuda_runtime.h>
 #include <nvbufsurface.h>
 
+#include "gmc_backend.hpp"  // GmcBackend enum (camera-motion compensation backend)
+
 namespace nvmm {
 
 class TrtEngine;  // gst/nvmminfer/trt_engine.hpp
@@ -58,6 +60,7 @@ struct SamuraiConfig {
     float kf_min_area = 25.f;        // min KF box area (px^2) to accept a KF update
     int   target_class = 0;          // YOLO class to seed from
     bool  gmc = false;               // camera-motion compensation (handheld clips)
+    GmcBackend gmc_backend = GmcBackend::Ncc;  // GMC estimator; auto resolves at init
 };
 
 class SamuraiTracker {
