@@ -21,9 +21,12 @@ The scripts live in `tools/samurai/`:
 | SAMURAI model + configs | [yangchris11/samurai](https://github.com/yangchris11/samurai) ([project page](https://yangchris11.github.io/samurai/)) |
 | YOLO detector | [Ultralytics YOLO26](https://docs.ultralytics.com/models/yolo26/) (`yolo26n`) |
 
-The tracker runs the SAM 2.1 image encoder at a **512×512 crop** (not SAM2's
-native 1024), so the export overrides `image_size=512` → `image_embed` 32×32,
-`feat_s0` 128×128, `feat_s1` 64×64.
+The tracker runs the SAM 2.1 image encoder at the `nvmmsamurai crop-size`
+(default **512×512**, not SAM2's native 1024), so the export overrides
+`image_size` to match. At the 512 default that gives `image_embed` 32×32,
+`feat_s0` 128×128, `feat_s1` 64×64; a non-512 `crop-size` needs the whole engine
+set re-exported at that size (the token grid scales as `crop/16`) — see the
+[`crop-size` note](elements/nvmmsamurai.md).
 
 ## 1. Fetch the open-source repo + checkpoint
 
