@@ -5,12 +5,13 @@
 /// checked against its host reference (which is itself golden-validated).
 ///
 /// `compute-sanitizer --tool memcheck|initcheck|racecheck|synccheck` against
-/// benchmarks/bench_gmc (exercises k_gmc_window/k_gmc_cross_power) currently fails
-/// on the Orin JP6 test host with "GPU debugging features are disabled" — a Tegra
-/// platform restriction, not a compute-sanitizer flag issue. Fix: add
-/// `nvgpu.support_gpu_tools=1` to the kernel cmdline in /boot/extlinux/extlinux.conf
-/// and reboot. Not done (shared device, needs sudo + reboot) — flagging so a future
-/// pass on a box with that flag set can actually run device memcheck on these kernels.
+/// benchmarks/bench_gmc (exercises k_gmc_window/k_gmc_cross_power): all 4 tools
+/// pass clean (0 errors/hazards) on the Orin JP6 test host. If you hit "GPU
+/// debugging features are disabled" running this yourself on Jetson/Tegra, it is
+/// NOT a kernel boot-flag issue (a `nvgpu.support_gpu_tools=1` cmdline flag does
+/// nothing on L4T R36 — that module parameter doesn't exist) — the launching user
+/// must be in the `debug` group: `sudo usermod -aG debug $USER`, then start a new
+/// login session (group membership applies on next login, no reboot needed).
 #pragma once
 
 #include <cuda_runtime.h>
