@@ -22,6 +22,7 @@
 #include "phase_correlation.hpp"  // gst/common: FFT phase-correlation GMC estimator
 #include "gmc_vpi_fft.hpp"        // fft-cuda GMC backend (VPI FFT; NVMM_HAVE_VPI)
 #include "gmc_vpi_pva.hpp"        // pva GMC backend (VPI Harris+PyrLK; NVMM_HAVE_VPI)
+#include "gmc_mask.hpp"           // target-aware GMC masking (header-only)
 #include "kalman_box.hpp"         // gst/common
 #include "vit_grid.hpp"           // gst/common: ViT grid-token count from crop
 
@@ -202,22 +203,6 @@ struct SamuraiTracker::Impl {
     GmcShift gmc_estimate(const uint8_t *prev, const uint8_t *curr);  // dispatch to backend
 };
 
-// Target-aware GMC: fill the (clamped) box [x0,y0)-(x1,y1) in an n x n patch with the
-// patch mean, so the tracked target's own motion doesn't contaminate the camera-motion
-// estimate. The same box is masked in both frames, so its edges correlate at zero shift
-// (reinforcing the background/static estimate) rather than adding a spurious peak.
-static void mask_box_to_mean(uint8_t *patch, int n, int x0, int y0, int x1, int y1)
-{
-    x0 = std::max(0, x0); y0 = std::max(0, y0);
-    x1 = std::min(n, x1); y1 = std::min(n, y1);
-    if (x0 >= x1 || y0 >= y1) return;
-    uint64_t sum = 0;
-    for (int i = 0; i < n * n; i++) sum += patch[i];
-    const uint8_t mean = (uint8_t)(sum / ((uint64_t)n * n));
-    for (int y = y0; y < y1; y++)
-        std::memset(patch + (size_t)y * n + x0, mean, (size_t)(x1 - x0));
-}
-
 // Estimate the frame-to-frame scene shift on two gmc_n_ x gmc_n_ grayscale patches
 // using the resolved backend. Both estimators return the SAME sign convention:
 // the content's motion prev->curr, i.e. curr[y,x] ~= prev[y-dy, x-dx]. A flipped
@@ -285,21 +270,14 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
         // a static camera with a moving centered target). Estimate on masked copies;
         // keep the raw prev/curr for the next-frame swap.
         const uint8_t *pe = gmc_prev.data(), *ce = gmc_curr.data();
-        if (last.width > 0.f && last.height > 0.f) {
-            const double s2p = (double)gmc_n_ / sq;   // patch px per frame px
-            const double cx = ((double)last.left + last.width  * 0.5 - (W - sq) / 2.0) * s2p;
-            const double cy = ((double)last.top  + last.height * 0.5 - (H - sq) / 2.0) * s2p;
-            const double hw = (double)last.width  * 0.5 * 1.25 * s2p;   // +25% margin
-            const double hh = (double)last.height * 0.5 * 1.25 * s2p;
-            const int x0 = (int)(cx - hw), y0 = (int)(cy - hh),
-                      x1 = (int)(cx + hw), y1 = (int)(cy + hh);
-            if (x1 > 0 && y1 > 0 && x0 < gmc_n_ && y0 < gmc_n_) {  // overlaps the patch
-                gmc_pm.assign(gmc_prev.begin(), gmc_prev.end());
-                gmc_cm.assign(gmc_curr.begin(), gmc_curr.end());
-                mask_box_to_mean(gmc_pm.data(), gmc_n_, x0, y0, x1, y1);
-                mask_box_to_mean(gmc_cm.data(), gmc_n_, x0, y0, x1, y1);
-                pe = gmc_pm.data(); ce = gmc_cm.data();
-            }
+        const GmcMaskBox mb = gmc_map_box_to_patch(last.left, last.top, last.width, last.height,
+                                                    W, H, sq, gmc_n_);
+        if (mb.overlaps) {
+            gmc_pm.assign(gmc_prev.begin(), gmc_prev.end());
+            gmc_cm.assign(gmc_curr.begin(), gmc_curr.end());
+            gmc_mask_box_to_mean(gmc_pm.data(), gmc_n_, mb.x0, mb.y0, mb.x1, mb.y1);
+            gmc_mask_box_to_mean(gmc_cm.data(), gmc_n_, mb.x0, mb.y0, mb.x1, mb.y1);
+            pe = gmc_pm.data(); ce = gmc_cm.data();
         }
         const GmcShift s = gmc_estimate(pe, ce);
         // Per-backend confidence gate — ignore low-confidence (textureless / scene

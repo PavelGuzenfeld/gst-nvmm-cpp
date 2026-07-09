@@ -17,9 +17,10 @@
 /// Pure C++ (<complex>), header-only, no OpenCV / CUDA / GStreamer.
 #pragma once
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <complex>
+#include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <vector>
 
@@ -65,11 +66,16 @@ class PhaseCorrelator {
 public:
     struct Shift { double x = 0.0, y = 0.0, response = 0.0; };
 
-    // w, h must be powers of two (radix-2 FFT); a non-pow2 dim would produce
-    // silently wrong shifts, not a crash — so refuse it up front.
+    // w, h must be powers of two (radix-2 FFT); a non-pow2 dim would otherwise produce
+    // silently wrong shifts. This check is unconditional (NOT assert/NDEBUG-gated) —
+    // no exceptions are used in this codebase, and a hard, loud abort() beats either
+    // a silent wrong answer in release builds or requiring every caller to add a
+    // fallible-construction path for a precondition callers already control.
     PhaseCorrelator(int w, int h) : w_(w), h_(h) {
-        assert(w_ > 1 && h_ > 1 && (w_ & (w_ - 1)) == 0 && (h_ & (h_ - 1)) == 0 &&
-               "PhaseCorrelator dimensions must be powers of two");
+        if (w_ <= 1 || h_ <= 1 || (w_ & (w_ - 1)) != 0 || (h_ & (h_ - 1)) != 0) {
+            std::fprintf(stderr, "PhaseCorrelator: w=%d h=%d must be powers of two > 1\n", w_, h_);
+            std::abort();
+        }
         // Separable Hann window, matching cv::createHanningWindow:
         //   wc[i] = 0.5*(1 - cos(2*pi*i/(N-1))),  hann(y,x) = wr[y]*wc[x].
         wx_.resize((size_t)w_);

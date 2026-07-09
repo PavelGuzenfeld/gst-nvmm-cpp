@@ -45,7 +45,7 @@ endif
 # backends. Jetson-only (real CUDA/VPI); also gates numeric correctness (exitcode).
 if have_tensorrt
   bench_gmc_deps = [trt_dep]
-  bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Werror']
+  bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
   if have_vpi
     bench_gmc_deps += vpi_dep
     bench_gmc_cpp_args += '-DNVMM_HAVE_VPI'

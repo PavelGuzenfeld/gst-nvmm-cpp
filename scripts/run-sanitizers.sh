@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 run_asan_ubsan() {
-    echo "=== ASan + UBSan ==="
+    echo "=== ASan + UBSan (detect_leaks=0, GLib-shutdown-noise suites) ==="
     rm -rf builddir-asan
     meson setup builddir-asan \
         -Dcpp_std=c++14 \
@@ -32,14 +32,26 @@ run_asan_ubsan() {
     [ -z "$libasan" ] && { echo "libasan.so not found"; exit 1; }
 
     # LeakSanitizer flags GLib / GStreamer shutdown leaks we don't own;
-    # detect_leaks=0 keeps the signal high. UBSan halts on any finding so our
-    # own UB surfaces loudly.
+    # detect_leaks=0 keeps the signal high there. UBSan halts on any finding so
+    # our own UB surfaces loudly.
     LD_PRELOAD="$libasan" \
     ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1:verify_asan_link_order=0" \
     UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:abort_on_error=1" \
     G_SLICE=always-malloc \
     G_DEBUG=gc-friendly \
-    meson test -C builddir-asan --print-errorlogs
+    meson test -C builddir-asan --print-errorlogs --no-suite pure_cpp
+
+    # pure_cpp suite (header-only, no GLib/GStreamer/CUDA — see tests/meson.build):
+    # plain executables, so ASan is already linked in via -Db_sanitize (no dlopen'd
+    # .so, so no LD_PRELOAD workaround needed — and none wanted: LD_PRELOAD-ing
+    # libasan into the `meson test` env var also instruments meson's OWN ninja/
+    # python child processes, which then report THEIR allocations as "leaked".
+    # This is the only lane in the repo that enforces real leak detection — keep
+    # it separate rather than weakening the detect_leaks=0 pass above, which stays
+    # permissive for GLib's own leaks.
+    ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:abort_on_error=1" \
+    UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:abort_on_error=1" \
+    meson test -C builddir-asan --print-errorlogs --suite pure_cpp
 }
 
 run_tsan() {

@@ -130,8 +130,11 @@ test_samurai_view = executable('test_samurai_view',
 )
 
 # Strict flags for the host-only GMC tests (element already builds -Werror; hold the
-# unit/fuzz tests to the same bar).
-gmc_test_args = ['-Wall', '-Wextra', '-Werror']
+# unit/fuzz tests to the same bar). -Wshadow is free signal here (clean already).
+# -Wconversion / -Wdouble-promotion were tried and dropped: on this numeric code they
+# only fire on intentional double-precision paths (float pixel * double Hann window)
+# and trivial int->float test literals — no real bug, just cast-churn to silence.
+gmc_test_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
 
 # GMC backend selection (gmc_backend.hpp) + NCC-vs-FFT sign-agreement parity
 # (samurai_gmc.hpp + gst/common/phase_correlation.hpp); no CUDA/GST.
@@ -148,6 +151,14 @@ test_gmc_backend = executable('test_gmc_backend',
 test_fuzz_gmc = executable('test_fuzz_gmc',
   ['fuzz_gmc.cpp'],
   include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
+  cpp_args : gmc_test_args,
+)
+
+# Target-aware GMC box masking (gst/nvmmsamurai/gmc_mask.hpp); no CUDA/GST. Proves
+# the isfinite guard (non-finite box -> no overlap, not a UB double->int cast).
+test_gmc_mask = executable('test_gmc_mask',
+  ['test_gmc_mask.cpp'],
+  include_directories : [include_directories('../gst/nvmmsamurai')],
   cpp_args : gmc_test_args,
 )
 
@@ -197,12 +208,16 @@ test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
-test('kalman_box', test_kalman_box, protocol : 'exitcode')
-test('phase_correlation', test_phase_correlation, protocol : 'exitcode')
-test('gmc_backend', test_gmc_backend, protocol : 'exitcode')
-test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300)
-test('samurai_view', test_samurai_view, protocol : 'exitcode')
-test('vit_grid', test_vit_grid, protocol : 'exitcode')
+# pure_cpp: header-only, dependency-free (no GLib/GStreamer/CUDA), so LeakSanitizer
+# can run with detect_leaks=1 here without the GLib/GStreamer shutdown-leak noise
+# that forces detect_leaks=0 for the rest of the suite (see run-sanitizers.sh).
+test('kalman_box', test_kalman_box, protocol : 'exitcode', suite : 'pure_cpp')
+test('phase_correlation', test_phase_correlation, protocol : 'exitcode', suite : 'pure_cpp')
+test('gmc_backend', test_gmc_backend, protocol : 'exitcode', suite : 'pure_cpp')
+test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300, suite : 'pure_cpp')
+test('gmc_mask', test_gmc_mask, protocol : 'exitcode', suite : 'pure_cpp')
+test('samurai_view', test_samurai_view, protocol : 'exitcode', suite : 'pure_cpp')
+test('vit_grid', test_vit_grid, protocol : 'exitcode', suite : 'pure_cpp')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')

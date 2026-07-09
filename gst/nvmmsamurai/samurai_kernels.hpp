@@ -3,6 +3,14 @@
 /// These replace the correctness-first host round-trips in samurai_tracker.cpp so
 /// the per-frame dataflow stays on-device (zero-copy). Each kernel is parity-
 /// checked against its host reference (which is itself golden-validated).
+///
+/// `compute-sanitizer --tool memcheck|initcheck|racecheck|synccheck` against
+/// benchmarks/bench_gmc (exercises k_gmc_window/k_gmc_cross_power) currently fails
+/// on the Orin JP6 test host with "GPU debugging features are disabled" — a Tegra
+/// platform restriction, not a compute-sanitizer flag issue. Fix: add
+/// `nvgpu.support_gpu_tools=1` to the kernel cmdline in /boot/extlinux/extlinux.conf
+/// and reboot. Not done (shared device, needs sudo + reboot) — flagging so a future
+/// pass on a box with that flag set can actually run device memcheck on these kernels.
 #pragma once
 
 #include <cuda_runtime.h>
