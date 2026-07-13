@@ -1,8 +1,12 @@
-# DLA pathfinder — verdict (Phase A, compile falsifier)
+# DLA pathfinder — verdict
 
-**Outcome: KILL the DLA path for SAMURAI. Pivot to Phase B (GPU-only async
-tail).** The Step-1 compile falsifier triggered the kill-criterion on day one,
-exactly as [the plan](dla-pathfinder-plan.md) (decisions 8, 9, 26) intended.
+**Outcome: KILL the DLA path for SAMURAI (12× regression), and — after
+measuring it — DROP the GPU-only async tail too (~1 % hideable, 3.4 % ceiling).**
+The Phase A compile falsifier triggered the kill-criterion on day one, exactly
+as [the plan](dla-pathfinder-plan.md) (decisions 8, 9, 26) intended; the Phase B
+falsifier (below) then showed the surviving lever isn't worth the surgery
+either. Net: no code change to the tracker is warranted; the real throughput is
+in the `image_encoder` (67 % of the frame), not the memory-update tail.
 
 ## Setup
 
@@ -78,36 +82,76 @@ Orin + TRT 10.3, DLA FP16 placement is viable only for graphs that are conv/pool
 *without* interleaved LayerNorm/GELU/softmax and that stay under 16 subgraphs
 per core. Modern transformer/ConvNeXt vision blocks violate both.
 
-## What survives — Phase B (async tail), GPU-only — but verify before building
+## Phase B (async tail), GPU-only — MEASURED, and it's a NO-GO too
 
-Phase B was scoped (plan decision 9) to be worth landing **even if DLA loses**.
-That is still the only in-scope throughput lever — but the falsifier does **not**
-license the naive framing that overlapping the 1.41 ms `memory_encoder` tail
-with the next frame's encoder saves ~1.41 ms.
+Phase B was scoped (plan decision 9) to be worth landing **even if DLA loses**,
+so before writing it off we measured it — same falsifier-first discipline that
+gated Phase A. nsys is not installed on the box (no binary, no `.deb`), so we
+instrumented `track()` directly with CPU timestamps + a `cudaEvent` around
+`memory_encoder`, rebuilt the plugin, and ran 250 full-inference frames
+(`max-kf=0`) on a 1080p clip. Steady-state (200 frames after warmup):
 
-**Why the win is bounded, and by what.** `memory_encoder(N)` and
-`image_encoder(N+1)` both run on the **GPU**. Putting them on separate CUDA
-streams does not make them run concurrently on a GPU the encoder already
-saturates — their kernels serialize on the SMs. The real win from the async
-tail is only the GPU-*idle* time in today's tail that `encoder(N+1)` can fill:
-the host obj_ptr MLP, the SamuraiSelector logic, the D2H/H2D copies, and the
-two explicit `cudaStreamSynchronize` bubbles (`samurai_tracker.cpp:485` decoder
-sync, `:606` memenc sync). That bubble could be near-zero (tail is
-compute-bound) or a solid fraction of a frame (tail is bubble-bound) — the
-falsifier can't distinguish the two.
+| Stage | mean ms | % of frame |
+|---|---|---|
+| `image_encoder` (`run_encoder`) | 45.4 | **67 %** |
+| pre-box (memory_attention + mask_decoder + candidate loop) | 20.1 | **30 %** |
+| **tail (steps 8–9, deferrable by Phase B)** | **2.27** | **3.4 %** |
+| &nbsp;&nbsp;└ `memory_encoder` GPU compute | 1.53 | — |
+| &nbsp;&nbsp;└ **hideable bubble** (tail − memenc) | **0.74** | **1.1 %** |
+| frame total | 67.8 | 100 % |
 
-**Apply the same falsifier-first discipline before the Impl surgery.** The plan
-itself calls the async-tail restructure "real surgery." Before committing to it,
-run the cheap falsifier: an **`nsys` trace of one `track()`** shows the tail's
-GPU-idle bubble size directly. That number decides whether Phase B is worth the
-restructure — measure it *before* building, exactly as this DLA falsifier
-gated Phase A.
+(The measured `memenc_gpu` = 1.53 ms matches the trtexec 1.41 ms baseline — the
+instrumentation is sound. Numbers are at the board's current `nvpmodel`, not a
+forced MAXN clock; the conclusion is power-mode-invariant because all GPU stages
+scale together, so the tail/frame *ratio* holds regardless of absolute ms.)
 
-**Recommendation:** close the DLA effort with this verdict; make Phase B's
-next action an `nsys` bubble-size measurement, then (if the bubble is
-worthwhile) the GPU-only async-tail restructure, judged by a `pipeline_bench.py`
-A/B. The pix_feat hazard fix and event/stream design in plan decisions 20–25
-stand unchanged if we proceed.
+**Why this kills Phase B.** `memory_encoder(N)` and `image_encoder(N+1)` both run
+on the **GPU**; separate CUDA streams do not make them run concurrently on a GPU
+the encoder already saturates — their kernels serialize on the SMs. So the clean
+win is only the tail's GPU-*idle* bubble (host obj_ptr MLP, selector logic,
+D2H/H2D copies, the `cudaStreamSynchronize` at `samurai_tracker.cpp:606`), which
+`encoder(N+1)` can fill: **0.74 ms, ~1.1 % of a frame.** Even the optimistic
+ceiling — pretending the *entire* tail hides for free — is **3.4 %.** That is
+not worth the "real surgery" the plan describes (double-buffered maskmem ring
+slot, two events, pix_feat tail copy, occlusion/reseed edge cases). With the
+default `max-kf=2` the tail runs only every third frame, so the real-run payoff
+is smaller still.
+
+**Where the time actually is.** The frame is 67 % `image_encoder` and 30 % the
+attention/decoder pre-box stages. Any throughput work on this tracker belongs
+there — a lighter/faster encoder, a smaller crop, or the `max-kf` coasting that
+already exists — not in the memory-update tail.
+
+## Answering the original question — "zero-copy queues between parts"
+
+The premise was to split the engine into parts on DLA/GPU with zero-copy queues
+between them *for parallelism*. That structure yields no win here, for a
+structural reason independent of the DLA op-support numbers:
+
+- Splitting a **sequentially-dependent** engine across DLA/GPU creates **no
+  intra-frame concurrency** — chunk 2 consumes chunk 1's output *of the same
+  frame*, so the queue between them is a hand-off, not an overlap.
+- The SAMURAI **frame dependency chain** blocks cross-frame pipelining of
+  `memory_encoder`: it can't start for frame N until that frame's mask exists
+  (decoder → selector → mask), and its output feeds frame N+1's
+  `memory_attention`. The *only* legal overlap is `memory_encoder(N)` running
+  behind `image_encoder(N+1)` — which is exactly the Phase B tail overlap,
+  measured above at a 3.4 % ceiling.
+
+So the DLA-with-queues design is **strictly dominated** by the GPU-only async
+tail we already rejected: it targets the same 3.4 % overlap window, but makes
+that window *slower* (DLA FP16 convs) and *reformat-laden* (12k CHW16↔linear
+copies). There is no arrangement of DLA parts + zero-copy queues that beats
+leaving `memory_encoder` on the GPU.
+
+## Recommendation
+
+Close the DLA effort **and** the async-tail effort. Neither the DLA path
+(12× regression, kill-criterion) nor the GPU-only async tail (~1 % hideable,
+3.4 % ceiling) is worth building. The plan's Phase B design (decisions 20–25)
+is left on record but not pursued. If tracker throughput is revisited, target
+the `image_encoder` (67 % of the frame) or the pre-box transformer stages
+(30 %).
 
 ## Aside — the one DLA lever left alive (out of scope)
 
