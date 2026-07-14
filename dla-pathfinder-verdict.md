@@ -1,12 +1,15 @@
 # DLA pathfinder — verdict
 
-**Outcome: KILL the DLA path for SAMURAI (12× regression), and — after
-measuring it — DROP the GPU-only async tail too (~1 % hideable, 3.4 % ceiling).**
-The Phase A compile falsifier triggered the kill-criterion on day one, exactly
-as [the plan](dla-pathfinder-plan.md) (decisions 8, 9, 26) intended; the Phase B
-falsifier (below) then showed the surviving lever isn't worth the surgery
-either. Net: no code change to the tracker is warranted; the real throughput is
-in the `image_encoder` (67 % of the frame), not the memory-update tail.
+**Outcome: KILL the DLA path for SAMURAI (12× regression), DROP the GPU-only
+async tail (~1 % hideable, 3.4 % ceiling), and — after testing them —
+the two follow-up throughput ideas (static `image_encoder` rebuild, moving the
+GPU-bound detector to DLA) are dead too.** The Phase A compile falsifier
+triggered the kill-criterion on day one, exactly as
+[the plan](dla-pathfinder-plan.md) (decisions 8, 9, 26) intended; the Phase B
+falsifier then showed the surviving lever isn't worth the surgery either; the
+two follow-up experiments (below) close out the remaining ideas. Net: **no
+code or engine change moves this tracker's throughput** on this board — it is
+at the GPU-FLOPS ceiling.
 
 ## Setup
 
@@ -146,29 +149,112 @@ leaving `memory_encoder` on the GPU.
 
 ## Recommendation
 
-Close the DLA effort **and** the async-tail effort. Neither the DLA path
-(12× regression, kill-criterion) nor the GPU-only async tail (~1 % hideable,
-3.4 % ceiling) is worth building. The plan's Phase B design (decisions 20–25)
-is left on record but not pursued. If tracker throughput is revisited, target
-the `image_encoder` (67 % of the frame) or the pre-box transformer stages
-(30 %).
+Close the whole pathfinder. In order tested:
 
-## Aside — the one DLA lever left alive (out of scope)
+1. DLA partitioning of any SAMURAI engine — **12× regression**, kill-criterion.
+2. GPU-only async tail — **~1 % hideable, 3.4 % ceiling**, not worth the surgery.
+3. Static rebuild of `image_encoder` — **no gain**, already static/optimal.
+4. Moving the GPU-bound detector to DLA core 1 — **NO GO**, 0 layers map at
+   this resolution, 6.7–9× slower than GPU.
 
-The only SAMURAI-adjacent engine that *would* map cleanly to DLA is the
-**detector** (`nvmminfer`/YOLO — conv-pure, DLA-friendly), which would free the
-GPU for SAMURAI. That is outside the SAMURAI-engine partitioning scope set for
-this pathfinder; noted, not pursued.
+The plan's Phase B design (decisions 20–25) is left on record but not pursued.
+This tracker, on this board, is at the **GPU-FLOPS ceiling**: 67 % of a frame
+is `image_encoder`, 30 % is the attention/decoder pre-box stages. The only
+remaining throughput levers change the *model or workload*, not its placement:
+a smaller Hiera checkpoint, a smaller crop (384 engines already exist on this
+box), more aggressive `max-kf` coasting, or more GPU (Orin AGX).
+
+## Follow-up A — static `image_encoder` rebuild: NO GAIN
+
+Hypothesis: `image_encoder` is documented as spatial-dynamic, so a dynamic-shape
+TensorRT engine might leave tactic-selection performance on the table vs a
+build specialized to the one shape actually used (512×512).
+
+Checked the deployed engine first: `image_encoder_bplus_512.engine` already has
+`Profile: Disabled` and a single fixed `1×3×512×512` binding — it is *already*
+static. Confirmed by re-building straight from the ONNX (which is itself a
+fixed `[1,3,512,512]` graph, no shape flags needed):
+
+| Build | GPU compute (mean) |
+|---|---|
+| Deployed engine (baseline) | 42.88 ms |
+| Freshly built, `--fp16`, no shape flags | 44.02 ms |
+
+No gap to close — the deployed engine was already the static/optimal build.
+**No gain available here.**
+
+## Follow-up B — move the GPU-bound detector to DLA: NO GO (9× slower, not 0 layers moved)
+
+Hypothesis: `yolo26n_1088x1920` runs on the **GPU** every frame in the real
+pipeline, competing with the SAMURAI encoder for the same SMs. `yolo_ir_640`
+already runs on DLA core 0; core 1 is idle. Moving `yolo26n` (or its ONNX
+sibling `yolov8n`) to DLA core 1 would free ~21 ms/frame of GPU time for
+SAMURAI, at zero cost to tracking quality — this was flagged as "the one DLA
+lever left alive" in the first draft of this verdict.
+
+Tested both detector ONNXs (native fixed shape `1×3×576×1920`; deployed runs
+at `1088×1920`, ~2× the pixels) on **DLA core 1, FP16, GPU fallback allowed**:
+
+| Model | DLA layers used | Layers forced to GPU | GPU compute (DLA+fallback) | Clean GPU-only build (@576×1920) |
+|---|---|---|---|---|
+| `yolo26n` | **0** | 71 (all) | 93.5 ms | 10.5 ms |
+| `yolov8n` | **0** | 40 (all) | 67.6 ms | ~10 ms (est.) |
+
+**Zero layers landed on DLA for either model** — the whole graph falls back to
+GPU, but *slower* than a clean GPU build (9× and 6.7× respectively), because of
+the DLA validation overhead plus fallback-path reformats.
+
+Root cause, from the build logs:
+
+- `Dimension: 3 (22680) exceeds maximum allowed size for DLA: 8192` — the
+  detection-head flatten (`num_anchors × grid_cells`) blows past DLA's hard
+  per-dimension limit at this resolution. At the deployed 1088×1920 (~2× the
+  pixels of the 576×1920 tested here) this is worse, not better.
+  `yolo_ir_640` avoids this because 640-class input keeps the head's flattened
+  dimension under the limit.
+- Both models also have attention-family ops in the head/backbone
+  (`/model.22/...Softmax`, `/model.10/m/m.0/attn/Softmax` for yolo26n) that DLA
+  refuses independent of size.
+
+**Conclusion:** DLA offload of a detector works only at small input resolution
+(as `yolo_ir_640` already does) — it does not generalize to a high-resolution,
+attention-augmented detector like `yolo26n`/`yolov8n` at 1088×1920. This lever
+is **not available** for the GPU-bound detector; no further action.
 
 ## Reproduce
 
-Falsifier scripts + raw logs live on the Jetson at
-`nvidia@10.0.0.41:/home/nvidia/personalspace/dla-pathfinder/` (`falsify.sh`,
-`falsify_out/{dla_fallback,gpu_baseline,dla_only}.log`). Rerun:
+All scripts under `tools/samurai/dla-falsifier/`; raw logs also live on the
+Jetson at `nvidia@10.0.0.41:/home/nvidia/personalspace/dla-pathfinder/`.
+
+**Phase A (memory_encoder DLA compile falsifier)** — `falsify.sh`,
+`falsify_out/{dla_fallback,gpu_baseline,dla_only}.log`:
 
 ```bash
 docker run --rm --runtime nvidia --network host \
   -v /home/nvidia/workspace/onnx/onnx512/onnx:/onnx \
   -v /home/nvidia/personalspace/dla-pathfinder:/work \
   gst-nvmm-infer:jp6 bash /work/falsify.sh
+```
+
+**Phase B (async-tail bubble measurement)** — `instrument.py` (patches
+`samurai_tracker.cpp`), `run_timing.sh`, `analyze.py`, `timing.log`:
+
+```bash
+python3 tools/samurai/dla-falsifier/instrument.py gst/nvmmsamurai/samurai_tracker.cpp
+# rebuild the plugin, then:
+docker run --rm --runtime nvidia --network host \
+  -v $PWD:$PWD -v <clip-dir>:/o -v <workdir>:/work \
+  -v /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro \
+  gst-nvmm-infer:jp6 bash /work/run_timing.sh
+# revert samurai_tracker.cpp afterward (instrument.py's changes are throwaway)
+```
+
+**Follow-up A/B (static encoder, detector→DLA)** — `exp_ab2.sh`:
+
+```bash
+docker run --rm --runtime nvidia --network host \
+  -v /home/nvidia/samurai-onnx:/enc \
+  -v /home/nvidia/personalspace/pr-verify/samurai-engines/yolo:/y \
+  -v /home/nvidia/personalspace/dla-pathfinder:/work \
+  gst-nvmm-infer:jp6 bash /work/exp_ab2.sh
 ```
