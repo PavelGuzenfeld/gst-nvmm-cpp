@@ -1,0 +1,22 @@
+# CPU-only research environment for tools/kalmannet_bench: learned (KalmanNet
+# family) vs. classical (IMM) filtering benchmark for maneuvering target
+# tracking. CPU-only by design -- the eventual deployment target (Jetson Orin
+# gimbal tracker) reserves the GPU for the vision pipeline, so training and
+# inference both run on CPU here, matching deployment reality end to end.
+#
+# Build:
+#   docker build --network=host -f docker/Dockerfile.kalmannet-bench -t kalmannet-bench:cpu .
+#
+# Run:
+#   docker run --rm -v $(pwd)/tools/kalmannet_bench:/work kalmannet-bench:cpu \
+#       python run_experiment.py
+FROM python:3.11-slim
+
+ENV PIP_NO_CACHE_DIR=1
+
+COPY tools/kalmannet_bench/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt \
+    && pip install torch==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
+
+WORKDIR /work
+CMD ["bash"]
