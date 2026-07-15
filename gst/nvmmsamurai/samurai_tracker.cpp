@@ -18,12 +18,13 @@
 #include "samurai_seed_math.hpp"  // bilinear/mask_to_box/mlp3 (host ref / scalars)
 #include "samurai_memory.hpp"     // MemoryBank assemble (header-only)
 #include "samurai_kernels.hpp"    // per-frame CUDA kernels (zero-copy on-device)
-#include "samurai_gmc.hpp"        // camera-motion (GMC) estimator (header-only)
 #include "kalman_box.hpp"         // gst/common
 
 #include <nvbufsurftransform.h>
 #include "trt_engine.hpp"         // gst/nvmminfer
 #include "roi_preprocess.hpp"     // gst/nvmmsecondaryinfer
+#include "xfeat_matcher.hpp"      // gst/common — XFeat+LightGlue matcher (GMC + validity)
+#include "xfeat_motion.hpp"       // gst/common — sparse independent-motion analytics
 
 #include <gst/gst.h>
 
@@ -147,14 +148,20 @@ struct SamuraiTracker::Impl {
     float *d_tposproj_b = nullptr;                  // (64)
 
     KalmanBox kf;
-    // GMC (camera-motion compensation): VIC-downscale the frame center to a small
-    // grayscale patch, zero-mean NCC vs the previous patch -> frame-to-frame shift.
+    // GMC + validity share ONE XFeat extraction per frame. The matcher (XFeat CNN +
+    // LightGlue) replaces the OpenCV phaseCorrelate GMC: camera motion = median of the
+    // background match displacements, with the tracked box excluded so the target's own
+    // motion never biases the estimate.
     bool gmc_enabled = false;
-    NvBufSurface *gmc_surf = nullptr;     // 128x128 NV12 (VIC dst)
-    std::vector<uint8_t> gmc_prev, gmc_curr;  // 128*128 Y
+    bool xfeat_ready = false;             // matcher initialized (gmc || validity)
+    XfeatMatcher xfeat;                   // owns the two engines + CUDA stream
+    XfeatFrame cur_feat;                  // this frame's features (shared with validity)
+    XfeatFrame gmc_prev;                  // previous frame's features (GMC reference)
     bool gmc_have_prev = false;
-    float gmc_scale = 1.f;                 // small-px -> full-px
-    static constexpr int kGmcN = 128, kGmcSearch = 24;
+    // GMC confidence gate (sparse): need this many background matches agreeing within
+    // kGmcTolPx of the median. NOTE: re-derive on the golden clips (see plan risks).
+    static constexpr int    kGmcMinInliers = 20;
+    static constexpr double kGmcTolPx = 2.0;
 
     int stable_frames = 0;
     int stable_frames_threshold = 10;
@@ -173,44 +180,54 @@ struct SamuraiTracker::Impl {
     bool run_encoder(NvBufSurface *frame, const TrackBox &box, std::string &err);
     bool seed_cond_frame(const TrackBox &box, std::string &err);  // post-encoder
     bool track_frame(TrackResult &out, std::string &err);         // post-encoder
-    void apply_gmc(NvBufSurface *frame);  // estimate + apply camera-motion shift
+    void extract_current(NvBufSurface *frame);  // XFeat-extract this frame -> cur_feat
+    void apply_gmc(NvBufSurface *frame);        // apply median camera-motion shift
 };
 
-// GMC: VIC-downscale the frame's center square to kGmcN x kGmcN NV12, read the Y
-// plane, zero-mean NCC vs the previous patch -> frame-to-frame scene shift, and
-// shift the last box + KF by it (cancel camera motion before the crop/predict).
+// Extract this frame's XFeat features once (shared by GMC + the element's validity
+// check). No-op if the matcher isn't initialized. On failure cur_feat is left empty,
+// which every consumer treats as "no verdict".
+void SamuraiTracker::Impl::extract_current(NvBufSurface *frame)
+{
+    cur_feat.kpts.clear(); cur_feat.descs.clear();
+    if (!xfeat_ready) return;
+    std::string e;
+    if (!xfeat.extract(frame, cur_feat, e))
+        GST_WARNING("xfeat extract failed: %s", e.c_str());
+}
+
+// GMC (camera-motion compensation): match this frame's features against the previous
+// frame's and shift the last box + KF by the dominant BACKGROUND translation (median
+// of match displacements, tracked box excluded so the target's own motion never biases
+// the estimate). Replaces the OpenCV phaseCorrelate GMC. Runs before the crop/predict;
+// assumes extract_current() populated cur_feat for this frame.
 void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
 {
-    if (!gmc_surf) return;
-    const int W = (int)frame->surfaceList[0].width, H = (int)frame->surfaceList[0].height;
-    const int sq = W < H ? W : H;
-    NvBufSurfTransformRect src{(uint32_t)((H - sq) / 2), (uint32_t)((W - sq) / 2),
-                               (uint32_t)sq, (uint32_t)sq};
-    NvBufSurfTransformParams p{};
-    p.transform_flag = NVBUFSURF_TRANSFORM_CROP_SRC | NVBUFSURF_TRANSFORM_FILTER;
-    p.transform_filter = NvBufSurfTransformInter_Bilinear;
-    p.src_rect = &src;
-    if (NvBufSurfTransform(frame, gmc_surf, &p) != NvBufSurfTransformError_Success) return;
-    if (NvBufSurfaceMap(gmc_surf, 0, 0, NVBUF_MAP_READ) != 0) return;
-    NvBufSurfaceSyncForCpu(gmc_surf, 0, 0);
-    const uint8_t *y = (const uint8_t *)gmc_surf->surfaceList[0].mappedAddr.addr[0];
-    const int pitch = gmc_surf->surfaceList[0].planeParams.pitch[0];
-    for (int r = 0; r < kGmcN; r++)
-        std::memcpy(gmc_curr.data() + (size_t)r * kGmcN, y + (size_t)r * pitch, kGmcN);
-    NvBufSurfaceUnMap(gmc_surf, 0, 0);
-    gmc_scale = (float)sq / kGmcN;
-
-    if (gmc_have_prev) {
-        GmcShift s = estimate_shift(gmc_prev.data(), gmc_curr.data(), kGmcN, kGmcSearch);
-        if (s.conf > 0.3f) {  // ignore low-confidence (textureless / scene change)
-            const float dx = s.dx * gmc_scale, dy = s.dy * gmc_scale;
-            last.left += dx; last.top += dy;
-            kf.shift(dx, dy);
-            GST_LOG("gmc shift (%.1f,%.1f) conf=%.2f", dx, dy, s.conf);
+    if (!gmc_enabled || !xfeat_ready) return;
+    if (gmc_have_prev && !cur_feat.empty() && !gmc_prev.empty()) {
+        // registration space is a non-aspect-preserving stretch of the full frame to
+        // kRW x kRH, so the per-axis reg/full scale differs unless the frame is 16:9.
+        const double W = (double)frame->surfaceList[0].width;
+        const double H = (double)frame->surfaceList[0].height;
+        const double sx = XfeatMatcher::kRW / W, sy = XfeatMatcher::kRH / H;
+        // anchor = previous frame; (b - a) = prev->cur content motion = camera shift.
+        std::vector<nvmm::motion::MatchPair> m; std::string e;
+        if (xfeat.match(gmc_prev, cur_feat, m, e)) {
+            nvmm::motion::Box exq{ last.left * sx, last.top * sy,
+                                   last.width * sx, last.height * sy };  // exclude target
+            auto g = nvmm::motion::global_translation_median(m, &exq, kGmcTolPx, kGmcMinInliers);
+            if (g.ok && g.n >= kGmcMinInliers) {
+                const float dx = (float)(g.dx / sx), dy = (float)(g.dy / sy);  // reg -> full-res
+                last.left += dx; last.top += dy;
+                kf.shift(dx, dy);
+                GST_LOG("gmc shift (%.1f,%.1f) n=%d inl=%.2f", dx, dy, g.n, g.inlier_frac);
+            }
+        } else if (!e.empty()) {
+            GST_WARNING("xfeat match (gmc) failed: %s", e.c_str());
         }
     }
-    gmc_curr.swap(gmc_prev);
-    gmc_have_prev = true;
+    gmc_prev = cur_feat;                 // this frame becomes next frame's reference
+    gmc_have_prev = !cur_feat.empty();
 }
 
 // Seed conditioning frame: prompt_encoder(box) -> mask_decoder -> select best
@@ -573,7 +590,7 @@ SamuraiTracker::~SamuraiTracker()
             if (p) cudaFree(p);
         for (float *p : impl_->d_ring_bufs) if (p) cudaFree(p);
         if (impl_->d_box) cudaFree(impl_->d_box);
-        if (impl_->gmc_surf) NvBufSurfaceDestroy(impl_->gmc_surf);
+        // (XfeatMatcher owns and frees its own buffers/stream in its destructor)
         if (impl_->stream) cudaStreamDestroy(impl_->stream);
     }
 }
@@ -600,6 +617,10 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
     impl_->kf_score_weight = cfg.kf_score_weight;
     impl_->iou_threshold   = cfg.iou_threshold;
     impl_->kf_min_area     = cfg.kf_min_area;
+    // Internal KF noise: keep SORT position default (SAMURAI parity) but allow a
+    // larger velocity process noise so KF-only coast frames track acceleration
+    // (e.g. the target's descent at clip-end) with less lag. Default = parity.
+    impl_->kf.set_noise(1.0 / 20.0, cfg.kf_vel_noise);
     if (cudaStreamCreate(&impl_->stream) != cudaSuccess) {
         err = "cudaStreamCreate failed";
         return false;
@@ -739,17 +760,12 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
     cudaMemcpy(impl_->d_tpos, impl_->consts.data("maskmem_tpos_enc"), (size_t)7 * 64 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(impl_->d_tposproj_w, impl_->consts.data("obj_ptr_tpos_proj.weight"), (size_t)64 * 256 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(impl_->d_tposproj_b, impl_->consts.data("obj_ptr_tpos_proj.bias"), 64 * sizeof(float), cudaMemcpyHostToDevice);
-    // GMC: small NV12 surface for the VIC-downscaled center patch.
+    // GMC + validity share one XFeat matcher, loading xfeat.engine + lightglue.engine
+    // from the same engine_dir as the 5 SAM engines. Init when either is enabled.
     impl_->gmc_enabled = cfg.gmc;
-    if (cfg.gmc) {
-        NvBufSurfaceCreateParams cp{};
-        cp.width = Impl::kGmcN; cp.height = Impl::kGmcN;
-        cp.colorFormat = NVBUF_COLOR_FORMAT_NV12;
-        cp.layout = NVBUF_LAYOUT_PITCH; cp.memType = NVBUF_MEM_DEFAULT; cp.gpuId = 0;
-        if (NvBufSurfaceCreate(&impl_->gmc_surf, 1, &cp) != 0) { err = "gmc surface create failed"; return false; }
-        impl_->gmc_surf->numFilled = 1;
-        impl_->gmc_prev.assign((size_t)Impl::kGmcN * Impl::kGmcN, 0);
-        impl_->gmc_curr.assign((size_t)Impl::kGmcN * Impl::kGmcN, 0);
+    if (cfg.gmc || cfg.validity) {
+        if (!impl_->xfeat.init(cfg.engine_dir, err)) return false;  // err set by init()
+        impl_->xfeat_ready = true;
     }
     // mask_decoder: persistent inputs (dec_embed, image_pe const, feat from encoder)
     // + outputs. sparse/dense are rebound per frame (seed vs tracking).
@@ -790,9 +806,25 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
     return true;
 }
 
+const XfeatFrame &SamuraiTracker::current_features() const { return impl_->cur_feat; }
+
+bool SamuraiTracker::match_features(const XfeatFrame &a, const XfeatFrame &b,
+                                    std::vector<nvmm::motion::MatchPair> &out) const
+{
+    out.clear();
+    if (!impl_->xfeat_ready) return false;
+    std::string e;
+    if (!impl_->xfeat.match(a, b, out, e)) {
+        if (!e.empty()) GST_WARNING("xfeat match (validity) failed: %s", e.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool SamuraiTracker::seed(NvBufSurface *frame, const TrackBox &box, std::string &err)
 {
-    impl_->apply_gmc(frame);   // prime the GMC reference patch from the seed frame
+    impl_->extract_current(frame);  // shared XFeat features (GMC + validity)
+    impl_->apply_gmc(frame);        // prime the GMC reference from the seed frame
     if (!impl_->run_encoder(frame, box, err)) {
         GST_WARNING("seed encoder failed: %s", err.c_str());
         return false;
@@ -811,7 +843,8 @@ bool SamuraiTracker::seed(NvBufSurface *frame, const TrackBox &box, std::string 
 bool SamuraiTracker::track(NvBufSurface *frame, bool kf_only, TrackResult &out,
                            std::string &err)
 {
-    impl_->apply_gmc(frame);   // cancel camera motion (shifts last box + KF) first
+    impl_->extract_current(frame);  // shared XFeat features (GMC + validity)
+    impl_->apply_gmc(frame);        // cancel camera motion (shifts last box + KF) first
     if (kf_only) {
         // KF-only fast frame: no engines, just advance the Kalman prediction.
         out = TrackResult{};

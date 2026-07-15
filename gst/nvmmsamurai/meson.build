@@ -8,6 +8,7 @@ gstnvmmsamurai = library('gstnvmmsamurai',
     'samurai_kernels.cu',
     '../nvmminfer/trt_engine.cpp',
     '../nvmmsecondaryinfer/roi_preprocess.cpp',
+    '../common/xfeat_matcher.cpp',   # XFeat+LightGlue matcher (GMC + validity)
   ),
   include_directories : [
     config_inc,

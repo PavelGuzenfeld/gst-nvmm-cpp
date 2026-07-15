@@ -14,14 +14,19 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
+#include <deque>
 #include <string>
 
 #include "samurai_tracker.hpp"
 #include "nvmm_det_meta.h"
 #include "nvmm_track_meta.h"
 #include "gstnvmmallocator.h"    // gst_is_nvmm_memory / gst_nvmm_memory_get_surface
+#include "xfeat_matcher.hpp"     // gst/common: nvmm::XfeatFrame / XfeatMatcher::kRW,kRH
+#include "xfeat_motion.hpp"      // gst/common: ransac_affine / region_max_residual_2ref (validity)
 
 #include <nvbufsurface.h>
+#include <nvbufsurftransform.h>
 
 GST_DEBUG_CATEGORY(gst_nvmm_samurai_debug);
 #define GST_CAT_DEFAULT gst_nvmm_samurai_debug
@@ -45,11 +50,28 @@ struct _GstNvmmSamurai {
     gchar  *seed_roi;           /* "x,y,w,h" frame coords: force initial seed here,
                                    bypassing YOLO (for targets the detector misses) */
     gboolean gmc;               /* camera-motion compensation (handheld clips) */
+    gdouble kf_vel_noise;       /* internal KF velocity process-noise std weight */
+
+    /* continuous dual-homography validity (off by default). Re-checks that the LIVE
+       track still sits on an independently-moving object; if it parks on static
+       background for val_frames consecutive checks, un-seed (teardown) + emit an
+       upstream nvmm-reset so the gate re-acquires. Catches the mid-frame parks that
+       nvmmfusekf's edge-dwell teardown cannot see. */
+    gboolean validity;
+    gint     val_stride;        /* run the costly dual-homography every Nth frame */
+    gdouble  val_rmin;          /* residual at the box below this == static background */
+    gint     val_frames;        /* consecutive static checks before teardown */
+    gint     val_ds;            /* downscale factor for the validity gray frames */
+    gint     val_dlt;           /* past-frame delta for the two motion references */
 
     /* runtime */
     nvmm::SamuraiTracker *tracker;
     guint64 frame_no;
     guint   kf_count;           /* consecutive KF-only frames since last full inference */
+    /* rolling history of per-frame XFeat features (shared from the tracker), for the
+       sparse independent-motion validity check. Replaces the OpenCV gray-frame history. */
+    std::deque<nvmm::XfeatFrame> *val_hist;
+    gint     static_dwell;      /* consecutive static-residual checks */
 
     /* re-seed authority: nvmmfusekf (downstream) sends an upstream "nvmm-reseed"
        event with a box; we force a (re)seed on the next frame. */
@@ -62,7 +84,8 @@ enum {
     PROP_0, PROP_ENGINE_DIR, PROP_CONSTS_FILE, PROP_CROP_SIZE, PROP_MAX_KF,
     PROP_KF_SCORE_WEIGHT, PROP_STABLE_FRAMES_THRESHOLD, PROP_IOU_THRESHOLD,
     PROP_KF_MIN_AREA, PROP_TARGET_CLASS, PROP_SEED_CONF, PROP_SEED_PREFER_CENTER,
-    PROP_SEED_ROI, PROP_SEED_DELAY, PROP_GMC,
+    PROP_SEED_ROI, PROP_SEED_DELAY, PROP_GMC, PROP_KF_VEL_NOISE,
+    PROP_VALIDITY, PROP_VAL_STRIDE, PROP_VAL_RMIN, PROP_VAL_FRAMES, PROP_VAL_DS, PROP_VAL_DLT,
 };
 
 #define NVMM_NV12_CAPS \
@@ -110,6 +133,8 @@ static gboolean gst_nvmm_samurai_start(GstBaseTransform *bt)
     cfg.kf_min_area = (float)self->kf_min_area;
     cfg.target_class = self->target_class;
     cfg.gmc = self->gmc;
+    cfg.validity = self->validity;   // init the shared XFeat matcher when validity is on
+    cfg.kf_vel_noise = (float)self->kf_vel_noise;
 
     self->tracker = new nvmm::SamuraiTracker();
     std::string err;
@@ -120,6 +145,9 @@ static gboolean gst_nvmm_samurai_start(GstBaseTransform *bt)
     }
     self->frame_no = 0;
     self->kf_count = 0;
+    self->static_dwell = 0;
+    if (!self->val_hist) self->val_hist = new std::deque<nvmm::XfeatFrame>();
+    self->val_hist->clear();
     self->reseed_pending = FALSE;
     self->roi_armed = FALSE;
     /* seed-roi: force the initial seed at a fixed box (bypass YOLO auto-seed). */
@@ -141,6 +169,7 @@ static gboolean gst_nvmm_samurai_stop(GstBaseTransform *bt)
 {
     auto *self = GST_NVMM_SAMURAI(bt);
     delete self->tracker; self->tracker = nullptr;
+    if (self->val_hist) self->val_hist->clear();
     return TRUE;
 }
 
@@ -198,8 +227,62 @@ static gboolean gst_nvmm_samurai_src_event(GstBaseTransform *bt, GstEvent *ev)
             gst_event_unref(ev);
             return TRUE;  // consume
         }
+        if (s && gst_structure_has_name(s, "nvmm-reset")) {
+            /* Teardown (nvmmfusekf): drop the lock so the next confirmed det
+               re-seeds fresh. Do NOT consume — let it propagate upstream so
+               nvmmdronedet un-latches its gate too. */
+            if (self->tracker) self->tracker->reset();
+            self->reseed_pending = FALSE;
+            GST_INFO_OBJECT(self, "reset requested -> tracker un-seeded");
+        }
     }
     return GST_BASE_TRANSFORM_CLASS(gst_nvmm_samurai_parent_class)->src_event(bt, ev);
+}
+
+/* Continuous validity (sparse XFeat): is the live track box on an independent mover,
+   or parked on static background? Returns TRUE if the track should be torn down.
+   The per-frame XFeat features come from the tracker (shared with GMC — one extract
+   per frame); we keep a rolling history and, every val_stride frames, fit a background
+   affine from matches OUTSIDE the box against two past references and measure the
+   in-box match residual (two-reference MIN). Low residual for val_frames consecutive
+   checks => static => teardown. NOTE: val_rmin is now a residual in registration-space
+   pixels (geometric displacement), NOT an intensity absdiff — re-tune on the clips. */
+static gboolean samurai_track_is_static(GstNvmmSamurai *self, NvBufSurface *surf,
+                                        const nvmm::TrackResult &res)
+{
+    /* keep this frame's shared features (copy) in history, every frame. */
+    const nvmm::XfeatFrame &cur = self->tracker->current_features();
+    self->val_hist->push_back(cur);
+    const size_t need = (size_t)2 * self->val_dlt + 1;
+    while (self->val_hist->size() > need) self->val_hist->pop_front();
+    if ((self->frame_no % (guint64)self->val_stride) != 0) return FALSE;  // decimate
+    if (self->val_hist->size() < need) return FALSE;
+    if (cur.empty()) return FALSE;                                        // no features — no verdict
+
+    const auto &h = *self->val_hist;
+    const nvmm::XfeatFrame &refA = h[h.size() - 1 - self->val_dlt];
+    const nvmm::XfeatFrame &refB = h[h.size() - 1 - 2 * self->val_dlt];
+
+    /* track box in registration space (per-axis stretch scale: reg is kRW x kRH). */
+    const double W = (double)surf->surfaceList[0].width, H = (double)surf->surfaceList[0].height;
+    const double sx = nvmm::XfeatMatcher::kRW / W, sy = nvmm::XfeatMatcher::kRH / H;
+    nvmm::motion::Box box{ res.box.left * sx, res.box.top * sy,
+                           res.box.width * sx, res.box.height * sy };
+
+    std::vector<nvmm::motion::MatchPair> mA, mB;
+    if (!self->tracker->match_features(cur, refA, mA) ||
+        !self->tracker->match_features(cur, refB, mB)) return FALSE;     // matcher error — no verdict
+
+    /* background transform from OUT-of-box matches, per reference. */
+    auto fA = nvmm::motion::ransac_affine(mA, &box);
+    auto fB = nvmm::motion::ransac_affine(mB, &box);
+    if (!fA.ok || !fB.ok) return FALSE;                                  // no bg model — no verdict
+
+    auto rr = nvmm::motion::region_max_residual_2ref(fA.M, mA, fB.M, mB, box, /*min_in_box=*/3);
+    if (!rr.ok) return FALSE;                                            // too few in-box — no verdict
+    if (rr.max_resid < self->val_rmin) self->static_dwell++;
+    else self->static_dwell = 0;
+    return self->static_dwell >= self->val_frames;
 }
 
 static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
@@ -214,6 +297,7 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
 
     std::string err;
     nvmm::TrackResult res;
+    gboolean val_reset = FALSE;   /* set on validity teardown -> propagate downstream */
     /* Forced re-seed from the downstream fusekf authority takes precedence. */
     if (self->reseed_pending) {
         self->reseed_pending = FALSE;
@@ -249,6 +333,21 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
             GST_WARNING_OBJECT(self, "track failed: %s", err.c_str());
             return GST_FLOW_OK;
         }
+
+        /* Continuous dual-homography validity: if the live track has parked on static
+           background (no independent motion at the box) for val_frames checks, tear it
+           down — un-seed here + push an upstream nvmm-reset so the gate re-acquires. */
+        if (self->validity && res.box.valid && samurai_track_is_static(self, surf, res)) {
+            GST_INFO_OBJECT(self, "VALIDITY teardown frame %" G_GUINT64_FORMAT
+                            " (static residual) -> un-seed + reset", fno);
+            self->tracker->reset();
+            self->static_dwell = 0;
+            res.box.valid = false;
+            val_reset = TRUE;
+            GstStructure *r = gst_structure_new_empty("nvmm-reset");
+            gst_pad_push_event(GST_BASE_TRANSFORM_SINK_PAD(bt),
+                               gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, r));
+        }
     }
 
     /* Attach the track meta (valid=FALSE until seeded). */
@@ -265,6 +364,7 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
         tm->kf_left = res.kf_box.left; tm->kf_top = res.kf_box.top;
         tm->kf_width = res.kf_box.width; tm->kf_height = res.kf_box.height;
         tm->kf_score = res.kf_box.score;
+        tm->reset = val_reset;   /* tell nvmmfusekf to drop its KF now (no coast) */
         tm->is_kf_only = res.is_kf_only;
         tm->stable_frames = res.stable_frames;
     }
@@ -289,6 +389,13 @@ static void gst_nvmm_samurai_set_property(GObject *o, guint id, const GValue *v,
     case PROP_SEED_ROI: g_free(self->seed_roi); self->seed_roi = g_value_dup_string(v); break;
     case PROP_SEED_DELAY: self->seed_delay = g_value_get_uint(v); break;
     case PROP_GMC: self->gmc = g_value_get_boolean(v); break;
+    case PROP_KF_VEL_NOISE: self->kf_vel_noise = g_value_get_double(v); break;
+    case PROP_VALIDITY:    self->validity = g_value_get_boolean(v); break;
+    case PROP_VAL_STRIDE:  self->val_stride = g_value_get_int(v); break;
+    case PROP_VAL_RMIN:    self->val_rmin = g_value_get_double(v); break;
+    case PROP_VAL_FRAMES:  self->val_frames = g_value_get_int(v); break;
+    case PROP_VAL_DS:      self->val_ds = g_value_get_int(v); break;
+    case PROP_VAL_DLT:     self->val_dlt = g_value_get_int(v); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -311,6 +418,13 @@ static void gst_nvmm_samurai_get_property(GObject *o, guint id, GValue *v, GPara
     case PROP_SEED_ROI: g_value_set_string(v, self->seed_roi); break;
     case PROP_SEED_DELAY: g_value_set_uint(v, self->seed_delay); break;
     case PROP_GMC: g_value_set_boolean(v, self->gmc); break;
+    case PROP_KF_VEL_NOISE: g_value_set_double(v, self->kf_vel_noise); break;
+    case PROP_VALIDITY:    g_value_set_boolean(v, self->validity); break;
+    case PROP_VAL_STRIDE:  g_value_set_int(v, self->val_stride); break;
+    case PROP_VAL_RMIN:    g_value_set_double(v, self->val_rmin); break;
+    case PROP_VAL_FRAMES:  g_value_set_int(v, self->val_frames); break;
+    case PROP_VAL_DS:      g_value_set_int(v, self->val_ds); break;
+    case PROP_VAL_DLT:     g_value_set_int(v, self->val_dlt); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -319,6 +433,7 @@ static void gst_nvmm_samurai_finalize(GObject *o)
 {
     auto *self = GST_NVMM_SAMURAI(o);
     g_free(self->engine_dir); g_free(self->consts_file); g_free(self->seed_roi);
+    delete self->val_hist; self->val_hist = nullptr;
     G_OBJECT_CLASS(gst_nvmm_samurai_parent_class)->finalize(o);
 }
 
@@ -381,6 +496,33 @@ static void gst_nvmm_samurai_class_init(GstNvmmSamuraiClass *klass)
         g_param_spec_boolean("gmc", "Camera-motion compensation",
             "Estimate per-frame camera translation and shift the KF/crop to cancel "
             "it (for handheld / moving-camera clips)", FALSE, f));
+    g_object_class_install_property(go, PROP_KF_VEL_NOISE,
+        g_param_spec_double("kf-vel-noise", "Internal KF velocity noise",
+            "Velocity process-noise std weight for SAMURAI's internal KF; raise above "
+            "the SORT default (0.00625) so KF-only coast frames track acceleration "
+            "(e.g. a descending target) with less lag",
+            1e-4, 1.0, 1.0 / 160.0, f));
+    g_object_class_install_property(go, PROP_VALIDITY,
+        g_param_spec_boolean("validity", "Continuous validity",
+            "Re-check the live track sits on an independent mover; un-seed (teardown) + "
+            "upstream nvmm-reset if it parks on static background. Off by default.", FALSE, f));
+    g_object_class_install_property(go, PROP_VAL_STRIDE,
+        g_param_spec_int("validity-stride", "Validity stride",
+            "Run the costly dual-homography check every Nth frame", 1, 100, 3, f));
+    g_object_class_install_property(go, PROP_VAL_RMIN,
+        g_param_spec_double("validity-rmin", "Validity residual floor",
+            "Independent-motion residual at the box below this == static background", 0.0, 255.0, 12.0, f));
+    g_object_class_install_property(go, PROP_VAL_FRAMES,
+        g_param_spec_int("validity-frames", "Validity static dwell",
+            "Consecutive static checks before teardown", 1, 1000, 8, f));
+    g_object_class_install_property(go, PROP_VAL_DS,
+        g_param_spec_int("validity-ds", "Validity downscale",
+            "Downscale factor for the validity gray frames", 1, 8, 2, f));
+    g_object_class_install_property(go, PROP_VAL_DLT,
+        g_param_spec_int("validity-dlt", "Validity frame delta",
+            "Past-frame delta for the two motion references. Default 30: a slow in-frame "
+            "drone barely moves over a few frames (residual reads 'static' -> false teardown), "
+            "so a long baseline is needed to see it as a mover.", 1, 120, 30, f));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -409,6 +551,15 @@ static void gst_nvmm_samurai_init(GstNvmmSamurai *self)
     self->seed_roi = nullptr;
     self->seed_delay = 0;
     self->gmc = FALSE;
+    self->kf_vel_noise = 1.0 / 160.0;   /* SORT default; raise for accel tracking */
+    self->validity = FALSE;             /* off by default — baseline unchanged */
+    self->val_stride = 3;
+    self->val_rmin = 12.0;
+    self->val_frames = 8;
+    self->val_ds = 2;
+    self->val_dlt = 30;   /* long baseline: slow in-frame drones need it (see validity-dlt doc) */
+    self->val_hist = nullptr;
+    self->static_dwell = 0;
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
     gst_base_transform_set_passthrough(GST_BASE_TRANSFORM(self), FALSE);
 }

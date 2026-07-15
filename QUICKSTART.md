@@ -18,6 +18,8 @@ RTP/H.264 (or file). Everything runs inside the `gst-nvmm-infer:jp6` container
   - SAMURAI: `image_encoder_bplus_512.engine`, `prompt_encoder.engine`,
     `mask_decoder.engine`, `memory_encoder.engine`, `memory_attention.engine`
   - `samurai_consts.bin` (learned out-of-engine constants)
+  - XFeat matcher (only when GMC / track-validity / `nvmmdronedet` are enabled):
+    `xfeat.engine`, `lightglue.engine` (OpenCV-free feature registration)
 
 Mounts used throughout: repo at `/src`, working dir (engines, clips, results)
 at `/o`.

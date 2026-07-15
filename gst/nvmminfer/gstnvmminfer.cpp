@@ -10,6 +10,9 @@
 #include <nvbufsurface.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
+#include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -53,8 +56,14 @@ struct _GstNvmmInfer {
     gint     dla_core;      /* -1 = GPU / as-built; 0/1 = DLA core (onnx-build path) */
     gdouble  conf_threshold;
     gdouble  iou_threshold;
+    gchar   *labels;        /* overlay-label source: NULL/""/"coco" = COCO-80 (default);
+                               "none" = no label; else = path to a labels file (one class
+                               name per line, line index = class id). */
+    gboolean merge;         /* 2nd parallel head: union dets into the upstream DetMeta + NMS */
 
     /* runtime state */
+    gint     label_mode;    /* 0 = COCO, 1 = none, 2 = file map */
+    std::vector<std::string> *label_map;   /* index = class id (label_mode == 2) */
     nvmm::TrtEngine    *engine;
     nvmm::Preprocessor *pre;
     cudaStream_t        stream;
@@ -80,7 +89,7 @@ struct _GstNvmmInfer {
 G_DEFINE_TYPE(GstNvmmInfer, gst_nvmm_infer, GST_TYPE_BASE_TRANSFORM)
 
 enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE,
-       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY };
+       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY, PROP_LABELS, PROP_MERGE };
 
 /* Detector input is fed from decoded NV12 NVMM video. Frame travels through
    unchanged; only detection meta is attached. */
@@ -135,6 +144,31 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
                           ("the \"engine-file\" property is required"),
                           ("build one on the target with trtexec --saveEngine"));
         return FALSE;
+    }
+
+    /* Resolve the overlay-label source. NULL/""/"coco" -> COCO-80 (parser default);
+       "none" -> blank label; otherwise a labels file (one class name per line, line
+       index = class id, trailing CR stripped). */
+    self->label_map->clear();
+    if (!self->labels || !self->labels[0] || g_ascii_strcasecmp(self->labels, "coco") == 0) {
+        self->label_mode = 0;
+    } else if (g_ascii_strcasecmp(self->labels, "none") == 0) {
+        self->label_mode = 1;
+    } else {
+        std::ifstream f(self->labels);
+        if (!f) {
+            GST_ELEMENT_ERROR(self, RESOURCE, NOT_FOUND,
+                              ("labels file not found: %s", self->labels), (nullptr));
+            return FALSE;
+        }
+        std::string line;
+        while (std::getline(f, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            self->label_map->push_back(line);
+        }
+        self->label_mode = 2;
+        GST_INFO_OBJECT(self, "loaded %zu overlay labels from %s",
+                        self->label_map->size(), self->labels);
     }
 
     cudaError_t ce = cudaStreamCreate(&self->stream);
@@ -231,10 +265,12 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     self->num_classes   = (int)out->dims.d[1] - 4;
     self->num_proposals = (int)out->dims.d[2];
     /* COCO-80 label table is assumed by the parser; warn on a mismatch so the
-       boxes-right-but-labels-wrong case isn't silent. */
-    if (self->num_classes != 80)
+       boxes-right-but-labels-wrong case isn't silent — unless the "labels" property
+       already overrides the label source (file/none). */
+    if (self->num_classes != 80 && self->label_mode == 0)
         GST_WARNING_OBJECT(self, "engine has %d classes, not 80 — COCO labels "
-                           "will be wrong (boxes still valid)", self->num_classes);
+                           "will be wrong (boxes still valid); set the \"labels\" property",
+                           self->num_classes);
 
     cudaError_t e1 = cudaMalloc((void **)&self->d_input, in->bytes);
     cudaError_t e2 = cudaMalloc((void **)&self->d_output, out->bytes);
@@ -332,7 +368,61 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     fm.num_objects = nvmm::yolo_parse(self->host_out->data(), yp, lb, fm.objects, &truncated);
     fm.flags = truncated ? NVMM_FRAME_META_FLAG_TRUNCATED : 0u;
 
-    gst_buffer_add_nvmm_det_meta(buf, &fm);
+    /* Override the parser's COCO-80 label per the "labels" property: blank (none) or
+       a configured class-id -> name map. Detection/gating is by class_id, so this is
+       purely the overlay/log text. */
+    if (self->label_mode != 0) {
+        for (guint32 i = 0; i < fm.num_objects; i++) {
+            NvmmDetObject &o = fm.objects[i];
+            const char *nm = "";
+            if (self->label_mode == 2 && o.class_id >= 0 &&
+                (size_t)o.class_id < self->label_map->size())
+                nm = (*self->label_map)[o.class_id].c_str();
+            std::strncpy(o.label, nm, NVMM_META_LABEL_LEN - 1);
+            o.label[NVMM_META_LABEL_LEN - 1] = '\0';
+        }
+    }
+
+    /* merge=true (2nd parallel head, e.g. on DLA): union this head's dets with the
+       existing DetMeta from the upstream head + cross-class greedy NMS, then replace
+       the meta. Both heads emit frame-coord boxes (infer_width == frame size), so the
+       union needs no rescale. Downstream sees one combined DetMeta — no other change. */
+    if (self->merge && gst_buffer_get_nvmm_det_meta(buf)) {
+        GstNvmmDetMeta *ex = gst_buffer_get_nvmm_det_meta(buf);
+        NvmmFrameMeta comb{};
+        comb.frame_number = fm.frame_number;
+        comb.infer_width = fm.infer_width; comb.infer_height = fm.infer_height;
+        guint32 k = 0;
+        for (guint32 i = 0; i < ex->num_objects && k < NVMM_META_MAX_OBJECTS; i++) comb.objects[k++] = ex->objects[i];
+        for (guint32 i = 0; i < fm.num_objects && k < NVMM_META_MAX_OBJECTS; i++) comb.objects[k++] = fm.objects[i];
+        int idx[NVMM_META_MAX_OBJECTS]; for (guint32 i = 0; i < k; i++) idx[i] = (int)i;
+        std::sort(idx, idx + k, [&](int a, int b){ return comb.objects[a].confidence > comb.objects[b].confidence; });
+        bool dead[NVMM_META_MAX_OBJECTS] = {false};
+        NvmmFrameMeta out{};
+        out.frame_number = comb.frame_number; out.infer_width = comb.infer_width; out.infer_height = comb.infer_height;
+        const float thr = (float)self->iou_threshold;
+        for (guint32 a = 0; a < k && out.num_objects < NVMM_META_MAX_OBJECTS; a++) {
+            int ia = idx[a]; if (dead[ia]) continue;
+            const NvmmDetObject &A = comb.objects[ia];
+            out.objects[out.num_objects++] = A;
+            for (guint32 b = a + 1; b < k; b++) {
+                int ib = idx[b]; if (dead[ib]) continue;
+                const NvmmDetObject &B = comb.objects[ib];
+                if (A.class_id != B.class_id) continue;
+                float x1 = std::max(A.left, B.left), y1 = std::max(A.top, B.top);
+                float x2 = std::min(A.left + A.width, B.left + B.width), y2 = std::min(A.top + A.height, B.top + B.height);
+                float iw = std::max(0.f, x2 - x1), ih = std::max(0.f, y2 - y1), I = iw * ih;
+                float U = A.width * A.height + B.width * B.height - I;
+                if (U > 0 && I / U > thr) dead[ib] = true;
+            }
+        }
+        gst_buffer_remove_meta(buf, reinterpret_cast<GstMeta *>(ex));
+        gst_buffer_add_nvmm_det_meta(buf, &out);
+        GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": merged -> %u dets",
+                       fm.frame_number, out.num_objects);
+    } else {
+        gst_buffer_add_nvmm_det_meta(buf, &fm);
+    }
     GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %u detections",
                    fm.frame_number, fm.num_objects);
     for (guint32 i = 0; i < fm.num_objects; i++) {
@@ -395,6 +485,8 @@ gst_nvmm_infer_finalize(GObject *o)
 {
     auto *self = GST_NVMM_INFER(o);
     g_free(self->engine_file);
+    g_free(self->labels);
+    delete self->label_map;
     delete self->pre;
     delete self->host_out;
     delete self->in_name;
@@ -415,6 +507,9 @@ gst_nvmm_infer_set_property(GObject *o, guint id, const GValue *v, GParamSpec *p
         case PROP_CONF_THRESHOLD:   self->conf_threshold = g_value_get_double(v); break;
         case PROP_IOU_THRESHOLD:    self->iou_threshold = g_value_get_double(v); break;
         case PROP_MEASURE_LATENCY:  self->measure = g_value_get_boolean(v); break;
+        case PROP_LABELS:           g_free(self->labels);
+                                    self->labels = g_value_dup_string(v); break;
+        case PROP_MERGE:            self->merge = g_value_get_boolean(v); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -431,6 +526,8 @@ gst_nvmm_infer_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
         case PROP_CONF_THRESHOLD:   g_value_set_double(v, self->conf_threshold); break;
         case PROP_IOU_THRESHOLD:    g_value_set_double(v, self->iou_threshold); break;
         case PROP_MEASURE_LATENCY:  g_value_set_boolean(v, self->measure); break;
+        case PROP_LABELS:           g_value_set_string(v, self->labels); break;
+        case PROP_MERGE:            g_value_set_boolean(v, self->merge); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -451,6 +548,17 @@ gst_nvmm_infer_class_init(GstNvmmInferClass *klass)
         g_param_spec_string("engine-file", "Engine file",
             "Path to a serialized TensorRT .engine (build on the target with trtexec)",
             nullptr, flags));
+    g_object_class_install_property(go, PROP_LABELS,
+        g_param_spec_string("labels", "Overlay labels",
+            "Overlay/log class-label source: unset or \"coco\" = COCO-80 names (default); "
+            "\"none\" = no label; otherwise a path to a labels file (one class name per "
+            "line, line index = class id). Detection gates on class id, so this is text only.",
+            nullptr, flags));
+    g_object_class_install_property(go, PROP_MERGE,
+        g_param_spec_boolean("merge", "Merge detections",
+            "2nd parallel head: union this engine's detections into the upstream DetMeta "
+            "with cross-class NMS (instead of writing a separate meta). Off by default.",
+            FALSE, flags));
     g_object_class_install_property(go, PROP_NET_SCALE_FACTOR,
         g_param_spec_double("net-scale-factor", "Net scale factor",
             "Pixel scale applied during preprocess (e.g. 1/255 for YOLO)",
@@ -504,6 +612,10 @@ gst_nvmm_infer_init(GstNvmmInfer *self)
     self->dla_core       = -1;
     self->conf_threshold = 0.25;
     self->iou_threshold  = 0.45;
+    self->labels         = nullptr;
+    self->label_mode     = 0;
+    self->merge          = FALSE;
+    self->label_map      = new std::vector<std::string>();
     self->engine         = nullptr;
     self->pre            = new nvmm::Preprocessor();
     self->stream         = nullptr;

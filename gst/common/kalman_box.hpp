@@ -31,6 +31,12 @@ public:
     double gating_distance(double cx, double cy, double w, double h) const;
 
     bool   initiated() const { return initiated_; }
+    /// Override the SORT process/measurement-noise std weights (default values
+    /// match SAMURAI's kalman_filter.py for parity; raise std_w_vel so the master
+    /// fusion KF tracks acceleration — e.g. a target's descent — with less lag).
+    void   set_noise(double std_w_pos, double std_w_vel) {
+        std_w_pos_ = std_w_pos; std_w_vel_ = std_w_vel;
+    }
     /// Shift the tracked center by (dx,dy) — global/camera-motion compensation
     /// (GMC): the target's image position moved with the camera this frame.
     void   shift(double dx, double dy) { mean_[0] += dx; mean_[1] += dy; }
@@ -48,8 +54,10 @@ private:
     Vec8 mean_{};
     Mat8 cov_{};
     bool initiated_ = false;
-    static constexpr double kStdWPos = 1.0 / 20.0;
-    static constexpr double kStdWVel = 1.0 / 160.0;
+    // SORT/ByteTrack noise std weights — instance-configurable (see set_noise).
+    // Defaults match SAMURAI's kalman_filter.py (parity for the SAMURAI-internal KF).
+    double std_w_pos_ = 1.0 / 20.0;
+    double std_w_vel_ = 1.0 / 160.0;
 };
 
 }  // namespace nvmm

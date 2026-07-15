@@ -25,6 +25,7 @@ struct _GstNvmmFuseKf {
     gdouble gate_thresh;     /* Mahalanobis gating distance ceiling */
     gint    max_lost;        /* consecutive no-measurement frames before "lost" */
     gint    reseed_cooldown_frames; /* frames between upstream reseed emissions */
+    gdouble vel_noise;       /* master-KF velocity process-noise std weight */
 
     /* runtime (master KF lives in C++; held via a raw pointer) */
     nvmm::KalmanBox *kf;
@@ -36,10 +37,23 @@ struct _GstNvmmFuseKf {
     gboolean ever_valid;       /* had a track at least once (gates reseed-on-loss) */
     FILE    *csv;              /* $NVMMFUSEKF_CSV per-frame box dump (eval/overlay) */
     guint64  frame_n;
+
+    /* teardown (off by default): drop+reset a track that parks in the edge band or
+       stays low-score, and emit an upstream "nvmm-reset" so SAMURAI un-seeds and the
+       gate re-acquires. Counters track consecutive offending frames. */
+    gboolean teardown;
+    gdouble  td_border_frac;
+    gint     td_border_frames;
+    gdouble  td_score_floor;
+    gint     td_score_frames;
+    gint     border_dwell;
+    gint     score_dwell;
 };
 
 enum { PROP_0, PROP_TARGET_CLASS, PROP_DET_CONF, PROP_GATE_THRESH, PROP_MAX_LOST,
-       PROP_RESEED_COOLDOWN };
+       PROP_RESEED_COOLDOWN, PROP_VEL_NOISE,
+       PROP_TEARDOWN, PROP_TD_BORDER_FRAC, PROP_TD_BORDER_FRAMES,
+       PROP_TD_SCORE_FLOOR, PROP_TD_SCORE_FRAMES };
 
 #define NVMM_NV12_CAPS \
     "video/x-raw(memory:NVMM), format=(string)NV12, " \
@@ -76,12 +90,34 @@ static gboolean best_det(GstNvmmFuseKf *self, GstNvmmDetMeta *det,
     return TRUE;
 }
 
+/* Reset the master KF to the unseeded/lost state (shared by both teardown paths). */
+static void reset_master_kf(GstNvmmFuseKf *self)
+{
+    delete self->kf; self->kf = new nvmm::KalmanBox();
+    self->kf->set_noise(1.0 / 20.0, self->vel_noise);
+    self->lost = self->max_lost + 1;
+    self->border_dwell = 0; self->score_dwell = 0;
+}
+
 static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
     auto *self = GST_NVMM_FUSEKF(bt);
     GstNvmmTrackMeta *tm = gst_buffer_get_nvmm_track_meta(buf);
     if (!tm)
         return GST_FLOW_OK;  // nothing to fuse into
+
+    /* Upstream hard teardown (e.g. nvmmsamurai validity): reset the master KF NOW so
+       the fused/overlay box disappears this frame instead of coasting max-lost frames
+       (the lingering-box bug). */
+    if (tm->reset) {
+        reset_master_kf(self);
+        tm->valid = FALSE;
+        if (self->csv)
+            std::fprintf(self->csv, "%llu,0,0.0,0.0,0.0,0.0,0.000,0\n",
+                         (unsigned long long)self->frame_n);
+        self->frame_n++;
+        return GST_FLOW_OK;
+    }
 
     /* dt in frames from PTS / buffer duration (fallback 1.0). */
     double dt = 1.0;
@@ -143,13 +179,41 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
         tm->valid = FALSE;  /* lost */
     }
 
+    /* Teardown: a VALID track that dwells in the edge band (target left the frame /
+       parked on edge clutter such as a burned-in channel overlay) or stays low-score
+       is a false track. Reset the master KF and emit an upstream "nvmm-reset" so
+       SAMURAI un-seeds and nvmmdronedet re-acquires from scratch. Off by default. */
+    gboolean tore_down = FALSE;
+    if (self->teardown && tm->valid && fw > 0 && fh > 0) {
+        const double bcx = tm->left + tm->width / 2.0, bcy = tm->top + tm->height / 2.0;
+        const double mx = self->td_border_frac * fw, my = self->td_border_frac * fh;
+        const gboolean in_border =
+            (bcx < mx || bcx > fw - mx || bcy < my || bcy > fh - my);
+        self->border_dwell = in_border ? self->border_dwell + 1 : 0;
+        const gboolean low = self->td_score_floor > 0.0 && tm->object_score < self->td_score_floor;
+        self->score_dwell = low ? self->score_dwell + 1 : 0;
+        if (self->border_dwell >= self->td_border_frames ||
+            (self->td_score_frames > 0 && self->score_dwell >= self->td_score_frames)) {
+            GST_INFO_OBJECT(self, "TEARDOWN frame %llu (border_dwell=%d score_dwell=%d) -> reset",
+                            (unsigned long long)self->frame_n, self->border_dwell, self->score_dwell);
+            reset_master_kf(self);
+            tm->valid = FALSE;
+            tore_down = TRUE;
+            GstStructure *r = gst_structure_new_empty("nvmm-reset");
+            gst_pad_push_event(GST_BASE_TRANSFORM_SINK_PAD(bt),
+                               gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, r));
+        }
+    }
+
     /* Re-seed authority: when the track is lost and a fresh YOLO det is available,
        send an upstream "nvmm-reseed" event (box in frame coords) to nvmmsamurai.
-       Cooldown prevents spamming while it recovers. */
+       Cooldown prevents spamming while it recovers. Suppressed on a teardown frame —
+       re-acquisition goes through the gate, not an immediate reseed onto a YOLO box
+       (which may be the very clutter we just tore down). */
     if (self->reseed_cooldown > 0) self->reseed_cooldown--;
     /* Only re-seed once a track has existed and been LOST — never during initial
        acquisition (SAMURAI owns that, incl. seed-delay/seed-roi). */
-    if (self->ever_valid && self->lost > self->max_lost && has_yolo && self->reseed_cooldown == 0) {
+    if (!tore_down && self->ever_valid && self->lost > self->max_lost && has_yolo && self->reseed_cooldown == 0) {
         GstStructure *s = gst_structure_new("nvmm-reseed",
             "x", G_TYPE_DOUBLE, yc - yw / 2.0, "y", G_TYPE_DOUBLE, yy - yh / 2.0,
             "w", G_TYPE_DOUBLE, yw, "h", G_TYPE_DOUBLE, yh, nullptr);
@@ -183,6 +247,10 @@ static gboolean gst_nvmm_fusekf_start(GstBaseTransform *bt)
     auto *self = GST_NVMM_FUSEKF(bt);
     delete self->kf;
     self->kf = new nvmm::KalmanBox();
+    /* Master fusion KF: keep SORT position-noise default but allow a larger
+       velocity process noise so the fused box tracks acceleration (e.g. a target
+       descending at clip-end) with less lag. Default vel_noise = SORT 1/160. */
+    self->kf->set_noise(1.0 / 20.0, self->vel_noise);
     self->have_pts = FALSE;
     self->prev_pts = 0;
     self->lost = 0;
@@ -190,6 +258,8 @@ static gboolean gst_nvmm_fusekf_start(GstBaseTransform *bt)
     self->reseed_cooldown = 0;
     self->ever_valid = FALSE;
     self->frame_n = 0;
+    self->border_dwell = 0;
+    self->score_dwell = 0;
     self->csv = nullptr;
     if (const char *p = std::getenv("NVMMFUSEKF_CSV")) {
         self->csv = std::fopen(p, "w");
@@ -207,6 +277,12 @@ static void gst_nvmm_fusekf_set_property(GObject *o, guint id, const GValue *v, 
     case PROP_GATE_THRESH:  self->gate_thresh = g_value_get_double(v); break;
     case PROP_MAX_LOST:     self->max_lost = g_value_get_int(v); break;
     case PROP_RESEED_COOLDOWN: self->reseed_cooldown_frames = g_value_get_int(v); break;
+    case PROP_VEL_NOISE: self->vel_noise = g_value_get_double(v); break;
+    case PROP_TEARDOWN: self->teardown = g_value_get_boolean(v); break;
+    case PROP_TD_BORDER_FRAC: self->td_border_frac = g_value_get_double(v); break;
+    case PROP_TD_BORDER_FRAMES: self->td_border_frames = g_value_get_int(v); break;
+    case PROP_TD_SCORE_FLOOR: self->td_score_floor = g_value_get_double(v); break;
+    case PROP_TD_SCORE_FRAMES: self->td_score_frames = g_value_get_int(v); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -220,6 +296,12 @@ static void gst_nvmm_fusekf_get_property(GObject *o, guint id, GValue *v, GParam
     case PROP_GATE_THRESH:  g_value_set_double(v, self->gate_thresh); break;
     case PROP_MAX_LOST:     g_value_set_int(v, self->max_lost); break;
     case PROP_RESEED_COOLDOWN: g_value_set_int(v, self->reseed_cooldown_frames); break;
+    case PROP_VEL_NOISE: g_value_set_double(v, self->vel_noise); break;
+    case PROP_TEARDOWN: g_value_set_boolean(v, self->teardown); break;
+    case PROP_TD_BORDER_FRAC: g_value_set_double(v, self->td_border_frac); break;
+    case PROP_TD_BORDER_FRAMES: g_value_set_int(v, self->td_border_frames); break;
+    case PROP_TD_SCORE_FLOOR: g_value_set_double(v, self->td_score_floor); break;
+    case PROP_TD_SCORE_FRAMES: g_value_set_int(v, self->td_score_frames); break;
     default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -249,6 +331,27 @@ static void gst_nvmm_fusekf_class_init(GstNvmmFuseKfClass *klass)
         g_param_spec_int("reseed-cooldown", "Reseed cooldown (frames)",
             "Frames to wait after emitting an upstream reseed before emitting another",
             0, 10000, 15, f));
+    g_object_class_install_property(go, PROP_VEL_NOISE,
+        g_param_spec_double("vel-noise", "Master-KF velocity noise",
+            "Velocity process-noise std weight for the master fusion KF; raise above "
+            "the SORT default (0.00625) so the fused box tracks acceleration with less lag",
+            1e-4, 1.0, 1.0 / 160.0, f));
+    g_object_class_install_property(go, PROP_TEARDOWN,
+        g_param_spec_boolean("teardown", "Teardown",
+            "Drop+reset a track that parks in the edge band or stays low-score, and emit "
+            "an upstream nvmm-reset so SAMURAI un-seeds and the gate re-acquires", FALSE, f));
+    g_object_class_install_property(go, PROP_TD_BORDER_FRAC,
+        g_param_spec_double("teardown-border-frac", "Teardown border band",
+            "Edge band (fraction of frame W/H): a track centered here is 'parked'", 0.0, 0.4, 0.04, f));
+    g_object_class_install_property(go, PROP_TD_BORDER_FRAMES,
+        g_param_spec_int("teardown-border-frames", "Teardown border dwell",
+            "Consecutive frames parked in the border band before teardown", 1, 100000, 20, f));
+    g_object_class_install_property(go, PROP_TD_SCORE_FLOOR,
+        g_param_spec_double("teardown-score-floor", "Teardown score floor",
+            "SAMURAI object-score below which a frame counts as low-score (0 = off)", 0.0, 1.0, 0.0, f));
+    g_object_class_install_property(go, PROP_TD_SCORE_FRAMES,
+        g_param_spec_int("teardown-score-frames", "Teardown low-score dwell",
+            "Consecutive low-score frames before teardown (0 = off)", 0, 100000, 30, f));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -269,6 +372,14 @@ static void gst_nvmm_fusekf_init(GstNvmmFuseKf *self)
     self->gate_thresh = 100.0;   /* pixels */
     self->max_lost = 30;
     self->reseed_cooldown_frames = 15;
+    self->vel_noise = 1.0 / 160.0;   /* SORT default; raise for accel tracking */
+    self->teardown = FALSE;          /* off by default — baseline unchanged */
+    self->td_border_frac = 0.04;
+    self->td_border_frames = 20;
+    self->td_score_floor = 0.0;      /* 0 = low-score teardown disabled */
+    self->td_score_frames = 30;
+    self->border_dwell = 0;
+    self->score_dwell = 0;
     self->kf = nullptr;
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
     gst_base_transform_set_passthrough(GST_BASE_TRANSFORM(self), FALSE);

@@ -121,6 +121,14 @@ test_samurai_view = executable('test_samurai_view',
   include_directories : [include_directories('../gst/nvmmsamurai')],
 )
 
+# Header-only sparse independent-motion analytics (gst/common/xfeat_motion.hpp):
+# GMC median, RANSAC background affine, in-region residual, motion-blob cluster.
+# No TRT/CUDA/OpenCV — the OpenCV-free XFeat replacement math, covered on x86 CI.
+test_xfeat_motion = executable('test_xfeat_motion',
+  ['test_xfeat_motion.cpp'],
+  include_directories : [common_inc],
+)
+
 # Seed mask-chain parity probe (bilinear + binarize) vs Phase-A golden; pure host.
 seed_math_probe = executable('seed_math_probe',
   ['seed_math_probe.cpp'],
@@ -145,6 +153,7 @@ if have_tensorrt and have_nvbufsurface
       '../gst/nvmmsamurai/samurai_kernels.cu',
       '../gst/nvmmsecondaryinfer/roi_preprocess.cpp',
       '../gst/nvmminfer/trt_engine.cpp',
+      '../gst/common/xfeat_matcher.cpp',   # GMC + validity matcher (pulled in by samurai_tracker)
     ],
     include_directories : [
       config_inc, common_inc,
@@ -197,6 +206,7 @@ test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 test('kalman_box', test_kalman_box, protocol : 'exitcode')
 test('samurai_view', test_samurai_view, protocol : 'exitcode')
+test('xfeat_motion', test_xfeat_motion, protocol : 'exitcode')
 test('yolo_parser', test_yolo_parser, protocol : 'exitcode')
 test('nvmm_tracker', test_nvmm_tracker, protocol : 'exitcode')
 test('nvmm_motion', test_nvmm_motion, protocol : 'exitcode')

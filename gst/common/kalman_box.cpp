@@ -47,7 +47,7 @@ chol_solve_vec(const std::array<std::array<double, 4>, 4> &L,
 void KalmanBox::initiate(double cx, double cy, double w, double h)
 {
     mean_ = {cx, cy, w, h, 0, 0, 0, 0};
-    const double sp = kStdWPos, sv = kStdWVel;
+    const double sp = std_w_pos_, sv = std_w_vel_;
     const double std[8] = {
         2 * sp * w, 2 * sp * h, 2 * sp * w, 2 * sp * h,
         10 * sv * w, 10 * sv * h, 10 * sv * w, 10 * sv * h};
@@ -60,7 +60,7 @@ void KalmanBox::predict(double dt)
 {
     // Process noise Q uses the PRE-prediction w,h (matches kalman_filter.py,
     // which computes std from mean[2],mean[3] before advancing the mean).
-    const double sp = kStdWPos, sv = kStdWVel;
+    const double sp = std_w_pos_, sv = std_w_vel_;
     const double q[8] = {
         sp * mean_[2], sp * mean_[3], sp * mean_[2], sp * mean_[3],
         sv * mean_[2], sv * mean_[3], sv * mean_[2], sv * mean_[3]};
@@ -90,7 +90,7 @@ void KalmanBox::project(std::array<double, 4> &pmean,
     for (int i = 0; i < 4; ++i) pmean[i] = mean_[i];
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j) pcov[i][j] = cov_[i][j];
-    const double sp = kStdWPos;
+    const double sp = std_w_pos_;
     const double r[4] = {sp * mean_[2], sp * mean_[3], sp * mean_[2], sp * mean_[3]};
     for (int i = 0; i < 4; ++i) pcov[i][i] += r[i] * r[i];
 }

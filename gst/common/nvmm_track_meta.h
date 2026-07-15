@@ -35,6 +35,11 @@ typedef struct _GstNvmmTrackMeta {
 
     gboolean is_kf_only;     /* this frame was KF-only (no engine inference) */
     guint32  stable_frames;  /* SAMURAI consecutive-stable-frame counter */
+
+    /* Hard-teardown signal propagated DOWNSTREAM: when an upstream element (e.g.
+       nvmmsamurai validity) drops the track, it sets this so nvmmfusekf resets its
+       master KF immediately instead of coasting max-lost frames (no lingering box). */
+    gboolean reset;
 } GstNvmmTrackMeta;
 
 GType              gst_nvmm_track_meta_api_get_type(void);

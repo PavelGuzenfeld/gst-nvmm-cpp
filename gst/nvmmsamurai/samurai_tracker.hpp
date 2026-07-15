@@ -23,13 +23,17 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <cuda_runtime.h>
 #include <nvbufsurface.h>
 
+#include "xfeat_motion.hpp"  // gst/common — nvmm::motion::MatchPair (std-only, no TRT)
+
 namespace nvmm {
 
-class TrtEngine;  // gst/nvmminfer/trt_engine.hpp
+class TrtEngine;   // gst/nvmminfer/trt_engine.hpp
+struct XfeatFrame; // gst/common/xfeat_matcher.hpp (shared XFeat features for GMC + validity)
 
 /// Axis-aligned box in frame pixel coords.
 struct TrackBox {
@@ -58,6 +62,11 @@ struct SamuraiConfig {
     float kf_min_area = 25.f;        // min KF box area (px^2) to accept a KF update
     int   target_class = 0;          // YOLO class to seed from
     bool  gmc = false;               // camera-motion compensation (handheld clips)
+    bool  validity = false;          // element runs the static-track validity check;
+                                     // only gates whether the shared XFeat matcher is
+                                     // initialized here (the check itself is in the element)
+    float kf_vel_noise = 1.f / 160.f;// internal KF velocity process-noise std weight
+                                     // (SORT default = parity; raise to track accel)
 };
 
 class SamuraiTracker {
@@ -81,7 +90,25 @@ public:
     bool track(NvBufSurface *frame, bool kf_only, TrackResult &out, std::string &err);
 
     bool seeded() const { return seeded_; }
+    /// Drop the lock: go back to unseeded so the next confirmed det re-seeds from
+    /// scratch. Safe because track() only runs while seeded() and seed() fully
+    /// re-initializes (clears the maskmem ring + frame_idx). Used by nvmmfusekf's
+    /// teardown ("nvmm-reset" upstream event).
+    void reset() { seeded_ = false; }
     const SamuraiConfig &config() const { return cfg_; }
+
+    /// The current frame's shared XFeat features (extracted once per seed()/track()
+    /// when gmc or validity is enabled). Empty if the matcher is not initialized or
+    /// extraction failed. The element's validity check reuses this to avoid a second
+    /// per-frame extract(). Valid until the next seed()/track() call.
+    const XfeatFrame &current_features() const;
+
+    /// Match two feature sets via the shared XFeat matcher (exposes the private
+    /// matcher as a service to the element's validity check). False if the matcher
+    /// isn't initialized or on a TRT error; `out` is empty when either set has too
+    /// few keypoints (caller treats empty as "no verdict").
+    bool match_features(const XfeatFrame &a, const XfeatFrame &b,
+                        std::vector<nvmm::motion::MatchPair> &out) const;
 
 private:
     struct Impl;
