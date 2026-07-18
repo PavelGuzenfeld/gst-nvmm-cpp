@@ -68,6 +68,7 @@ nav:
   - Embedding a pipeline: embedding.md
   - Validation & benchmarks: validation.md
   - Validation harness: harness.md
+  - Learned vs. classical filtering: kalmannet-benchmark.md
   - Roadmap:
       - Hardware-acceleration plan: HW_ACCEL_EXPLORATION.md
       - Production plan: PRODUCTION_PLAN.md

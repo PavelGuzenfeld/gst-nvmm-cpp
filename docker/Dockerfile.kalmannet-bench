@@ -14,6 +14,11 @@ FROM python:3.11-slim
 
 ENV PIP_NO_CACHE_DIR=1
 
+# ffmpeg: matplotlib needs it to write mp4 animations (make_animation.py). The
+# pillow writer (already bundled) covers GIF; ffmpeg is only for the mp4 path.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY tools/kalmannet_bench/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt \
     && pip install torch==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
