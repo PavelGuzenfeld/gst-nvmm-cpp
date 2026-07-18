@@ -8,3 +8,10 @@ compile_commands.json
 
 # MkDocs build output
 /site/
+
+# kalmannet_bench: generated data/results/checkpoints, not source
+tools/kalmannet_bench/data/splits/
+tools/kalmannet_bench/results/
+tools/kalmannet_bench/*.pt
+tools/kalmannet_bench/**/__pycache__/
+tools/kalmannet_bench/.pytest_cache/
