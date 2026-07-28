@@ -120,13 +120,39 @@ jobs:
 
       - name: Check for forbidden references
         run: |
-          # Ensure no private project names leak into public code
-          # Exclude this workflow file itself (contains the search term)
-          if grep -ri "rocx" --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' . --exclude-dir=.github; then
-            echo "ERROR: Found forbidden reference to private project"
+          # Ensure no private data or project IP leaks into this public repo.
+          # Covers .sh/.py/.yml/.txt as well: tooling scripts were previously
+          # unscanned and are where site paths and dataset IDs accumulate.
+          # Exclude this workflow file itself (it contains the search terms).
+          if grep -riE "$FORBIDDEN" \
+               --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' \
+               --include='*.sh' --include='*.py' --include='*.yml' --include='*.yaml' \
+               --include='*.txt' . --exclude-dir=.github; then
+            echo "ERROR: Found forbidden reference (private name, host path, or dataset id)"
             exit 1
           fi
-          echo "OK: No forbidden references found"
+          echo "OK: No forbidden references in tracked files"
+        env:
+          # Internal org/project names, ticket prefix, board paths and host, mission
+          # domain, and evaluation-set sequence-ID prefixes.
+          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41'
+
+      - name: Check commit messages for forbidden references
+        run: |
+          # File content is not enough -- commit messages leak too, and they are
+          # far harder to scrub once pushed.
+          git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF:-main}" || true
+          RANGE="origin/${GITHUB_BASE_REF:-main}..HEAD"
+          if ! git rev-parse "origin/${GITHUB_BASE_REF:-main}" >/dev/null 2>&1; then
+            echo "SKIP: base ref unavailable"; exit 0
+          fi
+          if git log --format='%B' "$RANGE" | grep -inE "$FORBIDDEN"; then
+            echo "ERROR: Found forbidden reference in a commit message"
+            exit 1
+          fi
+          echo "OK: No forbidden references in commit messages"
+        env:
+          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41'
 
       - name: Check license headers
         run: |
