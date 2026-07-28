@@ -53,6 +53,9 @@ struct _GstNvmmInfer {
     gint     dla_core;      /* -1 = GPU / as-built; 0/1 = DLA core (onnx-build path) */
     gdouble  conf_threshold;
     gdouble  iou_threshold;
+    guint    infer_interval; /* run the network every Nth frame (1 = every frame) */
+    guint    infer_gate_frames; /* require this many consecutive inferred frames WITH a
+                                   detection before decimating; 0 = ungated */
 
     /* runtime state */
     nvmm::TrtEngine    *engine;
@@ -68,6 +71,10 @@ struct _GstNvmmInfer {
     int     net_w, net_h;
     int     num_classes, num_proposals;
     guint64 frame_no;
+    guint64 seen_frames;    /* every frame reaching transform_ip; drives infer-interval.
+                               Separate from frame_no, which counts only inferred
+                               frames (it is the det-meta frame_number). */
+    guint   acq_run;        /* consecutive inferred frames that produced >=1 detection */
 
     /* performance measurement (property measure-latency) */
     gboolean   measure;
@@ -80,7 +87,8 @@ struct _GstNvmmInfer {
 G_DEFINE_TYPE(GstNvmmInfer, gst_nvmm_infer, GST_TYPE_BASE_TRANSFORM)
 
 enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE,
-       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY };
+       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY, PROP_INFER_INTERVAL,
+       PROP_INFER_GATE_FRAMES };
 
 /* Detector input is fed from decoded NV12 NVMM video. Frame travels through
    unchanged; only detection meta is attached. */
@@ -265,6 +273,26 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
     auto *self = GST_NVMM_INFER(bt);
 
+    /* infer-interval: run the network on every Nth frame only. A skipped frame passes
+       through with NO detection meta -- downstream already handles a frame the detector
+       found nothing in (nvmmfusekf gates on has_yolo), so no new code path is needed.
+       Deliberately never re-attaches the previous frame's dets: stale meta would assert
+       a box for a frame that was never inferred, dragging the fused KF toward an old
+       position and letting flush-BB publish a stale tight box.
+
+       infer-gate-frames holds the interval OFF until detections are flowing steadily
+       (acq_run consecutive inferred frames with >=1 detection). No detections is
+       precisely when the tracker is acquiring or recovering from loss, and that is
+       where decimation did its damage: at N=3 ungated, 3 of 12 GT sequences never
+       acquired at all. Note this gates on ANY detection, not target-class -- nvmminfer
+       does not know the target class (nvmmdetgate/nvmmfusekf own that), so it is a
+       proxy, not an exact track-state signal. */
+    const gboolean gate_open = self->infer_gate_frames == 0 ||
+                               self->acq_run >= self->infer_gate_frames;
+    if (self->infer_interval > 1 && gate_open &&
+        (self->seen_frames++ % self->infer_interval) != 0)
+        return GST_FLOW_OK;
+
     NvBufSurface *surf = surface_of(buf);
     if (!surf) {
         GST_WARNING_OBJECT(self, "no NvBufSurface in buffer");
@@ -331,6 +359,15 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     bool truncated = false;
     fm.num_objects = nvmm::yolo_parse(self->host_out->data(), yp, lb, fm.objects, &truncated);
     fm.flags = truncated ? NVMM_FRAME_META_FLAG_TRUNCATED : 0u;
+
+    /* Acquisition-gate state: a run of inferred frames that each produced a detection.
+       Reset on the first empty frame, so losing the target immediately restores
+       every-frame inference for fast (re)acquisition. */
+    if (fm.num_objects > 0) {
+        if (self->acq_run < G_MAXUINT) self->acq_run++;
+    } else {
+        self->acq_run = 0;
+    }
 
     gst_buffer_add_nvmm_det_meta(buf, &fm);
     GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %u detections",
@@ -415,6 +452,8 @@ gst_nvmm_infer_set_property(GObject *o, guint id, const GValue *v, GParamSpec *p
         case PROP_CONF_THRESHOLD:   self->conf_threshold = g_value_get_double(v); break;
         case PROP_IOU_THRESHOLD:    self->iou_threshold = g_value_get_double(v); break;
         case PROP_MEASURE_LATENCY:  self->measure = g_value_get_boolean(v); break;
+        case PROP_INFER_INTERVAL:   self->infer_interval = g_value_get_uint(v); break;
+        case PROP_INFER_GATE_FRAMES: self->infer_gate_frames = g_value_get_uint(v); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -431,6 +470,8 @@ gst_nvmm_infer_get_property(GObject *o, guint id, GValue *v, GParamSpec *p)
         case PROP_CONF_THRESHOLD:   g_value_set_double(v, self->conf_threshold); break;
         case PROP_IOU_THRESHOLD:    g_value_set_double(v, self->iou_threshold); break;
         case PROP_MEASURE_LATENCY:  g_value_set_boolean(v, self->measure); break;
+        case PROP_INFER_INTERVAL:   g_value_set_uint(v, self->infer_interval); break;
+        case PROP_INFER_GATE_FRAMES: g_value_set_uint(v, self->infer_gate_frames); break;
         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
     }
 }
@@ -477,6 +518,25 @@ gst_nvmm_infer_class_init(GstNvmmInferClass *klass)
             "Log per-stage inner-pipeline latency (preprocess/infer/copy/parse) "
             "and FPS every 60 frames at INFO level",
             FALSE, flags));
+    g_object_class_install_property(go, PROP_INFER_INTERVAL,
+        g_param_spec_uint("infer-interval", "Inference interval",
+            "Run the detector on every Nth frame (1 = every frame). Skipped frames "
+            "pass through with no detection meta. Trades detection freshness for "
+            "throughput: measured on Orin NX, a 1088x1920 YOLO is ~50% of the frame "
+            "budget when the tracker coasts (nvmmsamurai max-kf>0), so N=3 buys ~+50% "
+            "fps. Costs up to N-1 frames of extra reseed latency and removes YOLO "
+            "refinement from nvmmfusekf on skipped frames",
+            1, 1000, 1, flags));
+    g_object_class_install_property(go, PROP_INFER_GATE_FRAMES,
+        g_param_spec_uint("infer-gate-frames", "Acquisition gate (frames)",
+            "Hold infer-interval OFF until this many consecutive inferred frames have "
+            "produced a detection, and re-arm the hold as soon as one produces none; "
+            "0 = decimate unconditionally. Ungated decimation cost ~23% GT success with "
+            "3 of 12 sequences never acquiring, and nearly all of that was acquisition "
+            "and reacquisition -- which is exactly what this keeps at full rate. Gates "
+            "on ANY detection, not target-class: nvmminfer does not know the target "
+            "class, so this is a proxy for track state, not the real thing",
+            0, 10000, 0, flags));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
@@ -515,6 +575,10 @@ gst_nvmm_infer_init(GstNvmmInfer *self)
     self->net_w = self->net_h = 0;
     self->num_classes = self->num_proposals = 0;
     self->frame_no = 0;
+    self->infer_interval = 1;
+    self->infer_gate_frames = 0;
+    self->seen_frames = 0;
+    self->acq_run = 0;
     self->measure = FALSE;
     self->ev0 = self->ev1 = self->ev2 = self->ev3 = nullptr;
     self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
