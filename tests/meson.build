@@ -117,6 +117,14 @@ test_kalman_box = executable('test_kalman_box',
   include_directories : [common_inc],
 )
 
+# Header-only sparse independent-motion analytics (gst/common/xfeat_motion.hpp):
+# GMC median, RANSAC background affine, in-region residual, motion-blob cluster.
+# No TRT/CUDA/OpenCV — the OpenCV-free XFeat replacement math, covered on x86 CI.
+test_xfeat_motion = executable('test_xfeat_motion',
+  ['test_xfeat_motion.cpp'],
+  include_directories : [common_inc],
+)
+
 # Header-only FFT phase correlation (gst/common/phase_correlation.hpp); no CUDA/GST.
 test_phase_correlation = executable('test_phase_correlation',
   'test_phase_correlation.cpp',
@@ -213,6 +221,7 @@ test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
 # that forces detect_leaks=0 for the rest of the suite (see run-sanitizers.sh).
 test('kalman_box', test_kalman_box, protocol : 'exitcode', suite : 'pure_cpp')
 test('phase_correlation', test_phase_correlation, protocol : 'exitcode', suite : 'pure_cpp')
+test('xfeat_motion', test_xfeat_motion, protocol : 'exitcode', suite : 'pure_cpp')
 test('gmc_backend', test_gmc_backend, protocol : 'exitcode', suite : 'pure_cpp')
 test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300, suite : 'pure_cpp')
 test('gmc_mask', test_gmc_mask, protocol : 'exitcode', suite : 'pure_cpp')
