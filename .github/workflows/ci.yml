@@ -127,7 +127,8 @@ jobs:
           if grep -riE "$FORBIDDEN" \
                --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' \
                --include='*.sh' --include='*.py' --include='*.yml' --include='*.yaml' \
-               --include='*.txt' . --exclude-dir=.github; then
+               --include='*.txt' --include='meson.build' --include='*.build' \
+               . --exclude-dir=.github; then
             echo "ERROR: Found forbidden reference (private name, host path, or dataset id)"
             exit 1
           fi
@@ -135,7 +136,7 @@ jobs:
         env:
           # Internal org/project names, ticket prefix, board paths and host, mission
           # domain, and evaluation-set sequence-ID prefixes.
-          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41'
+          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone'
 
       - name: Check commit messages for forbidden references
         run: |
@@ -152,7 +153,7 @@ jobs:
           fi
           echo "OK: No forbidden references in commit messages"
         env:
-          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41'
+          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone'
 
       - name: Check license headers
         run: |
