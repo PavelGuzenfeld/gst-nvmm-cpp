@@ -12,7 +12,7 @@
 # exist in this checkout -- so absolute scores here are NOT comparable to
 # results/$DEPLOY_SCORECARD. Both arms are identical apart from infer-interval, so the
 # A/B is internally valid, which is all this needs to be.
-set -eu
+set -euo pipefail
 cd $ASSET_DIR
 B=$REPO_SRC/builddir
 SEQS="${SEQS:-seq-C seq-K seq-L seq-B seq-G}"

@@ -80,7 +80,11 @@ struct _GstNvmmInfer {
     gboolean   measure;
     cudaEvent_t ev0, ev1, ev2, ev3;  /* pre-start, pre-end, infer-end, copy-end */
     gdouble    acc_pre, acc_infer, acc_copy, acc_parse;  /* ms summed over window */
-    guint      perf_frames;
+    guint      perf_frames;        /* INFERRED frames in the window */
+    guint      perf_stream_frames; /* ALL frames in the window; differs once
+                                      infer-interval skips, and the two must be
+                                      reported separately or the rate is 1/N of
+                                      the real stream rate */
     gint64     window_start_us;
 };
 
@@ -157,6 +161,7 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         cudaEventCreate(&self->ev2); cudaEventCreate(&self->ev3);
         self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
         self->perf_frames = 0;
+        self->perf_stream_frames = 0;
         self->window_start_us = g_get_monotonic_time();
     }
 
@@ -287,6 +292,9 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
        acquired at all. Note this gates on ANY detection, not target-class -- nvmminfer
        does not know the target class (nvmmdetgate/nvmmfusekf own that), so it is a
        proxy, not an exact track-state signal. */
+    self->perf_stream_frames++;  /* count BEFORE the skip: the perf window reports a
+                                    stream rate, and skipped frames are still frames */
+
     const gboolean gate_open = self->infer_gate_frames == 0 ||
                                self->acq_run >= self->infer_gate_frames;
     if (self->infer_interval > 1 && gate_open &&
@@ -391,15 +399,21 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
             const gint64 now = g_get_monotonic_time();
             const double secs = (now - self->window_start_us) / 1e6;
             const double n = self->perf_frames;
+            /* Two rates, because infer-interval decouples them: per-stage costs are
+               per INFERRED frame, while throughput must be per STREAM frame. Reporting
+               only the former reads as 1/interval of the true rate. */
             GST_INFO_OBJECT(self,
-                "perf over %d frames: pre=%.2f infer=%.2f copy=%.2f parse=%.2f "
-                "inner-total=%.2f ms | %.1f FPS (wall)",
-                (int)n, self->acc_pre / n, self->acc_infer / n, self->acc_copy / n,
+                "perf over %d inferred / %u stream frames: pre=%.2f infer=%.2f "
+                "copy=%.2f parse=%.2f inner-total=%.2f ms | %.1f inferred/s | "
+                "%.1f FPS (wall, stream)",
+                (int)n, self->perf_stream_frames,
+                self->acc_pre / n, self->acc_infer / n, self->acc_copy / n,
                 self->acc_parse / n,
                 (self->acc_pre + self->acc_infer + self->acc_copy + self->acc_parse) / n,
-                n / secs);
+                n / secs, self->perf_stream_frames / secs);
             self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
             self->perf_frames = 0;
+            self->perf_stream_frames = 0;
             self->window_start_us = now;
         }
     }
@@ -583,6 +597,7 @@ gst_nvmm_infer_init(GstNvmmInfer *self)
     self->ev0 = self->ev1 = self->ev2 = self->ev3 = nullptr;
     self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
     self->perf_frames = 0;
+    self->perf_stream_frames = 0;
     self->window_start_us = 0;
     /* In-place: same caps in/out, the frame's pixels are never copied —
        transform_ip gets the writable buffer and only attaches detection meta. */

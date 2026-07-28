@@ -81,11 +81,16 @@ def main():
     missing = sorted(set(base) ^ set(test))
     common = sorted(set(base) & set(test))
 
+    # A valid-flag flip scores 0, it is not skipped. Excluding flips from the IoU
+    # distribution flatters exactly the runs that are worst: one that flips on most
+    # frames would report a high median over the surviving minority. One run having a
+    # box where the other has none IS maximal disagreement, so 0 is the honest score.
     ious, flips, both_invalid = [], [], 0
     for n in common:
         b, t = base[n], test[n]
         if b["valid"] != t["valid"]:
             flips.append((n, b["valid"], t["valid"]))
+            ious.append((n, 0.0))
             continue
         if not b["valid"]:
             both_invalid += 1
@@ -102,6 +107,9 @@ def main():
           f" ({100.0 * fused_base / max(1, len(base)):.1f}%)"
           f"  test={fused_test} ({100.0 * fused_test / max(1, len(test)):.1f}%)")
     print(f"both-invalid frames excluded from IoU: {both_invalid}")
+    # Headline, not a footnote: a flip means one run reports a target and the other
+    # does not, which matters more than any IoU number printed beside it.
+    print(f"valid-flag flips (scored 0, allowed {a.allow_flips}): {len(flips)}")
 
     fails = []
     if missing:

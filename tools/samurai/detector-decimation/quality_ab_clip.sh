@@ -11,7 +11,7 @@
 # detections (clip3: 74% of frames have conf>=0.80 dets but only 3.9% were fused),
 # and the run produced a bogus "decimation diverges the track" result.
 # seed-delay pins the seed to a frame where the target is known to be present.
-set -u
+set -uo pipefail
 C=$1; SEED=$2; DELAY=${3:-0}
 O=$ASSET_DIR
 B=$REPO_SRC/builddir

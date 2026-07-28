@@ -9,7 +9,7 @@
 #   2. PARITY -- at infer-interval=3, does carry bring the emitted box back to the
 #      undecimated baseline (median IoU >= 0.99, no frame < 0.9)?
 # Baseline for both is (interval=1, carry=0) = today's deployed behaviour.
-set -u
+set -uo pipefail
 C=$1; SEED=$2; DELAY=${3:-0}
 O=$ASSET_DIR
 B=$REPO_SRC/builddir

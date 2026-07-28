@@ -2,7 +2,7 @@
 # Find the highest-confidence detections per clip WITH frame numbers, so a seed ROI
 # can be visually verified instead of taken from whatever the detector emitted first
 # (which on clip2/clip3 turned out to be false positives on cloud/terrain texture).
-set -u
+set -uo pipefail
 export GST_PLUGIN_PATH=$REPO_SRC/builddir
 for C in clip2 clip3; do
   GST_DEBUG=nvmminfer:6 gst-launch-1.0 -q \

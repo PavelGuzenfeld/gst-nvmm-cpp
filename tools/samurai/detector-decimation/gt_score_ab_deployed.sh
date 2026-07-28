@@ -10,7 +10,7 @@
 #
 # Per-sequence extract -> run both arms -> delete frames: the box sits at 94% disk,
 # so all 12 sequences must never be on disk at once.
-set -u
+set -uo pipefail
 cd $ASSET_DIR
 O=$ASSET_DIR
 SRC=$DEPLOY_SRC
@@ -21,10 +21,13 @@ mkdir -p results/gtd_n1 results/gtd_n3
 while read -r S; do
   [ -z "$S" ] && continue
   echo "######## $S ########"
-  N=$(python3 - "$S" <<'PY'
+  # Archive path goes through argv, NOT interpolation: this heredoc is quoted
+  # (<<'PY'), so a "$VAR" inside it stays a literal and silently opens a file that
+  # does not exist.
+  N=$(python3 - "$S" "$EVALSET_ZIP" <<'PY'
 import sys, zipfile
-s = sys.argv[1]
-z = zipfile.ZipFile("$EVALSET_ZIP"); names = z.namelist()
+s, zip_path = sys.argv[1], sys.argv[2]
+z = zipfile.ZipFile(zip_path); names = z.namelist()
 mem = [n for n in names if n.startswith("train/%s/" % s)]
 if not mem:
     print(0); sys.exit(0)

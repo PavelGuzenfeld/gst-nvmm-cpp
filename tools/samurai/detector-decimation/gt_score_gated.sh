@@ -6,7 +6,7 @@
 # holds decimation off until `gate` consecutive inferred frames have produced a
 # detection, and re-arms the hold the moment one produces none -- so acquisition and
 # reacquisition run at full detector rate, which is where the damage was.
-set -u
+set -uo pipefail
 cd $ASSET_DIR
 O=$ASSET_DIR
 SRC=$DEPLOY_SRC
@@ -19,10 +19,11 @@ for A in $ARMS; do mkdir -p "results/gtg_n${A%%:*}g${A##*:}"; done
 while read -r S; do
   [ -z "$S" ] && continue
   echo "######## $S ########"
-  N=$(python3 - "$S" <<'PY'
+  # Archive path via argv: this heredoc is quoted, so "$VAR" would stay literal.
+  N=$(python3 - "$S" "$EVALSET_ZIP" <<'PY'
 import sys, zipfile
-s = sys.argv[1]
-z = zipfile.ZipFile("$EVALSET_ZIP"); names = z.namelist()
+s, zip_path = sys.argv[1], sys.argv[2]
+z = zipfile.ZipFile(zip_path); names = z.namelist()
 mem = [n for n in names if n.startswith("train/%s/" % s)]
 if not mem:
     print(0); sys.exit(0)

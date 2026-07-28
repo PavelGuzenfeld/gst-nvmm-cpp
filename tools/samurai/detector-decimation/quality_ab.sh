@@ -3,7 +3,7 @@
 # Dumps nvmmfusekf's EMITTED per-frame box (that is what downstream receives, and
 # where decimation's cost lands) for interval=1/2/3, then diffs 2 and 3 vs 1.
 # Bar: per-frame IoU >= 0.99 median, no frame < 0.9, no valid-flag flips.
-set -u
+set -uo pipefail
 O=$ASSET_DIR
 B=$REPO_SRC/builddir
 R=$O/results/interval_quality

@@ -12,7 +12,7 @@
 # what a detector-decimation property could ever convert into throughput.
 #
 # Runs on the HOST (plugins load natively; host has python3-gi).
-set -u
+set -uo pipefail
 O=$ASSET_DIR
 export GST_PLUGIN_PATH=$DEPLOY_SRC/builddir-fix
 export GST_DEBUG=0

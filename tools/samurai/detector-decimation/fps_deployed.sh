@@ -7,7 +7,7 @@
 # (nvmmdetgate, kf-vel-noise, fusekf teardown, deploy build) on the SAME clip and the
 # same forced seed, so the two are directly comparable and the gains can be checked
 # for survival against the extra elements.
-set -u
+set -uo pipefail
 O=$ASSET_DIR
 B=$DEPLOY_SRC/builddir-fix
 export GST_PLUGIN_PATH=$B GST_DEBUG=0

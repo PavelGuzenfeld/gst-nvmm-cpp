@@ -114,46 +114,32 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
 
+    # Single source of truth for both checks below. Kept job-level because having it
+    # twice already caused one near-miss: adding a term meant editing two places.
+    #
+    # This is a denylist and therefore always lags -- it encodes leaks we happened to
+    # notice. The shape-based checks in tools/check_forbidden.sh are the fail-closed
+    # half; this list covers the specific names that no pattern would catch.
+    env:
+      FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # commit-message scan needs real history, not a shallow tip
 
-      - name: Check for forbidden references
-        run: |
-          # Ensure no private data or project IP leaks into this public repo.
-          # Covers .sh/.py/.yml/.txt as well: tooling scripts were previously
-          # unscanned and are where site paths and dataset IDs accumulate.
-          # Exclude this workflow file itself (it contains the search terms).
-          if grep -riE "$FORBIDDEN" \
-               --include='*.cpp' --include='*.hpp' --include='*.h' --include='*.md' \
-               --include='*.sh' --include='*.py' --include='*.yml' --include='*.yaml' \
-               --include='*.txt' --include='meson.build' --include='*.build' \
-               . --exclude-dir=.github; then
-            echo "ERROR: Found forbidden reference (private name, host path, or dataset id)"
-            exit 1
-          fi
-          echo "OK: No forbidden references in tracked files"
-        env:
-          # Internal org/project names, ticket prefix, board paths and host, mission
-          # domain, and evaluation-set sequence-ID prefixes.
-          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone'
+      - name: Check tracked files for forbidden references
+        run: tools/check_forbidden.sh files
 
       - name: Check commit messages for forbidden references
-        run: |
-          # File content is not enough -- commit messages leak too, and they are
-          # far harder to scrub once pushed.
-          git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF:-main}" || true
-          RANGE="origin/${GITHUB_BASE_REF:-main}..HEAD"
-          if ! git rev-parse "origin/${GITHUB_BASE_REF:-main}" >/dev/null 2>&1; then
-            echo "SKIP: base ref unavailable"; exit 0
-          fi
-          if git log --format='%B' "$RANGE" | grep -inE "$FORBIDDEN"; then
-            echo "ERROR: Found forbidden reference in a commit message"
-            exit 1
-          fi
-          echo "OK: No forbidden references in commit messages"
+        run: tools/check_forbidden.sh messages
         env:
-          FORBIDDEN: 'rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone'
+          # Push and pull_request need different ranges. On push, GITHUB_BASE_REF is
+          # empty and origin/main == HEAD, so the naive "origin/main..HEAD" is EMPTY
+          # and the check passes vacuously -- it only ever worked on PRs.
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
 
       - name: Check license headers
         run: |

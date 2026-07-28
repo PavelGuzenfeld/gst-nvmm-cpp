@@ -12,7 +12,7 @@
 #               the real target is still unacquired.
 #
 # Encoding runs in the container -- the host lacks h264parse (plugins-bad).
-set -u
+set -uo pipefail
 O=$ASSET_DIR
 SRC=$DEPLOY_SRC
 IMG=gst-nvmm-infer:jp6
@@ -54,10 +54,11 @@ render clip1_n3gate "$WA1" "$TRK_SEEDED" 3 5
 S=seq-F
 if [ ! -f "$O/seqs/train/$S/000001.jpg" ]; then
   echo "=== extract $S ==="
-  ( cd "$O" && python3 - "$S" <<'PY'
+  # Archive path via argv: this heredoc is quoted, so "$VAR" would stay literal.
+  ( cd "$O" && python3 - "$S" "$EVALSET_ZIP" <<'PY'
 import sys, zipfile
-s = sys.argv[1]
-z = zipfile.ZipFile("$EVALSET_ZIP")
+s, zip_path = sys.argv[1], sys.argv[2]
+z = zipfile.ZipFile(zip_path)
 mem = [n for n in z.namelist() if n.startswith("train/%s/" % s)]
 z.extractall("seqs", members=mem)
 print("extracted", sum(1 for n in mem if n.endswith(".jpg")), "frames")

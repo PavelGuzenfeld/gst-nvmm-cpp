@@ -3,7 +3,7 @@
 # interval=1    -> baseline (detector every frame)
 # interval=1000 -> functional check: should reproduce the detector-absent arm
 #                  (40.3 fps measured in the deploy build) since only frame 0 infers.
-set -u
+set -uo pipefail
 O=$ASSET_DIR
 B=$REPO_SRC/builddir
 export GST_PLUGIN_PATH=$B GST_DEBUG=0
