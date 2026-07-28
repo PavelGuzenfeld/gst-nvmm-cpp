@@ -1,4 +1,4 @@
-# Quick start — drone tracker pipeline
+# Quick start — target tracker pipeline
 
 Zero-copy GStreamer tracker on Jetson Orin NX: **YOLO26n** detector →
 **SAMURAI (SAM2.1)** visual tracker → **master Kalman fusion** → overlay →
@@ -18,7 +18,7 @@ RTP/H.264 (or file). Everything runs inside the `gst-nvmm-infer:jp6` container
   - SAMURAI: `image_encoder_bplus_512.engine`, `prompt_encoder.engine`,
     `mask_decoder.engine`, `memory_encoder.engine`, `memory_attention.engine`
   - `samurai_consts.bin` (learned out-of-engine constants)
-  - XFeat matcher (only when GMC / track-validity / `nvmmdronedet` are enabled):
+  - XFeat matcher (only when GMC / track-validity / `nvmmdetgate` are enabled):
     `xfeat.engine`, `lightglue.engine` (OpenCV-free feature registration)
 
 Mounts used throughout: repo at `/src`, working dir (engines, clips, results)
@@ -70,7 +70,7 @@ All knobs are environment variables (defaults shown):
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `INPUT` | `/v/drone_day1.mkv` | input clip (`.mkv`→matroskademux, else qtdemux) |
+| `INPUT` | `/v/clip1.mkv` | input clip (`.mkv`→matroskademux, else qtdemux) |
 | `SINK` | `udp` | `udp` \| `rtsp` \| `file` |
 | `DST` | `127.0.0.1` | destination host (udp/rtsp) |
 | `PORT` | `5600` | UDP port |

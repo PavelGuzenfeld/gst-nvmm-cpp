@@ -1,6 +1,6 @@
-/// DroneDetGate — YOLO ∩ independent-motion seed gate (XFeat, OpenCV-free).
+/// DetGate — YOLO ∩ independent-motion seed gate (XFeat, OpenCV-free).
 ///
-/// The drone-trained YOLO fires on the drone AND on static terrain / sky haze. This
+/// The target-trained YOLO fires on the target AND on static terrain / sky haze. This
 /// gate keeps only the YOLO detection that is INDEPENDENTLY MOVING — its box sits on
 /// keypoints whose motion does not fit the dominant background transform. A track must
 /// clear the gate for KSUP consecutive frames before it is confirmed; once confirmed
@@ -69,10 +69,10 @@ struct GateCfg {
     int   cleanmax = 2; float motion_minarea = 4.f; int stride = 3;
 };
 
-class DroneDetGate {
+class DetGate {
 public:
-    explicit DroneDetGate(const GateCfg &c) : cfg_(c) {
-        dbg_ = (std::getenv("DRONEDET_DEBUG") != nullptr);
+    explicit DetGate(const GateCfg &c) : cfg_(c) {
+        dbg_ = (std::getenv("DETGATE_DEBUG") != nullptr);
         fprintf(stderr, "[DD] gate constructed (XFeat): debug=%d rmin=%.1f amin=%d ksup=%d dist=%.0f\n",
                 (int)dbg_, cfg_.rmin, cfg_.amin, cfg_.ksup, cfg_.dist);
     }
@@ -88,7 +88,7 @@ public:
 
     /// Advance one frame. `motion` = matched anchor points (surface coords) + combined
     /// residual; `dets` = YOLO dets (surface coords); `frameW/H` for the edge reject.
-    /// Returns the src_index of the confirmed drone det this frame, -1 if none, or
+    /// Returns the src_index of the confirmed target det this frame, -1 if none, or
     /// kSynthConfirm if it confirmed a synthesized motion blob.
     int update(const std::vector<MotionSample> &motion, const std::vector<GateDet> &dets,
                int frameW, int frameH)

@@ -335,7 +335,7 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
                       (int)tm->width, (int)tm->height, line, 0, 255, 255);
             char tl[32];
             const double conf = 1.0 / (1.0 + exp(-(double)tm->object_score));
-            g_snprintf(tl, sizeof tl, "drone %.0f%%", conf * 100.0);
+            g_snprintf(tl, sizeof tl, "target %.0f%%", conf * 100.0);
             int ty = (int)tm->top - FONT_H * ts - ts; if (ty < ts) ty = (int)tm->top + ts;
             draw_text((guint8 *)omap.data, W, H, (int)tm->left + ts, ty, tl, ts, 0, 255, 255);
         }

@@ -156,7 +156,7 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
         self->kf->predict(dt);
         /* Gate YOLO by Euclidean center distance to the prediction (pixels), not
            Mahalanobis: KalmanBox measurement noise scales with box size, so for a
-           ~5px drone the Mahalanobis gate is useless (reject-all / accept-all). A
+           ~5px target the Mahalanobis gate is useless (reject-all / accept-all). A
            pixel radius cleanly fuses on-target YOLO dets and rejects far ones. */
         double pcx, pcy, pw, ph; self->kf->box(pcx, pcy, pw, ph);
         const double yd = std::hypot(yc - pcx, yy - pcy);
@@ -182,7 +182,7 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
     /* Teardown: a VALID track that dwells in the edge band (target left the frame /
        parked on edge clutter such as a burned-in channel overlay) or stays low-score
        is a false track. Reset the master KF and emit an upstream "nvmm-reset" so
-       SAMURAI un-seeds and nvmmdronedet re-acquires from scratch. Off by default. */
+       SAMURAI un-seeds and nvmmdetgate re-acquires from scratch. Off by default. */
     gboolean tore_down = FALSE;
     if (self->teardown && tm->valid && fw > 0 && fh > 0) {
         const double bcx = tm->left + tm->width / 2.0, bcy = tm->top + tm->height / 2.0;

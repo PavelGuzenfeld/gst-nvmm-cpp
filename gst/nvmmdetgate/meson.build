@@ -1,10 +1,10 @@
-# nvmmdronedet — autonomous drone-seed gate (YOLO ∩ independent motion). Uses the
+# nvmmdetgate — autonomous target-seed gate (YOLO ∩ independent motion). Uses the
 # shared XFeat+LightGlue matcher (TRT) + the TrtEngine wrapper (compiled in, not
 # linked), like nvmmsamurai. Gated on TRT + real NVMM (Jetson-only) with the other
 # inference-graph elements.
-gstnvmmdronedet = library('gstnvmmdronedet',
+gstnvmmdetgate = library('gstnvmmdetgate',
   files(
-    'gstnvmmdronedet.cpp',
+    'gstnvmmdetgate.cpp',
     '../common/xfeat_matcher.cpp',
     '../nvmminfer/trt_engine.cpp',
   ),

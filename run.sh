@@ -7,7 +7,7 @@
 #     -v <repo>:/src -v <workdir>:/o -v <videos>:/v gst-nvmm-infer:jp6 bash /src/run.sh
 #
 # Env knobs (all optional):
-#   INPUT      input clip            (default: /v/drone_day1.mkv)
+#   INPUT      input clip            (default: /v/clip1.mkv)
 #   SINK       udp | rtsp | file     (default: udp)
 #   DST        dest host             (default: 127.0.0.1)
 #   PORT       UDP port              (default: 5600)
@@ -20,13 +20,13 @@
 #   KFVELNOISE SAMURAI KF vel noise  (default: 0.00625 = SORT parity)
 #   GMC        camera-motion comp    (default: false)
 #
-# v2 handheld-drone PRESET (detector is blind to this drone; seed it once, no GMC):
+# v2 handheld-target PRESET (detector is blind to this target; seed it once, no GMC):
 #   INPUT="/o/WhatsApp Video 2026-06-14 at 18.10.17.mp4" SINK=file \
 #   SEEDROI="295,465,30,30" SEEDDELAY=300 KFVELNOISE=0.1 MAXKF=2 GMC=false \
 #   OUTFILE=/o/results/v2_tracked_final.mp4 bash /src/run.sh
 set -eu
 
-INPUT="${INPUT:-/v/drone_day1.mkv}"
+INPUT="${INPUT:-/v/clip1.mkv}"
 SINK="${SINK:-udp}"
 DST="${DST:-127.0.0.1}"
 PORT="${PORT:-5600}"

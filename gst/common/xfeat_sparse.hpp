@@ -1,5 +1,5 @@
 // XFeat sparse detectAndCompute port (host C++), faithful to
-// externals/xfeat/modules/xfeat.py + interpolator.py (rocx v2.0.0.0-rc).
+// the upstream XFeat modules xfeat.py + interpolator.py.
 //
 // Pipeline (post-net): normalize(feats) -> get_kpts_heatmap (softmax65 + pixel-shuffle)
 //  -> NMS (5x5 maxpool + thr + nonzero) -> reliability score (nearest(K1h)*bilinear(H1))

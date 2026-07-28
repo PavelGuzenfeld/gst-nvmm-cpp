@@ -230,7 +230,7 @@ static gboolean gst_nvmm_samurai_src_event(GstBaseTransform *bt, GstEvent *ev)
         if (s && gst_structure_has_name(s, "nvmm-reset")) {
             /* Teardown (nvmmfusekf): drop the lock so the next confirmed det
                re-seeds fresh. Do NOT consume — let it propagate upstream so
-               nvmmdronedet un-latches its gate too. */
+               nvmmdetgate un-latches its gate too. */
             if (self->tracker) self->tracker->reset();
             self->reseed_pending = FALSE;
             GST_INFO_OBJECT(self, "reset requested -> tracker un-seeded");
@@ -521,7 +521,7 @@ static void gst_nvmm_samurai_class_init(GstNvmmSamuraiClass *klass)
     g_object_class_install_property(go, PROP_VAL_DLT,
         g_param_spec_int("validity-dlt", "Validity frame delta",
             "Past-frame delta for the two motion references. Default 30: a slow in-frame "
-            "drone barely moves over a few frames (residual reads 'static' -> false teardown), "
+            "target barely moves over a few frames (residual reads 'static' -> false teardown), "
             "so a long baseline is needed to see it as a mover.", 1, 120, 30, f));
 
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
@@ -557,7 +557,7 @@ static void gst_nvmm_samurai_init(GstNvmmSamurai *self)
     self->val_rmin = 12.0;
     self->val_frames = 8;
     self->val_ds = 2;
-    self->val_dlt = 30;   /* long baseline: slow in-frame drones need it (see validity-dlt doc) */
+    self->val_dlt = 30;   /* long baseline: slow in-frame targets need it (see validity-dlt doc) */
     self->val_hist = nullptr;
     self->static_dwell = 0;
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);

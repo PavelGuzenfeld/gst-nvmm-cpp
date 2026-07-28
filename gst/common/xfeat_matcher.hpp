@@ -3,7 +3,7 @@
 /// The OpenCV-free replacement for ORB + BFMatcher: extracts sparse learned
 /// keypoints/descriptors from an NvBufSurface frame (XFeat CNN) and matches two
 /// frames' features (LightGlue) into corresponding keypoint pairs. Downstream
-/// analytics (GMC, independent-motion, drone gate) run on the matches via
+/// analytics (GMC, independent-motion, target gate) run on the matches via
 /// common/xfeat_motion.hpp — no OpenCV anywhere.
 ///
 /// Ports the validated driver in ../gst-nvmm-ostrack/gst/gstnvmmostrack.cpp

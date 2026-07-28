@@ -1,5 +1,5 @@
 // XFeat registration projector port (host C++), faithful to utils/registration.py
-// PointToPointProjector (rocx v2.0.0.0-rc): given matched (ref,query) keypoint coords
+// PointToPointProjector (internal reference implementation): given matched (ref,query) keypoint coords
 // and a point in the ref image, project it into the query image via a 3-point affine.
 //
 //   near = 9 ref-coords nearest to `point`

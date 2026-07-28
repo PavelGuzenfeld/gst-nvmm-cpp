@@ -1,13 +1,13 @@
-/// nvmmdronedet — autonomous drone-seed gate for the YOLO→SAMURAI pipeline.
+/// nvmmdetgate — autonomous target-seed gate for the YOLO→SAMURAI pipeline.
 ///
-/// Sits between nvmminfer and nvmmsamurai. The drone-trained YOLO fires on the drone
+/// Sits between nvmminfer and nvmmsamurai. The target-trained YOLO fires on the target
 /// AND on static terrain / sky haze, so SAMURAI's auto-seed cannot tell them apart on
 /// hard clips. This element FILTERS the GstNvmmDetMeta to the single detection that is
 /// independently MOVING — confirmed by dual-homography residual (terrain backgrounds)
 /// or high-confidence sky-diff motion (sky backgrounds), held for KSUP frames (see
-/// DroneDetGate / scripts/yolo_dualh_seed.py). Until a drone is confirmed it emits ZERO
+/// DetGate / scripts/yolo_dualh_seed.py). Until a target is confirmed it emits ZERO
 /// detections, so SAMURAI never seeds on terrain; once confirmed it passes exactly the
-/// drone det, so SAMURAI's existing auto-seed (and fusekf reseed) lock the real target.
+/// target det, so SAMURAI's existing auto-seed (and fusekf reseed) lock the real target.
 /// SAMURAI and nvmmfusekf are unchanged.
 ///
 /// The expensive ORB+homography runs only while SEARCHING; once locked the gate just
@@ -16,7 +16,7 @@
 #include "config.h"
 #include "nvmm_det_meta.h"
 #include "gstnvmmallocator.h"
-#include "dronedet_gate.hpp"
+#include "detgate.hpp"
 #include "xfeat_matcher.hpp"   // gst/common: nvmm::XfeatMatcher / XfeatFrame
 #include "xfeat_motion.hpp"    // gst/common: ransac_affine / combined_residuals_2ref
 
@@ -27,16 +27,16 @@
 #include <string>
 #include <vector>
 
-GST_DEBUG_CATEGORY_STATIC(gst_nvmm_dronedet_debug);
-#define GST_CAT_DEFAULT gst_nvmm_dronedet_debug
+GST_DEBUG_CATEGORY_STATIC(gst_nvmm_detgate_debug);
+#define GST_CAT_DEFAULT gst_nvmm_detgate_debug
 #ifndef PACKAGE
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-#define GST_TYPE_NVMM_DRONEDET (gst_nvmm_dronedet_get_type())
-G_DECLARE_FINAL_TYPE(GstNvmmDroneDet, gst_nvmm_dronedet, GST, NVMM_DRONEDET, GstBaseTransform)
+#define GST_TYPE_NVMM_DETGATE (gst_nvmm_detgate_get_type())
+G_DECLARE_FINAL_TYPE(GstNvmmDetGate, gst_nvmm_detgate, GST, NVMM_DETGATE, GstBaseTransform)
 
-struct _GstNvmmDroneDet {
+struct _GstNvmmDetGate {
     GstBaseTransform parent;
     /* props */
     gchar  *engine_dir;   /* dir holding xfeat.engine + lightglue.engine */
@@ -52,7 +52,7 @@ struct _GstNvmmDroneDet {
     gint    motion_silent;   /* YOLO-silent frames before motion-seeding activates */
     gdouble motion_rmin;     /* residual threshold for a motion blob */
     /* state */
-    nvmm::DroneDetGate *gate;
+    nvmm::DetGate *gate;
     nvmm::XfeatMatcher *matcher;          /* XFeat+LightGlue (owns engines + stream) */
     gboolean matcher_ready;
     std::deque<nvmm::XfeatFrame> *hist;   /* rolling per-frame features (two past refs) */
@@ -60,7 +60,7 @@ struct _GstNvmmDroneDet {
     gboolean announced;
 };
 
-G_DEFINE_TYPE(GstNvmmDroneDet, gst_nvmm_dronedet, GST_TYPE_BASE_TRANSFORM)
+G_DEFINE_TYPE(GstNvmmDetGate, gst_nvmm_detgate, GST_TYPE_BASE_TRANSFORM)
 
 enum { PROP_0, PROP_ENGINE_DIR, PROP_TARGET_CLASS, PROP_MIN_CONF, PROP_DS, PROP_DLT, PROP_RMIN,
        PROP_RMINSKY, PROP_CONFSKY, PROP_DIST, PROP_AMIN, PROP_KSUP, PROP_MAXLOST,
@@ -95,9 +95,9 @@ static NvBufSurface *surface_of(GstBuffer *buf)
 }
 
 static GstFlowReturn
-gst_nvmm_dronedet_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
+gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
-    auto *self = GST_NVMM_DRONEDET(bt);
+    auto *self = GST_NVMM_DETGATE(bt);
     self->frame_no++;
     if (!self->enabled) return GST_FLOW_OK;
 
@@ -129,7 +129,7 @@ gst_nvmm_dronedet_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         cfg.maxlost = self->maxlost; cfg.borderfrac = (float)self->borderfrac;
         cfg.seed_on_motion = self->seed_on_motion; cfg.motion_silent = self->motion_silent;
         cfg.motion_rmin = (float)self->motion_rmin;
-        self->gate = new nvmm::DroneDetGate(cfg);
+        self->gate = new nvmm::DetGate(cfg);
         GST_INFO_OBJECT(self, "init: surf %dx%d, XFeat matcher ready", surfW, surfH);
     }
 
@@ -181,14 +181,14 @@ gst_nvmm_dronedet_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         keep = self->gate->update(motion, dets, surfW, surfH);
     }
 
-    /* FILTER DetMeta: until a drone is confirmed, emit ZERO dets; then exactly one. */
+    /* FILTER DetMeta: until a target is confirmed, emit ZERO dets; then exactly one. */
     if (det) {
         float scx, scy, sw, sh;
         if (keep >= 0 && keep < (int)det->num_objects) {
             if (keep != 0) det->objects[0] = det->objects[keep];
             det->num_objects = 1;
             if (!self->announced) {
-                GST_INFO_OBJECT(self, "drone CONFIRMED at frame %" G_GUINT64_FORMAT
+                GST_INFO_OBJECT(self, "target CONFIRMED at frame %" G_GUINT64_FORMAT
                                 " -> seeding SAMURAI", self->frame_no);
                 self->announced = TRUE;
             }
@@ -199,7 +199,7 @@ gst_nvmm_dronedet_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
             NvmmDetObject &o = det->objects[0];
             o.left = scx - sw / 2.f; o.top = scy - sh / 2.f; o.width = sw; o.height = sh;
             o.class_id = self->target_class; o.confidence = 0.90f; o.tracker_id = 0;
-            g_strlcpy(o.label, "drone", NVMM_META_LABEL_LEN);
+            g_strlcpy(o.label, "target", NVMM_META_LABEL_LEN);
             det->num_objects = 1;
             GST_INFO_OBJECT(self, "MOTION-SEED at frame %" G_GUINT64_FORMAT
                             " (%.0f,%.0f %.0fx%.0f) -> seeding SAMURAI",
@@ -212,7 +212,7 @@ gst_nvmm_dronedet_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 }
 
 static void set_prop(GObject *o, guint id, const GValue *v, GParamSpec *p) {
-    auto *s = GST_NVMM_DRONEDET(o);
+    auto *s = GST_NVMM_DETGATE(o);
     switch (id) {
     case PROP_ENGINE_DIR:   g_free(s->engine_dir); s->engine_dir = g_value_dup_string(v); break;
     case PROP_TARGET_CLASS: s->target_class = g_value_get_int(v); break;
@@ -235,7 +235,7 @@ static void set_prop(GObject *o, guint id, const GValue *v, GParamSpec *p) {
     }
 }
 static void get_prop(GObject *o, guint id, GValue *v, GParamSpec *p) {
-    auto *s = GST_NVMM_DRONEDET(o);
+    auto *s = GST_NVMM_DETGATE(o);
     switch (id) {
     case PROP_ENGINE_DIR:   g_value_set_string(v, s->engine_dir); break;
     case PROP_TARGET_CLASS: g_value_set_int(v, s->target_class); break;
@@ -258,28 +258,28 @@ static void get_prop(GObject *o, guint id, GValue *v, GParamSpec *p) {
     }
 }
 
-static gboolean gst_nvmm_dronedet_stop(GstBaseTransform *bt) {
-    auto *s = GST_NVMM_DRONEDET(bt);
+static gboolean gst_nvmm_detgate_stop(GstBaseTransform *bt) {
+    auto *s = GST_NVMM_DETGATE(bt);
     delete s->gate; s->gate = nullptr;
     delete s->matcher; s->matcher = nullptr; s->matcher_ready = FALSE;
     if (s->hist) s->hist->clear();
     return TRUE;
 }
 
-static void gst_nvmm_dronedet_finalize(GObject *o) {
-    auto *s = GST_NVMM_DRONEDET(o);
+static void gst_nvmm_detgate_finalize(GObject *o) {
+    auto *s = GST_NVMM_DETGATE(o);
     delete s->gate; delete s->matcher; delete s->hist;
     g_free(s->engine_dir);
-    G_OBJECT_CLASS(gst_nvmm_dronedet_parent_class)->finalize(o);
+    G_OBJECT_CLASS(gst_nvmm_detgate_parent_class)->finalize(o);
 }
 
 /* Teardown: nvmmfusekf sends an upstream "nvmm-reset" when a track is torn down
    (parked on edge clutter / target gone). Un-latch the gate so it re-acquires.
    Do NOT consume — other elements upstream may also want it. */
 static gboolean
-gst_nvmm_dronedet_src_event(GstBaseTransform *bt, GstEvent *ev)
+gst_nvmm_detgate_src_event(GstBaseTransform *bt, GstEvent *ev)
 {
-    auto *self = GST_NVMM_DRONEDET(bt);
+    auto *self = GST_NVMM_DETGATE(bt);
     if (GST_EVENT_TYPE(ev) == GST_EVENT_CUSTOM_UPSTREAM) {
         const GstStructure *s = gst_event_get_structure(ev);
         if (s && gst_structure_has_name(s, "nvmm-reset") && self->gate) {
@@ -287,24 +287,24 @@ gst_nvmm_dronedet_src_event(GstBaseTransform *bt, GstEvent *ev)
             GST_INFO_OBJECT(self, "reset requested -> gate un-latched");
         }
     }
-    return GST_BASE_TRANSFORM_CLASS(gst_nvmm_dronedet_parent_class)->src_event(bt, ev);
+    return GST_BASE_TRANSFORM_CLASS(gst_nvmm_detgate_parent_class)->src_event(bt, ev);
 }
 
 static void
-gst_nvmm_dronedet_class_init(GstNvmmDroneDetClass *klass)
+gst_nvmm_detgate_class_init(GstNvmmDetGateClass *klass)
 {
     auto *go = G_OBJECT_CLASS(klass);
     auto *el = GST_ELEMENT_CLASS(klass);
     auto *bt = GST_BASE_TRANSFORM_CLASS(klass);
     go->set_property = set_prop; go->get_property = get_prop;
-    go->finalize = gst_nvmm_dronedet_finalize;
+    go->finalize = gst_nvmm_detgate_finalize;
 
     auto F = (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
     g_object_class_install_property(go, PROP_ENGINE_DIR, g_param_spec_string(
         "engine-dir", "Engine dir", "Directory holding xfeat.engine + lightglue.engine "
         "(the XFeat matcher for the independent-motion gate)", nullptr, F));
     g_object_class_install_property(go, PROP_TARGET_CLASS, g_param_spec_int(
-        "target-class", "Target class", "YOLO class id of the drone", 0, 9999, 0, F));
+        "target-class", "Target class", "YOLO class id of the target", 0, 9999, 0, F));
     g_object_class_install_property(go, PROP_MIN_CONF, g_param_spec_double(
         "min-conf", "Min conf", "Min YOLO conf to consider a detection", 0, 1, 0.25, F));
     g_object_class_install_property(go, PROP_DS, g_param_spec_int(
@@ -345,20 +345,20 @@ gst_nvmm_dronedet_class_init(GstNvmmDroneDetClass *klass)
     gst_element_class_add_static_pad_template(el, &sink_tmpl);
     gst_element_class_add_static_pad_template(el, &src_tmpl);
     gst_element_class_set_static_metadata(el,
-        "NVMM Drone Seed Gate", "Filter/Analyzer/Video",
-        "Filters YOLO detections to the single independently-moving drone "
+        "NVMM Target Seed Gate", "Filter/Analyzer/Video",
+        "Filters YOLO detections to the single independently-moving target "
         "(dual-homography ∩ YOLO) so SAMURAI auto-seeds the real target",
         "Pavel Guzenfeld");
 
-    bt->transform_ip = gst_nvmm_dronedet_transform_ip;
-    bt->src_event = gst_nvmm_dronedet_src_event;
-    bt->stop = gst_nvmm_dronedet_stop;
+    bt->transform_ip = gst_nvmm_detgate_transform_ip;
+    bt->src_event = gst_nvmm_detgate_src_event;
+    bt->stop = gst_nvmm_detgate_stop;
     bt->passthrough_on_same_caps = FALSE;
-    GST_DEBUG_CATEGORY_INIT(gst_nvmm_dronedet_debug, "nvmmdronedet", 0, "NVMM drone seed gate");
+    GST_DEBUG_CATEGORY_INIT(gst_nvmm_detgate_debug, "nvmmdetgate", 0, "NVMM target seed gate");
 }
 
 static void
-gst_nvmm_dronedet_init(GstNvmmDroneDet *self)
+gst_nvmm_detgate_init(GstNvmmDetGate *self)
 {
     self->target_class = 0; self->min_conf = 0.25; self->ds_factor = 2; self->dlt = 5;
     self->rmin = 12; self->rminsky = 8; self->confsky = 0.55; self->dist = 45;
@@ -371,11 +371,11 @@ gst_nvmm_dronedet_init(GstNvmmDroneDet *self)
 }
 
 static gboolean plugin_init(GstPlugin *plugin) {
-    return gst_element_register(plugin, "nvmmdronedet", GST_RANK_NONE, GST_TYPE_NVMM_DRONEDET);
+    return gst_element_register(plugin, "nvmmdetgate", GST_RANK_NONE, GST_TYPE_NVMM_DETGATE);
 }
 
 GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR, GST_VERSION_MINOR,
-    nvmmdronedet, "Autonomous drone-seed gate (YOLO ∩ dual-homography)",
+    nvmmdetgate, "Autonomous target-seed gate (YOLO ∩ dual-homography)",
     plugin_init, PACKAGE_VERSION, "LGPL", "gst-nvmm-cpp",
     "https://github.com/PavelGuzenfeld/gst-nvmm-cpp")

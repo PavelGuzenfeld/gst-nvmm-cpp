@@ -221,14 +221,14 @@ inline RegionResidual region_max_residual_2ref(const double Ma[6],
     return r;
 }
 
-// ---- combined two-reference residual list (for the drone gate) --------------
+// ---- combined two-reference residual list (for the target gate) --------------
 
 struct ResidPt { Pt2 pt; double resid; };  // anchor point + combined 2-ref residual
 
 /// Per-anchor combined residual over the WHOLE frame (not a single box): for each
 /// anchor keypoint present in BOTH match-sets, the MIN of its residual under the two
 /// background transforms. `pt` is the anchor coordinate (registration space). The
-/// drone gate samples this list near det centers and clusters it for motion blobs.
+/// target gate samples this list near det centers and clusters it for motion blobs.
 inline std::vector<ResidPt> combined_residuals_2ref(const double Ma[6],
                                                     const std::vector<MatchPair>& ma,
                                                     const double Mb[6],
