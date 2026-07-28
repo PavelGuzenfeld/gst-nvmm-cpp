@@ -352,7 +352,8 @@ not executed**:
   `kf-vel-noise`, and `detector_ir` on DLA core 0 — can now be A/B'd. That tree is
   **not a git repo**; a backup sits at
   `gst/nvmminfer/gstnvmminfer.cpp.pre-interval.bak`. Patch script:
-  `tools/samurai/detector-decimation/port_interval_to_deploy.py` (idempotent).
+  `tools/samurai/detector-decimation/port_to_deploy.sh` + `infer-props.patch`
+  (`apply` / `--check` / `--revert`, idempotent).
 - **The all-12-sequence GT run was never launched.** `gt_score_ab.sh` needs its
   pipeline switched to the deploy build + deployed element list, and should extract →
   run → delete per sequence rather than all at once (disk is at 94%).
