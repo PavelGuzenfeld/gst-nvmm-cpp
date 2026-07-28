@@ -2,12 +2,13 @@
 # Find the highest-confidence detections per clip WITH frame numbers, so a seed ROI
 # can be visually verified instead of taken from whatever the detector emitted first
 # (which on clip2/clip3 turned out to be false positives on cloud/terrain texture).
-set -uo pipefail
-export GST_PLUGIN_PATH=$REPO_SRC/builddir
+. "$(dirname "$0")/lib.sh"
+
+require_env ASSET_DIR REPO_SRC
+export GST_PLUGIN_PATH="$REPO_SRC/builddir"
 for C in clip2 clip3; do
   GST_DEBUG=nvmminfer:6 gst-launch-1.0 -q \
-    filesrc location=$ASSET_DIR/$C.mp4 ! decodebin ! nvvidconv \
-    ! "video/x-raw(memory:NVMM),format=NV12" ! queue \
+    $(nvmm_source_clip "$ASSET_DIR/$C.mp4") \
     ! nvmminfer engine-file=$ASSET_DIR/trt/detector.engine \
     ! fakesink sync=false 2>&1 \
   | awk '
