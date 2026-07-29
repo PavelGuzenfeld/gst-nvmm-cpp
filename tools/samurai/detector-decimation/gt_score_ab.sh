@@ -12,8 +12,11 @@
 # exist in this checkout -- so absolute scores here are NOT comparable to
 # results/$DEPLOY_SCORECARD. Both arms are identical apart from infer-interval, so the
 # A/B is internally valid, which is all this needs to be.
-set -eu
-cd $ASSET_DIR
+. "$(dirname "$0")/lib.sh"
+
+require_env ASSET_DIR REPO_SRC EVALSET_ZIP SCORER GT_LABEL
+
+cd "$ASSET_DIR"
 B=$REPO_SRC/builddir
 SEQS="${SEQS:-seq-C seq-K seq-L seq-B seq-G}"
 
@@ -37,26 +40,17 @@ for N in 1 3; do
   echo "=== Phase 2: run infer-interval=$N ==="
   while IFS=$'\t' read -r seq stop; do
     [ -z "$seq" ] && continue
-    # NOTE: no kf-vel-noise= here -- that property exists only in the divergent
-    # deploy-checkout checkout, and gst-launch hard-rejects an unknown property, so
-    # copying the deployed harness's arg list verbatim silently produces zero output.
-    # Keep stderr: a failed pipeline must be loud, not an empty CSV.
-    NVMMFUSEKF_CSV="$OUT/$seq.csv" gst-launch-1.0 -e \
-      multifilesrc location="seqs/train/$seq/%06d.jpg" index=1 stop-index="$stop" \
-        caps="image/jpeg,framerate=25/1" ! jpegparse ! nvv4l2decoder mjpeg=1 ! queue ! \
-      nvvidconv ! "video/x-raw(memory:NVMM),format=NV12" ! queue ! \
-      nvmminfer engine-file=trt/detector.engine infer-interval=$N ! queue ! \
-      nvmmsamurai engine-dir=trt consts-file=trt/samurai_consts.bin max-kf=2 \
-                  seed-prefer-center=true gmc=false ! queue ! \
-      nvmmfusekf target-class=0 ! fakesink sync=false > $OUT/$seq.gst.log 2>&1 || true
-    # Match gst's own failure forms only. Do NOT grep a bare case-insensitive "error":
-    # nvmminfer's benign TRT notice says "...may even cause errors" and matches it.
-    if grep -qE "erroneous pipeline|no property |no element |^ERROR" $OUT/$seq.gst.log; then
-      echo "  N=$N $seq: PIPELINE ERROR ->"; grep -E "erroneous pipeline|no property |no element |^ERROR" \
-        $OUT/$seq.gst.log | head -2 | sed 's/^/      /'
-    else
-      echo "  N=$N $seq: $(( $(wc -l < $OUT/$seq.csv 2>/dev/null || echo 1) - 1 )) rows"
-    fi
+    # NOTE: no kf-vel-noise= here -- that property exists only in the divergent deploy
+    # checkout, and gst-launch hard-rejects an unknown property, so copying the
+    # deployed harness's arg list verbatim silently produces zero output.
+    export NVMMFUSEKF_CSV="$OUT/$seq.csv"
+    # shellcheck disable=SC2086  # the pipeline must word-split into gst-launch args
+    run_pipeline "N=$N $seq" "$NVMMFUSEKF_CSV" "$stop" \
+      $(nvmm_source_jpegs "seqs/train/$seq" "$stop") \
+      ! $(nvmm_detector . "$N") \
+      ! $(nvmm_tracker . "max-kf=2 seed-prefer-center=true") \
+      ! $(nvmm_fusekf) || true
+    unset NVMMFUSEKF_CSV
   done < manifest_gt_ab.txt
 done
 

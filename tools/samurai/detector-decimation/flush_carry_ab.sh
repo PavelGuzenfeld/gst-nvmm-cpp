@@ -9,23 +9,26 @@
 #   2. PARITY -- at infer-interval=3, does carry bring the emitted box back to the
 #      undecimated baseline (median IoU >= 0.99, no frame < 0.9)?
 # Baseline for both is (interval=1, carry=0) = today's deployed behaviour.
-set -u
+. "$(dirname "$0")/lib.sh"
+
+require_env ASSET_DIR REPO_SRC
+
 C=$1; SEED=$2; DELAY=${3:-0}
 O=$ASSET_DIR
-B=$REPO_SRC/builddir
 R=$O/results/flush_carry
 mkdir -p "$R"
-export GST_PLUGIN_PATH=$B GST_DEBUG=0
+export GST_PLUGIN_PATH="$REPO_SRC/builddir" GST_DEBUG=0
+
+src=$(nvmm_source_clip "$O/$C.mp4")
 
 run() { # <interval> <carry> <tag>
-  NVMMFUSEKF_CSV=$R/${C}_$3.csv gst-launch-1.0 -e \
-    filesrc location=$O/$C.mp4 ! decodebin ! nvvidconv \
-    ! "video/x-raw(memory:NVMM),format=NV12" ! queue \
-    ! nvmminfer engine-file=$O/trt/detector.engine infer-interval=$1 ! queue \
-    ! nvmmsamurai engine-dir=$O/trt consts-file=$O/trt/samurai_consts.bin \
-        max-kf=2 seed-roi=$SEED seed-delay=$DELAY gmc=false ! queue \
-    ! nvmmfusekf target-class=0 flush-carry=$2 ! fakesink sync=false > /dev/null 2>&1
-  echo "  $3 (interval=$1 carry=$2): $(( $(wc -l < $R/${C}_$3.csv) - 1 )) rows"
+  export NVMMFUSEKF_CSV="$R/${C}_$3.csv"
+  # shellcheck disable=SC2086  # the pipeline must word-split into gst-launch args
+  run_pipeline "$3 (interval=$1 carry=$2)" "$NVMMFUSEKF_CSV" 0 \
+    $src ! $(nvmm_detector "$O" "$1") \
+    ! $(nvmm_tracker "$O" "max-kf=2 seed-roi=$SEED seed-delay=$DELAY") \
+    ! $(nvmm_fusekf "flush-carry=$2") || true
+  unset NVMMFUSEKF_CSV
 }
 
 echo "######## $C seed=$SEED delay=$DELAY ########"

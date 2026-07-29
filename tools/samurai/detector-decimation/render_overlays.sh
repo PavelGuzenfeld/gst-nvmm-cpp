@@ -12,21 +12,25 @@
 #               the real target is still unacquired.
 #
 # Encoding runs in the container -- the host lacks h264parse (plugins-bad).
-set -u
+. "$(dirname "$0")/lib.sh"
+
+require_env ASSET_DIR DEPLOY_SRC EVALSET_ZIP
+
 O=$ASSET_DIR
 SRC=$DEPLOY_SRC
-IMG=gst-nvmm-infer:jp6
+IMG=${DOCKER_IMAGE:-gst-nvmm-infer:jp6}
 OUT=$O/overlays
 mkdir -p "$OUT"
 
+# Encode tail, not the fakesink the measuring harnesses use, so this cannot share
+# nvmm_fusekf()'s sink. h264parse lives in plugins-bad, which the host lacks -- hence
+# the container.
 DRAW="nvmmdrawdet draw-track=true draw-det=false thickness=2 ! queue \
 ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' \
 ! nvv4l2h264enc bitrate=8000000 ! h264parse ! qtmux"
 
-TRK_SEEDED="nvmmsamurai engine-dir=/o/trt consts-file=/o/trt/samurai_consts.bin max-kf=2 \
-    seed-roi=910,490,120,120 kf-vel-noise=0.1 gmc=false"
-TRK_AUTO="nvmmsamurai engine-dir=/o/trt consts-file=/o/trt/samurai_consts.bin max-kf=2 \
-    seed-prefer-center=true kf-vel-noise=0.1 gmc=false"
+TRK_SEEDED="max-kf=2 seed-roi=910,490,120,120 kf-vel-noise=0.1"
+TRK_AUTO="max-kf=2 seed-prefer-center=true kf-vel-noise=0.1"
 FUSE="nvmmfusekf target-class=0 teardown=true teardown-border-frac=0.05 teardown-border-frames=20"
 
 render() { # <label> <source-chain> <tracker> <interval> <gate>
@@ -35,10 +39,10 @@ render() { # <label> <source-chain> <tracker> <interval> <gate>
   docker run --rm --runtime nvidia --network host -v "$SRC":/src -v "$O":/o "$IMG" \
     bash -lc "export GST_PLUGIN_PATH=/src/builddir-fix GST_DEBUG=0
       gst-launch-1.0 -e $SRCCHAIN \
-      ! nvmminfer engine-file=/o/trt/detector.engine \
-                  infer-interval=$IV infer-gate-frames=$GATE ! queue \
-      ! nvmmdetgate target-class=0 border-frac=0.02 ! queue \
-      ! $TRK ! queue ! $FUSE ! queue ! $DRAW \
+      ! $(nvmm_detector /o "$IV" "$GATE") \
+      ! $(nvmm_detgate) \
+      ! nvmmsamurai engine-dir=/o/trt consts-file=/o/trt/samurai_consts.bin $TRK gmc=false \
+      ! queue ! $FUSE ! queue ! $DRAW \
       ! filesink location=/o/overlays/$L.mp4" > "$OUT/$L.log" 2>&1 || true
   if [ -s "$OUT/$L.mp4" ]; then
     echo "  ok: $(du -h "$OUT/$L.mp4" | cut -f1)"
@@ -47,28 +51,18 @@ render() { # <label> <source-chain> <tracker> <interval> <gate>
   fi
 }
 
-WA1="filesrc location=/o/clip1.mp4 ! decodebin ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! queue"
+WA1=$(nvmm_source_clip /o/clip1.mp4)
 render clip1_n1     "$WA1" "$TRK_SEEDED" 1 0
 render clip1_n3gate "$WA1" "$TRK_SEEDED" 3 5
 
 S=seq-F
 if [ ! -f "$O/seqs/train/$S/000001.jpg" ]; then
   echo "=== extract $S ==="
-  ( cd "$O" && python3 - "$S" <<'PY'
-import sys, zipfile
-s = sys.argv[1]
-z = zipfile.ZipFile("$EVALSET_ZIP")
-mem = [n for n in z.namelist() if n.startswith("train/%s/" % s)]
-z.extractall("seqs", members=mem)
-print("extracted", sum(1 for n in mem if n.endswith(".jpg")), "frames")
-PY
-  )
+  ( cd "$O" && echo "extracted $(extract_sequence "$S" "$EVALSET_ZIP" seqs) frames" )
 fi
 NF=$(ls "$O/seqs/train/$S"/*.jpg 2>/dev/null | wc -l)
 if [ "$NF" -gt 0 ]; then
-  JPG="multifilesrc location=/o/seqs/train/$S/%06d.jpg index=1 stop-index=$NF \
-caps=image/jpeg,framerate=25/1 ! jpegparse ! nvv4l2decoder mjpeg=1 ! queue \
-! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! queue"
+  JPG=$(nvmm_source_jpegs "/o/seqs/train/$S" "$NF")
   render seq-F_n1     "$JPG" "$TRK_AUTO" 1 0
   render seq-F_n3gate "$JPG" "$TRK_AUTO" 3 5
 else

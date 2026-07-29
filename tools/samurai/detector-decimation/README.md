@@ -47,6 +47,6 @@ sequence names in `$SEQ_LIST`; the writeup uses the same neutral labels.
 | `gt_score_ab.sh`, `gt_score_ab_deployed.sh`, `gt_score_gated.sh` | ground-truth scoring per arm |
 | `flush_carry_ab.sh` | `nvmmfusekf` flush-carry experiment (element change reverted; kept as record) |
 | `render_overlays.sh` | overlay videos for visual inspection |
-| `port_interval_to_deploy.py`, `port_gate_to_deploy.py` | port the two properties into a non-git deploy checkout (take `.bak`, idempotent) |
+| `port_to_deploy.sh` + `infer-props.patch` | port the two `nvmminfer` properties into a deploy checkout: `apply` / `--check` / `--revert`, idempotent |
 
 Parity comparison itself lives in [`../../trajectory_compare.py`](../../trajectory_compare.py).

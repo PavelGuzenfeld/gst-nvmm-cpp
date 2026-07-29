@@ -1,0 +1,118 @@
+--- gstnvmminfer.cpp	(pristine)
++++ gstnvmminfer.cpp	(with infer-interval + infer-gate-frames)
+@@ -77,6 +77,13 @@
+     int     net_w, net_h;
+     int     num_classes, num_proposals;
+     guint64 frame_no;
++    guint    infer_interval; /* run the network every Nth frame (1 = every frame) */
++    guint    infer_gate_frames; /* consecutive inferred frames WITH a detection
++                                  required before decimating; 0 = ungated */
++    guint64  seen_frames;    /* every frame reaching transform_ip; drives infer-interval.
++                                Separate from frame_no, which counts only inferred
++                                frames (it is the det-meta frame_number). */
++    guint    acq_run;        /* consecutive inferred frames that produced >=1 det */
+ 
+     /* performance measurement (property measure-latency) */
+     gboolean   measure;
+@@ -89,7 +96,8 @@
+ G_DEFINE_TYPE(GstNvmmInfer, gst_nvmm_infer, GST_TYPE_BASE_TRANSFORM)
+ 
+ enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_DLA_CORE,
+-       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY, PROP_LABELS, PROP_MERGE };
++       PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY, PROP_LABELS, PROP_MERGE,
++       PROP_INFER_INTERVAL, PROP_INFER_GATE_FRAMES };
+ 
+ /* Detector input is fed from decoded NV12 NVMM video. Frame travels through
+    unchanged; only detection meta is attached. */
+@@ -301,6 +309,23 @@
+ {
+     auto *self = GST_NVMM_INFER(bt);
+ 
++    /* infer-interval: run the network on every Nth frame only. A skipped frame passes
++       through with NO detection meta -- downstream already handles a frame the detector
++       found nothing in (nvmmfusekf gates on has_yolo), so no new code path is needed.
++       Deliberately never re-attaches the previous frame's dets: stale meta would assert
++       a box for a frame that was never inferred. In merge mode a skipped frame simply
++       contributes nothing, leaving any upstream detector's dets untouched.
++
++       infer-gate-frames holds the interval OFF until detections flow steadily; no
++       detections is exactly when the tracker is acquiring or recovering, which is
++       where ungated decimation did its damage (3 of 12 GT sequences never acquired
++       at N=3). Gates on ANY detection -- nvmminfer does not know target_class. */
++    const gboolean gate_open = self->infer_gate_frames == 0 ||
++                               self->acq_run >= self->infer_gate_frames;
++    if (self->infer_interval > 1 && gate_open &&
++        (self->seen_frames++ % self->infer_interval) != 0)
++        return GST_FLOW_OK;
++
+     NvBufSurface *surf = surface_of(buf);
+     if (!surf) {
+         GST_WARNING_OBJECT(self, "no NvBufSurface in buffer");
+@@ -421,7 +446,15 @@
+         GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": merged -> %u dets",
+                        fm.frame_number, out.num_objects);
+     } else {
+-        gst_buffer_add_nvmm_det_meta(buf, &fm);
++        /* Acquisition-gate state: reset on the first empty inferred frame so losing the
++       target immediately restores every-frame inference for fast reacquisition. */
++    if (fm.num_objects > 0) {
++        if (self->acq_run < G_MAXUINT) self->acq_run++;
++    } else {
++        self->acq_run = 0;
++    }
++
++    gst_buffer_add_nvmm_det_meta(buf, &fm);
+     }
+     GST_LOG_OBJECT(self, "frame %" G_GUINT64_FORMAT ": %u detections",
+                    fm.frame_number, fm.num_objects);
+@@ -510,6 +543,8 @@
+         case PROP_LABELS:           g_free(self->labels);
+                                     self->labels = g_value_dup_string(v); break;
+         case PROP_MERGE:            self->merge = g_value_get_boolean(v); break;
++        case PROP_INFER_INTERVAL:   self->infer_interval = g_value_get_uint(v); break;
++        case PROP_INFER_GATE_FRAMES: self->infer_gate_frames = g_value_get_uint(v); break;
+         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
+     }
+ }
+@@ -528,6 +563,8 @@
+         case PROP_MEASURE_LATENCY:  g_value_set_boolean(v, self->measure); break;
+         case PROP_LABELS:           g_value_set_string(v, self->labels); break;
+         case PROP_MERGE:            g_value_set_boolean(v, self->merge); break;
++        case PROP_INFER_INTERVAL:   g_value_set_uint(v, self->infer_interval); break;
++        case PROP_INFER_GATE_FRAMES: g_value_set_uint(v, self->infer_gate_frames); break;
+         default: G_OBJECT_WARN_INVALID_PROPERTY_ID(o, id, p); break;
+     }
+ }
+@@ -559,6 +596,21 @@
+             "2nd parallel head: union this engine's detections into the upstream DetMeta "
+             "with cross-class NMS (instead of writing a separate meta). Off by default.",
+             FALSE, flags));
++    g_object_class_install_property(go, PROP_INFER_INTERVAL,
++        g_param_spec_uint("infer-interval", "Inference interval",
++            "Run the detector on every Nth frame (1 = every frame). Skipped frames pass "
++            "through with no detection meta. Trades detection freshness for throughput: "
++            "measured on Orin NX, a 1088x1920 YOLO is ~50%% of the frame budget when the "
++            "tracker coasts (nvmmsamurai max-kf>0), so N=3 buys ~+50%% fps at ~8%% GT "
++            "success -- and that cost is mostly slower ACQUISITION (seed latency 2.65x), "
++            "not worse steady-state tracking",
++            1, 1000, 1, flags));
++    g_object_class_install_property(go, PROP_INFER_GATE_FRAMES,
++        g_param_spec_uint("infer-gate-frames", "Acquisition gate (frames)",
++            "Hold infer-interval OFF until this many consecutive inferred frames have "
++            "produced a detection, re-arming the hold as soon as one produces none; "
++            "0 = decimate unconditionally. Gates on ANY detection, not target-class",
++            0, 10000, 0, flags));
+     g_object_class_install_property(go, PROP_NET_SCALE_FACTOR,
+         g_param_spec_double("net-scale-factor", "Net scale factor",
+             "Pixel scale applied during preprocess (e.g. 1/255 for YOLO)",
+@@ -627,6 +679,10 @@
+     self->net_w = self->net_h = 0;
+     self->num_classes = self->num_proposals = 0;
+     self->frame_no = 0;
++    self->infer_interval = 1;
++    self->infer_gate_frames = 0;
++    self->seen_frames = 0;
++    self->acq_run = 0;
+     self->measure = FALSE;
+     self->ev0 = self->ev1 = self->ev2 = self->ev3 = nullptr;
+     self->acc_pre = self->acc_infer = self->acc_copy = self->acc_parse = 0.0;
