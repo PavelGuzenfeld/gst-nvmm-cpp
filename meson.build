@@ -289,6 +289,7 @@ if have_tensorrt and have_nvbufsurface
   subdir('gst/nvmmsecondaryinfer')  # Phase-3.2 cascade classifier (TRT)
   subdir('gst/nvmmdrawdet')  # detection overlay (demo/viz/E2E), uses CUDA+VIC
   subdir('gst/nvmmsamurai')  # Phase-B SAM2.1 SAMURAI visual tracker (TRT)
+  subdir('gst/nvmmdetgate')  # seed gate: detector ∩ XFeat independent-motion (TRT)
 endif
 subdir('tests')
 subdir('benchmarks')
