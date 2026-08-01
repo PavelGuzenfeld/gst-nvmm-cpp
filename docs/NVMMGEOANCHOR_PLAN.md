@@ -71,7 +71,7 @@ and throughput plus gating dominate. Hence the backend split below.
 | Output | New buffer vs meta | **Meta.** `nvmm_geofix_meta`, same pattern as the existing metas. Video path untouched. |
 | Matcher | Fixed vs swappable | **Swappable backend**, `matcher-backend = xfeat \| romav2`. Follows `gmc_backend.hpp` / `gmc_vpi_fft.hpp` / `gmc_vpi_pva.hpp` precedent in `nvmmsamurai`. |
 | First backend | Which one ships first | **`xfeat`.** `gst/common/xfeat_matcher.{cpp,hpp}` + `xfeat_sparse.hpp` + `xfeat_register.hpp` are already in-tree, OpenCV-free, host C++. Descriptor + match half is done. |
-| Second backend | Dense matcher | **`romav2`** — RoMa v2 ONNX → `trtexec` → `.engine`, bound through the existing `TrtEngine`. ~1 GB fp32 graph, ViT-L, GPU-only. Deferred behind a measured need. Upstream weight licence to be reviewed before vendoring. |
+| Second backend | Dense matcher | **`romav2`** — RoMa v2 ONNX → `trtexec` → `.engine`, bound through the existing `TrtEngine`. ~1 GB fp32 graph, ViT-L, GPU-only. Deferred behind a measured need. |
 | Prewarp | CUDA kernel vs fixed function | **VPI `Remap` on VIC.** Verified backend support: Remap and Perspective Warp are CPU/CUDA/**PVA**/**VIC**. Keep the GPU free; keep PVA free for GMC (see contention). |
 | Rate | Every frame vs decimated | **Decimated + async.** `interval` property (the `nvmminfer` idiom), worker thread, queue depth 1, drop-oldest. The matcher must never block the streaming thread. |
 | Timestamps | Attach-time vs origin PTS | **Origin PTS, carried in the meta.** Non-negotiable — see below. |
@@ -209,6 +209,28 @@ Assumptions in this plan that are **not** yet confirmed:
 - [ ] VIC Remap throughput and accuracy for the DTM prewarp at target tile size.
 - [ ] Actual PVA/VIC/OFA occupancy with the tracker graph running.
 
+## Targets — TBD, must be filled before Phase 0
+
+Phase 0 is a kill-gate, and a gate with no numbers cannot pass or fail. These
+come from the deployment case, not from this document; the gate is parameterised
+on them:
+
+| Symbol | Meaning | Value |
+|---|---|---|
+| `GSD_ref` | reference imagery ground sample distance | TBD |
+| `AGL` | operating altitude range | TBD |
+| `θ_max` | maximum off-nadir angle | TBD |
+| `σ_DTM` | DTM vertical error (1σ) | TBD |
+| `σ_att` | attitude error (1σ) | TBD |
+| `σ_georef` | reference imagery georeferencing error | TBD |
+| **`σ_pos`** | **required position error (1σ)** | **TBD** |
+| **`R_fix`** | **required accepted-fix rate** | **TBD** |
+| **`P_false`** | **maximum tolerable false-fix rate** | **TBD** |
+| `Δt_stale` | worst-case reference imagery age / season delta | TBD |
+
+`σ_pos`, `R_fix` and `P_false` are the three that decide Phase 0. The rest feed
+the error-budget breakdown that says *which term* to fix if the gate fails.
+
 ## Phases
 
 ### Phase 0 — gate
@@ -218,8 +240,10 @@ store through a host harness using the existing `xfeat_matcher`, a prewarp, and
 a global solve. **Question: does the prewarp + sparse path meet the position
 error budget on real reference imagery?**
 
-Report accepted-fix rate at a bounded false-fix rate, and the error breakdown by
-term. **If yes, the dense backend is never needed and Phase 4 is dropped.**
+**Pass** = achieves `σ_pos` at `R_fix` accepted fixes/s with false fixes below
+`P_false`. Report the error breakdown by term alongside, so a failure says which
+term to attack. **If it passes, the dense backend is never needed and Phase 4 is
+dropped.**
 This gate exists to avoid building a 1 GB engine for a problem the prewarp
 already solved.
 
