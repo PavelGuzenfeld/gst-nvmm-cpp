@@ -1,0 +1,17 @@
+# Install locally:  pip install pre-commit && pre-commit install
+# Run on demand:    pre-commit run --all-files
+#
+# Not wired into .github/workflows/ci.yml: the gate needs Docker and a warm
+# gst-nvmm-cpp:dev image, and CI already builds and runs the same suite.
+minimum_pre_commit_version: "3.5.0"
+repos:
+  - repo: local
+    hooks:
+      # `files` only decides whether the hook fires; the gate re-reads the index
+      # itself, so which paths it gates lives in .mutation-gate.toml exclude_paths.
+      - id: mutation-gate
+        name: mutation gate (diff-scoped)
+        entry: mutation-gate --staged
+        language: system
+        files: \.(cpp|hpp|cc|h)$
+        pass_filenames: false
