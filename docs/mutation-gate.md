@@ -88,6 +88,11 @@ leaves the other 22 alone.
 So the honest reading of 86% is not "14% of this file is untested". It is one
 hole, now closed, and 22 mutants the catalogue should not have generated.
 
+Those 22 are deliberately not in a waiver file. A waiver matches on file, line and
+text, so it would stop matching the moment anyone edits `chol4` — which is exactly
+when you want to be asked again — and 22 standing suppressions cost more than this
+paragraph. Waive one when you touch the line and the gate stops you.
+
 ## What it cannot see
 
 The gate is only as wide as the image it builds in. `gst-nvmm-cpp:dev` has no
