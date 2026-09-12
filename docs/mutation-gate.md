@@ -61,24 +61,32 @@ SURVIVED.
 `gst/common/kalman_box.cpp`, every line, 165 mutants: **142 killed, 23 survived
 — 86%**. Baseline suite 2.3 s, whole sweep ~28 min.
 
-Seven of the 23 enlarge a fixed-size array declaration — `const double std[8]`
-to `[9]`, `std::array<double, 4> z{}` to `<double, 5>`. Every loop over them is
-bounded by its own literal, so the extra slot is written by nobody and read by
-nobody. Those are equivalent mutants and no test can kill them.
+A surviving mutant is a hypothesis, not a verdict, so all 23 were rebuilt
+individually and run against a probe that drives `initiate`, `predict`, `update`,
+`shift` and `gating_distance`. **22 of them produce bit-identical output** —
+equivalent mutants that no test can kill:
 
-The other 16 point at `tests/test_kalman_box.cpp`. Two properties of that file
-stand out:
+- Seven enlarge a fixed-size array declaration, `const double std[8]` to `[9]`,
+  `std::array<double, 4> z{}` to `<double, 5>`. Every loop over them is bounded
+  by its own literal, so the extra slot is written by nobody and read by nobody.
+- The other fifteen are the off-diagonal machinery of `chol4` and the two
+  triangular solves. Each coordinate in this model carries its own independent
+  position/velocity pair, so the 4x4 block those routines factor is diagonal at
+  every step — measured, exactly zero off-diagonal, never a rounding residue.
+  The branches the mutants alter never execute.
+  `covariance_never_correlates_two_coordinates` pins that invariant, so the day
+  the model gains cross-coordinate coupling the suite says so.
 
-- `check_cov_diag` reads `c[i][i]` and nothing else, so the off-diagonal half of
-  the covariance has no oracle at all. The mutants confined to it survive — the
-  inner `k < j` bound in `chol4`, the `L[j][j] != 0.0` guard, the `k = i + 1`
-  start of the back-substitution.
-- Every case is a well-conditioned filter driven through `initiate`, `predict`
-  and `update`. Nothing constructs a singular or non-positive-definite
-  covariance, so `s > 0.0` is never evaluated at its boundary and `s >= 0.0`
-  returns the same value everywhere the test looks.
+The twenty-third was real. `s > 0.0` to `s > 1` in the `chol4` pivot guard clamps
+any small pivot to zero, not just a negative one, and the suite never drove the
+filter to a pivot below 1.
+`gating_distance_matches_the_closed_form_at_a_pivot_below_one` does, and checks
+the result against the closed form for a diagonal covariance — an oracle that
+shares no code with the factorisation it is checking. It kills that mutant and
+leaves the other 22 alone.
 
-Neither group is a defect in the gate. The second is the hole it exists to find.
+So the honest reading of 86% is not "14% of this file is untested". It is one
+hole, now closed, and 22 mutants the catalogue should not have generated.
 
 ## What it cannot see
 
