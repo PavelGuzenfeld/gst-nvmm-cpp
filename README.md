@@ -103,8 +103,9 @@ Validated on Jetson Xavier NX (JP5.1.x) and Orin NX (JP6), in Docker and
 native. The unit/integration suite runs on x86 CI against a mock
 `NvBufSurface` (in both C++14 and C++20 lanes) and on-device against the real
 stack; on-hardware pipeline tests cover transforms, IPC, and the inference
-graph. AddressSanitizer and ThreadSanitizer clean. Full results, benchmarks,
-and evidence images:
+graph. AddressSanitizer and ThreadSanitizer clean. Changed C++ lines go through
+a diff-scoped [mutation gate](https://pavelguzenfeld.com/gst-nvmm-cpp/mutation-gate/)
+before they commit. Full results, benchmarks, and evidence images:
 [Validation & benchmarks](https://pavelguzenfeld.com/gst-nvmm-cpp/validation/).
 
 | JetPack | L4T | Jetson | NvBufSurface | Status |

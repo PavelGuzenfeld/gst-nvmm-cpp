@@ -1,0 +1,42 @@
+# Diff-scoped mutation gate. Spec and the decisions behind it: PavelGuzenfeld/dotfiles#9.
+#
+# No per-line test selection here. coverage.py contexts are the gate's only
+# narrowing mechanism and there is no C++ equivalent wired, so every mutant runs
+# the whole suite. Measured in gst-nvmm-cpp:dev on 20 cores: clean build 2.1s,
+# incremental rebuild after touching a header 0.25-0.8s, suite minus the fuzz
+# tests 2.4s. ~3s per mutant, so narrowing would buy nothing and a selection
+# miss would report a false SURVIVED.
+#
+# The fuzz tests are 12.4s of the suite's 14.3s and re-seed per run; --no-suite
+# fuzz drops them. CI still runs them (plain `meson test`, see ci.yml).
+#
+# A mutant that fails to compile makes the command non-zero and is counted
+# KILLED. That is deliberate but it does inflate the kill rate: an invalid
+# mutant is not evidence a test is watching.
+language = "cpp"
+
+# Build before test, or every mutant is measured against a stale binary and the
+# whole run reports KILLED for the wrong reason. Docker because the host has no
+# GStreamer dev stack; builddir-gate is configured on first use and kept warm.
+test_command = 'docker run --rm --shm-size=256m -v "$PWD":/src -w /src gst-nvmm-cpp:dev bash -c "[ -d builddir-gate ] || meson setup builddir-gate -Dcpp_std=c++14 -Dbuildtype=debug -Dwerror=false -Danalytics=enabled; ninja -C builddir-gate && meson test -C builddir-gate --no-suite fuzz"'
+
+# The gate is only as wide as the image it builds in. gst-nvmm-cpp:dev has no
+# TensorRT, VPI or CUDA toolkit, so meson.build never descends into these and a
+# mutant there survives for want of a build, not for want of a test — measured,
+# all 70 mutants on gst/nvmmsamurai/samurai_seed_math.hpp survived that way.
+# probes/ has no meson target at all. Drop an entry when the gate can run in a
+# JetPack image on-device.
+#
+# These are path prefixes, not suffix rules, so a new .cu outside them would be
+# gated against a build that cannot compile it: list every .cu here by name.
+exclude_paths = [
+    "probes/",
+    "gst/nvmmofa/",
+    "gst/nvmminfer/",
+    "gst/nvmmsecondaryinfer/",
+    "gst/nvmmdrawdet/",
+    "gst/nvmmsamurai/",
+    "gst/nvmmdetgate/",
+    "analytics/analytics_kernels.cu",
+    "gst/nvmmsamurai/samurai_kernels.cu",
+]

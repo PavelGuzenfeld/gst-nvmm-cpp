@@ -212,7 +212,8 @@ test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
 # Fuzz the consumer's shm-header validation. Standalone /dev/urandom driver;
 # a clean exit under ASan/UBSan is the pass. Not in the 'plugin' suite, so it
 # also runs under TSan (see scripts/run-sanitizers.sh).
-test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'])
+test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'],
+  suite : 'fuzz')
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
@@ -223,7 +224,10 @@ test('kalman_box', test_kalman_box, protocol : 'exitcode', suite : 'pure_cpp')
 test('phase_correlation', test_phase_correlation, protocol : 'exitcode', suite : 'pure_cpp')
 test('xfeat_motion', test_xfeat_motion, protocol : 'exitcode', suite : 'pure_cpp')
 test('gmc_backend', test_gmc_backend, protocol : 'exitcode', suite : 'pure_cpp')
-test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300, suite : 'pure_cpp')
+# Also in 'fuzz': 12.4s of the suite's 14.3s wall, and the mutation gate runs the
+# suite once per mutant, so it excludes that suite with --no-suite fuzz.
+test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300,
+  suite : ['pure_cpp', 'fuzz'])
 test('gmc_mask', test_gmc_mask, protocol : 'exitcode', suite : 'pure_cpp')
 test('samurai_view', test_samurai_view, protocol : 'exitcode', suite : 'pure_cpp')
 test('vit_grid', test_vit_grid, protocol : 'exitcode', suite : 'pure_cpp')
