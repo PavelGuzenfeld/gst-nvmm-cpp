@@ -3,7 +3,7 @@
 node walk that flags DLA-hostile ops, which force GPU fallback and mark where cuts must land."""
 import sys
 import onnx
-from collections import Counter, OrderedDict
+from collections import Counter
 
 path = sys.argv[1] if len(sys.argv) > 1 else "/onnx/memory_encoder.onnx"
 

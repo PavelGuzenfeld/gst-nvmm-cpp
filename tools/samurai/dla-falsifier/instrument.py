@@ -2,7 +2,7 @@
 """Insert env-gated SAMURAI_TIMING probes into samurai_tracker.cpp; throwaway, idempotent via a marker.
 Per frame: enc, prebox (steps 1-7), tail (8-9), cudaEvent-timed memenc_gpu, tail_bubble = tail - memenc_gpu.
 The memenc anchor includes k_sigmoid_scale so it skips the identical seed-path block."""
-import sys, re
+import sys
 
 p = sys.argv[1]
 s = open(p).read()

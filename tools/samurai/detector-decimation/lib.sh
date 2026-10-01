@@ -108,8 +108,3 @@ nvmm_detector() {
   [ "${3:-0}" != "0" ] && args="$args infer-gate-frames=$3"
   echo "nvmminfer engine-file=$1/trt/detector.engine $args ! queue"
 }
-# $1 asset dir, $2 extra nvmmsamurai args, $3 extra nvmmfusekf args (optional).
-# Element is named 'trk' because pipeline_bench.py counts buffers at that pad.
-nvmm_tracker_tail() {
-  echo "nvmmsamurai name=trk engine-dir=$1/trt consts-file=$1/trt/samurai_consts.bin max-kf=2 ${2:-} gmc=false ! queue ! nvmmfusekf target-class=0 ${3:-} ! fakesink sync=false"
-}
