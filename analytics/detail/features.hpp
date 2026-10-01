@@ -228,10 +228,12 @@ inline const int8_t *brief_pattern()
                 if (c >= -13 && c <= 13) return (int8_t)c;
             }
         };
+        const auto inside_disc = [](int x, int y) {
+            return x * x + y * y <= orb_patch_radius * orb_patch_radius;
+        };
         while (v.size() < (size_t)256 * 4) {
             const int8_t x0 = coord(), y0 = coord(), x1 = coord(), y1 = coord();
-            if (x0 * x0 + y0 * y0 > orb_patch_radius * orb_patch_radius ||
-                x1 * x1 + y1 * y1 > orb_patch_radius * orb_patch_radius) continue;
+            if (!inside_disc(x0, y0) || !inside_disc(x1, y1)) continue;
             if (x0 == x1 && y0 == y1) continue;
             v.push_back(x0); v.push_back(y0); v.push_back(x1); v.push_back(y1);
         }
