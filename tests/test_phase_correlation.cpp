@@ -1,11 +1,3 @@
-// Golden test for PhaseCorrelator (gst/common/phase_correlation.hpp) — recovers
-// KNOWN circular shifts of a broadband noise image, the standard phase-correlation
-// regression check. Self-contained, no OpenCV: the sub-pixel precision was certified
-// separately against cv::phaseCorrelate (0.009 px), so here the tolerance guards
-// STRUCTURAL regressions (sign flip -> off by 2*shift, missing fft-shift -> off by
-// W/2, bad peak -> whole pixels), which are all whole-pixel errors.
-//
-// exitcode protocol: returns non-zero if any shift is mis-recovered.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -14,14 +6,14 @@
 #include "phase_correlation.hpp"
 
 namespace {
-constexpr int W = 128, H = 64;   // small pow2 — fast; same code path as any pow2 size
+constexpr int W = 128, H = 64;
 
 std::vector<float> g_base;
 float at(int x, int y) {
     x = ((x % W) + W) % W; y = ((y % H) + H) % H;
     return g_base[(size_t)y * W + x];
 }
-}  // namespace
+}
 
 int main() {
     g_base.resize((size_t)W * H);
@@ -37,7 +29,7 @@ int main() {
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++) {
                 a[(size_t)y * W + x] = at(x, y);
-                b[(size_t)y * W + x] = at(x - sx, y - sy);   // content moved by (sx,sy)
+                b[(size_t)y * W + x] = at(x - sx, y - sy);
             }
         const nvmm::PhaseCorrelator::Shift r = pc.correlate(a.data(), b.data());
         const bool ok = std::fabs(r.x - sx) < 0.15 && std::fabs(r.y - sy) < 0.15 &&

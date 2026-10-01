@@ -1,6 +1,3 @@
-/// GstCheck-style state transition and pipeline tests for all NVMM elements.
-/// Tests element lifecycle, property validation, and basic pipeline wiring.
-
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
@@ -23,8 +20,6 @@ static int tests_failed = 0;
 #define ASSERT_EQ(a, b) ASSERT_TRUE((a) == (b))
 
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
-
-/* --- Element discovery tests --- */
 
 static void test_nvmmconvert_discovered() {
     GstElementFactory *factory =
@@ -50,8 +45,6 @@ static void test_nvmmappsrc_discovered() {
     PASS();
 }
 
-/* --- State transition tests --- */
-
 static void
 check_state_transitions(const char *element_name)
 {
@@ -61,7 +54,6 @@ check_state_transitions(const char *element_name)
     GstStateChangeReturn ret;
     GstState current, pending;
 
-    /* NULL → READY */
     ret = gst_element_set_state(elem, GST_STATE_READY);
     ASSERT_TRUE(ret == GST_STATE_CHANGE_SUCCESS ||
                 ret == GST_STATE_CHANGE_NO_PREROLL);
@@ -69,7 +61,6 @@ check_state_transitions(const char *element_name)
     gst_element_get_state(elem, &current, &pending, GST_CLOCK_TIME_NONE);
     ASSERT_EQ(current, GST_STATE_READY);
 
-    /* READY → NULL */
     ret = gst_element_set_state(elem, GST_STATE_NULL);
     ASSERT_EQ(ret, GST_STATE_CHANGE_SUCCESS);
 
@@ -82,7 +73,6 @@ static void test_nvmmconvert_state_transitions() {
 }
 
 static void test_nvmmsink_state_transitions() {
-    /* nvmmsink needs shm-name to start */
     GstElement *sink = gst_element_factory_make("nvmmsink", NULL);
     ASSERT_NOT_NULL(sink);
     g_object_set(sink, "shm-name", "/test_gstcheck_sink", NULL);
@@ -99,13 +89,10 @@ static void test_nvmmsink_state_transitions() {
     PASS();
 }
 
-/* --- Property validation tests --- */
-
 static void test_nvmmconvert_properties() {
     GstElement *elem = gst_element_factory_make("nvmmconvert", NULL);
     ASSERT_NOT_NULL(elem);
 
-    /* Set all properties */
     g_object_set(elem,
         "crop-x", (guint) 100,
         "crop-y", (guint) 200,
@@ -114,7 +101,6 @@ static void test_nvmmconvert_properties() {
         "flip-method", 2,
         NULL);
 
-    /* Read back and verify */
     guint cx, cy, cw, ch;
     gint fm;
     g_object_get(elem,
@@ -135,8 +121,6 @@ static void test_nvmmconvert_properties() {
     PASS();
 }
 
-/* --- Pad template tests --- */
-
 static void test_nvmmconvert_pad_templates() {
     GstElement *elem = gst_element_factory_make("nvmmconvert", NULL);
     ASSERT_NOT_NULL(elem);
@@ -151,7 +135,6 @@ static void test_nvmmconvert_pad_templates() {
     ASSERT_NOT_NULL(sink_caps);
     ASSERT_TRUE(!gst_caps_is_empty(sink_caps));
 
-    /* Verify NVMM memory feature is in caps */
     GstCapsFeatures *features = gst_caps_get_features(sink_caps, 0);
     ASSERT_NOT_NULL(features);
     ASSERT_TRUE(gst_caps_features_contains(features, "memory:NVMM"));
@@ -162,8 +145,6 @@ static void test_nvmmconvert_pad_templates() {
     gst_object_unref(elem);
     PASS();
 }
-
-/* --- Pipeline wiring test --- */
 
 static void test_pipeline_link_convert_to_sink() {
     GstElement *pipeline = gst_pipeline_new("test-pipeline");
@@ -178,10 +159,7 @@ static void test_pipeline_link_convert_to_sink() {
 
     gst_bin_add_many(GST_BIN(pipeline), convert, sink, NULL);
 
-    /* These can't actually link without NVMM caps negotiation in mock mode,
-       but we verify the elements can be added to a pipeline */
     GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_READY);
-    /* May fail since convert has no upstream — that's OK for this test */
     (void) ret;
 
     gst_element_set_state(pipeline, GST_STATE_NULL);

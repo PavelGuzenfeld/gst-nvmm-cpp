@@ -1,6 +1,3 @@
-/// Integration test for GstNvmmAllocator — tests the custom video
-/// allocation path (not GstAllocator::alloc).
-
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
@@ -34,7 +31,7 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
 static void test_allocator_creates() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     ASSERT_NOT_NULL(alloc);
     ASSERT_TRUE(GST_IS_NVMM_ALLOCATOR(alloc));
     gst_object_unref(alloc);
@@ -42,7 +39,7 @@ static void test_allocator_creates() {
 }
 
 static void test_alloc_video_nv12() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     ASSERT_NOT_NULL(alloc);
 
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
@@ -59,7 +56,7 @@ static void test_alloc_video_nv12() {
 }
 
 static void test_direct_map_returns_surface() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_NV12, 640, 480);
     ASSERT_NOT_NULL(mem);
@@ -77,7 +74,7 @@ static void test_direct_map_returns_surface() {
 }
 
 static void test_per_plane_map() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_NV12, 640, 480);
     ASSERT_NOT_NULL(mem);
@@ -96,7 +93,7 @@ static void test_per_plane_map() {
 }
 
 static void test_per_plane_write_read_roundtrip() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_RGBA, 64, 64);
     ASSERT_NOT_NULL(mem);
@@ -133,7 +130,7 @@ static void test_non_nvmm_memory_rejected() {
 }
 
 static void test_alloc_video_rgba() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_RGBA, 1280, 720);
     ASSERT_NOT_NULL(mem);
@@ -146,9 +143,8 @@ static void test_alloc_video_rgba() {
 }
 
 static void test_alloc_video_invalid() {
-    GstAllocator* alloc = gst_nvmm_allocator_new(0 /* default */);
+    GstAllocator* alloc = gst_nvmm_allocator_new(0);
 
-    /* Zero dimensions should fail */
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_NV12, 0, 0);
     ASSERT_TRUE(mem == NULL);
@@ -157,9 +153,6 @@ static void test_alloc_video_invalid() {
     PASS();
 }
 
-/* The buffer pool must stamp GstVideoMeta with the surface's REAL NVMM strides
-   (planeParams.pitch/offset), not the GstVideoInfo defaults — hardware alignment
-   makes them differ on Jetson (e.g. 640-wide NV12 -> 768 pitch). Production plan 4.3. */
 static void test_pool_video_meta_real_strides() {
     GstBufferPool* pool = gst_nvmm_buffer_pool_new();
     ASSERT_NOT_NULL(pool);
@@ -188,7 +181,6 @@ static void test_pool_video_meta_real_strides() {
     NvBufSurface* nvsurf = static_cast<NvBufSurface*>(surface);
     NvBufSurfacePlaneParams& pp = nvsurf->surfaceList[0].planeParams;
 
-    /* GstVideoMeta strides/offsets must match the surface's planeParams. */
     for (guint i = 0; i < vmeta->n_planes; i++) {
         ASSERT_TRUE(vmeta->stride[i] == (gint)pp.pitch[i]);
         ASSERT_TRUE(vmeta->offset[i] == (gsize)pp.offset[i]);
@@ -201,15 +193,11 @@ static void test_pool_video_meta_real_strides() {
     PASS();
 }
 
-/* Phase 2: NVMM memory must be share-capable so tee fan-out + make_writable
-   stay zero-copy (shallow buffer copy referencing the SAME NvBufSurface). */
-
 static void test_memory_is_shareable() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,
         GST_VIDEO_FORMAT_NV12, 640, 480);
     ASSERT_NOT_NULL(mem);
-    /* NO_SHARE would force a deep copy on make_writable — must be cleared. */
     ASSERT_TRUE(!GST_MEMORY_FLAG_IS_SET(mem, GST_MEMORY_FLAG_NO_SHARE));
     gst_memory_unref(mem);
     gst_object_unref(alloc);
@@ -225,7 +213,6 @@ static void test_share_references_same_surface() {
     GstMemory* shared = gst_memory_share(mem, 0, -1);
     ASSERT_NOT_NULL(shared);
     ASSERT_TRUE(gst_is_nvmm_memory(shared));
-    /* Zero-copy: the share resolves to the SAME NvBufSurface, not a copy. */
     ASSERT_TRUE(gst_nvmm_memory_get_surface(shared) ==
                 gst_nvmm_memory_get_surface(mem));
 
@@ -243,13 +230,11 @@ static void test_tee_make_writable_zero_copy() {
     void* surf0 = gst_nvmm_memory_get_surface(mem);
 
     GstBuffer* buf = gst_buffer_new();
-    gst_buffer_append_memory(buf, mem);  /* buf takes ownership of mem */
+    gst_buffer_append_memory(buf, mem);
 
-    /* gst_buffer_copy() shallow-copies: shares the memory by ref when the
-       memory is shareable, deep-copies when NO_SHARE. Assert it shared. */
     GstBuffer* buf2 = gst_buffer_copy(buf);
     void* surf1 = gst_nvmm_memory_get_surface(gst_buffer_peek_memory(buf2, 0));
-    ASSERT_TRUE(surf1 == surf0);  /* same surface across the two buffers */
+    ASSERT_TRUE(surf1 == surf0);
 
     gst_buffer_unref(buf2);
     gst_buffer_unref(buf);
@@ -266,9 +251,8 @@ static void test_share_outlives_parent() {
 
     GstMemory* shared = gst_memory_share(mem, 0, -1);
     ASSERT_NOT_NULL(shared);
-    gst_memory_unref(mem);  /* drop the original ref; share holds a parent ref */
+    gst_memory_unref(mem);
 
-    /* The surface is still valid: the share kept the owner alive. */
     ASSERT_TRUE(gst_nvmm_memory_get_surface(shared) == surf);
 
     gst_memory_unref(shared);

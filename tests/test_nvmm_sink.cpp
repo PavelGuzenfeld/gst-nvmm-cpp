@@ -1,5 +1,3 @@
-/// Unit tests for GstNvmmSink — shared memory sink element.
-
 #include <gst/gst.h>
 
 #include "gstnvmmsink.h"
@@ -51,9 +49,6 @@ static void test_sink_properties() {
     PASS();
 }
 
-/* pool-size is guarded to [13, 16]: a smaller pool starves the producer because
-   the consumer holds up to RELEASE_DELAY (12) in-flight buffers. GObject enforces
-   the param-spec range (rejecting out-of-range sets), so < 13 can't be configured. */
 static void test_sink_pool_size_guarded() {
     GstElement *sink = gst_element_factory_make("nvmmsink", NULL);
     ASSERT_NOT_NULL(sink);
@@ -62,10 +57,9 @@ static void test_sink_pool_size_guarded() {
         g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "pool-size");
     ASSERT_NOT_NULL(pspec);
     GParamSpecInt *ispec = G_PARAM_SPEC_INT(pspec);
-    ASSERT_TRUE(ispec->minimum == NVMM_MIN_POOL_SIZE);  /* 13 */
-    ASSERT_TRUE(ispec->maximum == NVMM_POOL_SIZE);      /* 16 */
+    ASSERT_TRUE(ispec->minimum == NVMM_MIN_POOL_SIZE);
+    ASSERT_TRUE(ispec->maximum == NVMM_POOL_SIZE);
 
-    /* A value inside the safe range round-trips. */
     gint ps = 0;
     g_object_set(sink, "pool-size", 14, NULL);
     g_object_get(sink, "pool-size", &ps, NULL);
@@ -100,11 +94,9 @@ static void test_sink_shm_created() {
 
     g_object_set(sink, "shm-name", shm_name, NULL);
 
-    /* Transition to READY → PAUSED triggers start() */
     GstStateChangeReturn ret = gst_element_set_state(sink, GST_STATE_READY);
     ASSERT_TRUE(ret == GST_STATE_CHANGE_SUCCESS);
 
-    /* Verify shared memory exists */
     int fd = shm_open(shm_name, O_RDONLY, 0);
     ASSERT_TRUE(fd >= 0);
 
@@ -117,9 +109,8 @@ static void test_sink_shm_created() {
     gst_element_set_state(sink, GST_STATE_NULL);
     gst_object_unref(sink);
 
-    /* After NULL, shm should be unlinked */
     fd = shm_open(shm_name, O_RDONLY, 0);
-    ASSERT_TRUE(fd < 0);  /* should fail */
+    ASSERT_TRUE(fd < 0);
 
     PASS();
 }

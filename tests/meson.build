@@ -38,9 +38,6 @@ test_ofa_meta = executable('test_optical_flow_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Pure-host YOLO parser test: compiles the parser directly (no CUDA/TRT/gst), so
-# the decode/NMS/letterbox-unmap math is covered on the x86 CI build, not only
-# on a Jetson during manual E2E.
 test_yolo_parser = executable('test_yolo_parser',
   'test_yolo_parser.cpp',
   '../gst/nvmminfer/yolo_parser.cpp',
@@ -48,7 +45,6 @@ test_yolo_parser = executable('test_yolo_parser',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Pure-host motion-compute test: per-box mean flow + moving flag (Phase 3).
 test_nvmm_motion = executable('test_nvmm_motion',
   'test_nvmm_motion.cpp',
   '../gst/common/nvmm_motion.cpp',
@@ -56,8 +52,6 @@ test_nvmm_motion = executable('test_nvmm_motion',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Pure-host tracker test: compiles the tracker core directly (no CUDA/TRT/gst),
-# covering IOU matching + id persistence + expiry on the x86 CI build.
 test_nvmm_tracker = executable('test_nvmm_tracker',
   'test_nvmm_tracker.cpp',
   '../gst/nvmmtracker/tracker.cpp',
@@ -65,8 +59,6 @@ test_nvmm_tracker = executable('test_nvmm_tracker',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Pure-host secondary-cache test: compiles the cascade's interval/expiry policy
-# core directly (no CUDA/TRT/gst), covered on the x86 CI build (Phase 3.2).
 test_secondary_cache = executable('test_secondary_cache',
   'test_secondary_cache.cpp',
   '../gst/nvmmsecondaryinfer/secondary_cache.cpp',
@@ -75,7 +67,6 @@ test_secondary_cache = executable('test_secondary_cache',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Classifier-result sibling meta (Phase 3.2): pure GstMeta round-trips.
 test_class_meta = executable('test_nvmm_class_meta',
   'test_nvmm_class_meta.cpp',
   include_directories : [config_inc, common_inc],
@@ -111,27 +102,21 @@ test_track_meta = executable('test_nvmm_track_meta',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# Pure-C++ Kalman filter (no gst/CUDA) — compile the unit under test directly.
 test_kalman_box = executable('test_kalman_box',
   ['test_kalman_box.cpp', '../gst/common/kalman_box.cpp'],
   include_directories : [common_inc],
 )
 
-# Header-only sparse independent-motion analytics (gst/common/xfeat_motion.hpp):
-# GMC median, RANSAC background affine, in-region residual, motion-blob cluster.
-# No TRT/CUDA/OpenCV — the OpenCV-free XFeat replacement math, covered on x86 CI.
 test_xfeat_motion = executable('test_xfeat_motion',
   ['test_xfeat_motion.cpp'],
   include_directories : [common_inc],
 )
 
-# Header-only FFT phase correlation (gst/common/phase_correlation.hpp); no CUDA/GST.
 test_phase_correlation = executable('test_phase_correlation',
   'test_phase_correlation.cpp',
   include_directories : [common_inc],
 )
 
-# Header-only crop geometry (gst/nvmmsamurai/samurai_view.hpp); no CUDA/GST.
 test_samurai_view = executable('test_samurai_view',
   ['test_samurai_view.cpp'],
   include_directories : [include_directories('../gst/nvmmsamurai')],
@@ -144,8 +129,6 @@ test_samurai_view = executable('test_samurai_view',
 # and trivial int->float test literals — no real bug, just cast-churn to silence.
 gmc_test_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
 
-# GMC backend selection (gmc_backend.hpp) + NCC-vs-FFT sign-agreement parity
-# (samurai_gmc.hpp + gst/common/phase_correlation.hpp); no CUDA/GST.
 test_gmc_backend = executable('test_gmc_backend',
   ['test_gmc_backend.cpp'],
   include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
@@ -162,30 +145,22 @@ test_fuzz_gmc = executable('test_fuzz_gmc',
   cpp_args : gmc_test_args,
 )
 
-# Target-aware GMC box masking (gst/nvmmsamurai/gmc_mask.hpp); no CUDA/GST. Proves
-# the isfinite guard (non-finite box -> no overlap, not a UB double->int cast).
 test_gmc_mask = executable('test_gmc_mask',
   ['test_gmc_mask.cpp'],
   include_directories : [include_directories('../gst/nvmmsamurai')],
   cpp_args : gmc_test_args,
 )
 
-# Header-only ViT grid-token count (gst/common/vit_grid.hpp); no CUDA/GST.
 test_vit_grid = executable('test_vit_grid',
   ['test_vit_grid.cpp'],
   include_directories : [common_inc],
 )
 
-# Parity-checks the SAMURAI CUDA kernels (transpose, add_per_channel, sigmoid/
-# threshold scale, bilinear upsample, mask bbox, memory assembly) against their
-# host references using deterministic synthetic inputs — no engines or golden
-# data, so it is a self-contained correctness test. CUDA-only, hence inside the
-# have_tensorrt block; the mock/x86 CI build skips it.
 if have_tensorrt and have_nvbufsurface
   samurai_kernel_probe = executable('samurai_kernel_probe',
     ['samurai_kernel_probe.cpp', '../gst/nvmmsamurai/samurai_kernels.cu'],
     include_directories : [include_directories('../gst/nvmmsamurai')],
-    dependencies : [trt_dep],   # brings the CUDA include dir + cudart
+    dependencies : [trt_dep],
     cuda_args : samurai_cuda_base_args,
     # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
     # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via trt_dep;
@@ -209,9 +184,6 @@ hwlib_suite = build_mock ? [] : ['nvidia_hwlib']
 test('nvmm_buffer', test_buffer, protocol : 'exitcode', suite : hwlib_suite)
 test('nvmm_transform', test_transform, protocol : 'exitcode', suite : hwlib_suite)
 test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
-# Fuzz the consumer's shm-header validation. Standalone /dev/urandom driver;
-# a clean exit under ASan/UBSan is the pass. Not in the 'plugin' suite, so it
-# also runs under TSan (see scripts/run-sanitizers.sh).
 test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'],
   suite : 'fuzz')
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
@@ -307,10 +279,6 @@ test('integration', test_integration, protocol : 'exitcode',
   is_parallel : false, suite : 'plugin',
   env : ['GST_PLUGIN_PATH=' + plugin_path_with_convert])
 
-# --- Reusable motion-analytics components (analytics/) -------------------------
-# All gated behind the single (default-disabled) `analytics` feature. The headers
-# are always available (analytics_inc); only these tests are opt-in. Pure C++14 —
-# no OpenCV anywhere in this suite.
 if have_analytics
   foreach t : ['persistence_gate', 'dual_homography', 'low_texture_motion',
                'active_region', 'detection_motion_gate', 'motion_magnify']
@@ -321,10 +289,6 @@ if have_analytics
   endforeach
 endif
 
-# --- Golden comparisons: hand-rolled analytics vs OpenCV as reference oracle ----
-# The only OpenCV user in the tree, behind its own default-disabled feature.
-# Fused-stage tests pin the numerics (tolerances documented per stage in the
-# test files); component tests compare end-to-end behaviour on the same scenes.
 if have_analytics_golden
   foreach t : ['image_ops', 'low_texture_motion', 'active_region', 'motion_magnify',
                'dual_homography']
@@ -336,9 +300,6 @@ if have_analytics_golden
   endforeach
 endif
 
-# Parity-checks the CUDA low_texture_motion against the (golden-validated) host
-# implementation on deterministic synthetic scenes — self-contained. Real-GPU
-# test, tagged nvidia_hwlib like the samurai probe.
 if have_analytics_cuda
   analytics_kernel_probe = executable('analytics_kernel_probe',
     ['analytics_kernel_probe.cpp', '../analytics/analytics_kernels.cu'],

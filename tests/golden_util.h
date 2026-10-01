@@ -1,6 +1,3 @@
-/// Shared plumbing for the golden-comparison tests: nvmm::img <-> cv::Mat
-/// converters and aggregate difference metrics. Test-only; the production
-/// headers never see OpenCV.
 #pragma once
 #include <opencv2/opencv.hpp>
 
@@ -36,7 +33,6 @@ inline nvmm::img::Image<uint8_t> from_cv_u8(const cv::Mat &m)
     return im;
 }
 
-/// max |ours - reference| over the whole frame (reference is CV_32F).
 inline double max_abs_diff(const nvmm::img::Image<float> &ours, const cv::Mat &ref)
 {
     double mx = 0;
@@ -46,7 +42,6 @@ inline double max_abs_diff(const nvmm::img::Image<float> &ours, const cv::Mat &r
     return mx;
 }
 
-/// Fraction of pixels where two binary masks disagree (ours: 0/1, ref: 0/255).
 inline double mask_disagree_frac(const nvmm::img::Image<uint8_t> &ours, const cv::Mat &ref)
 {
     long bad = 0;
@@ -56,4 +51,4 @@ inline double mask_disagree_frac(const nvmm::img::Image<uint8_t> &ours, const cv
     return (double)bad / ((double)ours.width() * ours.height());
 }
 
-}  // namespace golden
+}

@@ -1,13 +1,3 @@
-/// Unit tests for GstNvmmCompositor — VIC-composited multi-input NVMM mixer.
-///
-/// The element is loaded from the plugin registry (GST_PLUGIN_PATH), so these
-/// tests link no compositor symbols directly — they exercise the GObject
-/// surface: factory creation, request-pad allocation, and property round-trips
-/// for both the element (output width/height) and the request pads (placement).
-/// The compositing path itself (aggregate() → NvBufSurfTransform CROP_DST) is
-/// covered on-device by the dual-input gst-launch runs recorded in
-/// docs/validation.md, since aggregate() needs real NVMM buffers to run.
-
 #include <gst/gst.h>
 #include <gst/base/gstaggregator.h>
 
@@ -41,7 +31,6 @@ static void test_compositor_output_props() {
     GstElement *comp = gst_element_factory_make("nvmmcompositor", NULL);
     ASSERT_NOT_NULL(comp);
 
-    /* Defaults documented as 1280x720. */
     gint w = 0, h = 0;
     g_object_get(comp, "width", &w, "height", &h, NULL);
     ASSERT_TRUE(w == 1280 && h == 720);

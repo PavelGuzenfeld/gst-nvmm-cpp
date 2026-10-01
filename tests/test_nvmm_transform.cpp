@@ -1,5 +1,3 @@
-/// Unit tests for nvmm::NvmmTransform (NvBufSurfTransform wrapper).
-
 #include "nvmm_buffer.hpp"
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
@@ -12,7 +10,6 @@
 
 namespace {
 
-// Helper: create a test buffer
 nvmm::Result<nvmm::NvmmBuffer> make_buffer(uint32_t w, uint32_t h,
                                              nvmm::ColorFormat fmt) {
     nvmm::SurfaceParams params;
@@ -23,15 +20,12 @@ nvmm::Result<nvmm::NvmmBuffer> make_buffer(uint32_t w, uint32_t h,
     return nvmm::NvmmBuffer::create(params);
 }
 
-// --- Tests ---
-
 TEST(scale_nv12) {
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
     ASSERT_TRUE(src.has_value());
     ASSERT_TRUE(dst.has_value());
 
-    // Write a pattern to src
     auto map = src.value().map_write(0);
     ASSERT_TRUE(map.has_value());
     std::memset(map.value().data(), 0x42, map.value().size());
@@ -75,7 +69,6 @@ TEST(transform_with_flip) {
 }
 
 TEST(transform_rotate90) {
-    // 90-degree rotation swaps width and height in the destination.
     auto src = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(480, 640, nvmm::ColorFormat::kNV12);
     ASSERT_TRUE(src.has_value());
@@ -100,7 +93,6 @@ TEST(transform_rotate270) {
 }
 
 TEST(transform_with_interpolation) {
-    // Non-default interpolation should be accepted on a scaling transform.
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
     ASSERT_TRUE(src.has_value());
@@ -113,7 +105,6 @@ TEST(transform_with_interpolation) {
 }
 
 TEST(transform_with_compute_mode) {
-    // Selecting the VIC compute engine explicitly must still succeed.
     auto src = make_buffer(1920, 1080, nvmm::ColorFormat::kNV12);
     auto dst = make_buffer(640, 480, nvmm::ColorFormat::kNV12);
     ASSERT_TRUE(src.has_value());
@@ -147,7 +138,7 @@ TEST(null_surface_fails) {
     ASSERT_TRUE(!result.has_value());
 }
 
-}  // namespace
+}
 
 int main() {
     printf("=== NvmmTransform Tests ===\n");

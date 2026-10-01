@@ -1,7 +1,3 @@
-/// Unit tests for KalmanBox (kalman_box.hpp): the 8D constant-velocity filter.
-/// Reference values generated from the SAMURAI Python KalmanFilter
-/// (scripts/kf_ref.py) — these MUST match to validate the C++ port.
-
 #include "kalman_box.hpp"
 
 #include <cmath>
@@ -75,13 +71,6 @@ TEST(matches_python_reference) {
     ASSERT_NEAR(gd, 87.98068236, 1e-3);
 }
 
-// Each coordinate (cx, cy, w, h) carries its own independent position/velocity
-// pair, so a covariance term between two different coordinates is structurally
-// zero, not merely small — hence `== 0.0` and not a tolerance. chol4's
-// off-diagonal branches and the accumulation loops in both triangular solves are
-// unreachable for as long as this holds, which is why mutating them changes no
-// observable value. Should this ever go red, those branches become live and need
-// tests of their own.
 TEST(covariance_never_correlates_two_coordinates) {
     auto no_cross_terms = [](const nvmm::KalmanBox &f) {
         const auto &c = f.covariance();
@@ -97,13 +86,6 @@ TEST(covariance_never_correlates_two_coordinates) {
     kf.update(130, 215, 17, 11);  no_cross_terms(kf);
 }
 
-// gating_distance runs the residual through chol4 and a forward solve. The
-// covariance is diagonal (see the test above), so the answer must equal the
-// closed form sum d_i^2 / S_ii, S = cov[0..3][0..3] + diag(r^2) — an oracle that
-// shares no code with the factorisation it checks. The state is driven until a
-// pivot falls below 1: chol4 guards the pivot against being *negative*, and
-// nothing else in the suite reaches a state where a guard against "small"
-// instead would behave differently.
 TEST(gating_distance_matches_the_closed_form_at_a_pivot_below_one) {
     nvmm::KalmanBox kf;
     kf.initiate(100, 200, 14, 8);
@@ -116,7 +98,7 @@ TEST(gating_distance_matches_the_closed_form_at_a_pivot_below_one) {
     const double meas[4] = {131, 216, 17, 11};
     const auto &m = kf.mean();
     const auto &c = kf.covariance();
-    const double sp = 1.0 / 20.0;   // kStdWPos, kalman_box.hpp
+    const double sp = 1.0 / 20.0;
     const double r[4] = {sp * m[2], sp * m[3], sp * m[2], sp * m[3]};
 
     double expect = 0.0, smallest = c[0][0] + r[0] * r[0];
@@ -128,9 +110,6 @@ TEST(gating_distance_matches_the_closed_form_at_a_pivot_below_one) {
     }
     ASSERT_TRUE(smallest <= 1.0);
 
-    // Both sides are ~10 operations on values of order 10, so the two orderings
-    // may disagree by a few ulp of the result; 16 is the budget, measured worst
-    // case is under 1.
     const double budget = 16 * std::numeric_limits<double>::epsilon() * expect;
     ASSERT_NEAR(kf.gating_distance(meas[0], meas[1], meas[2], meas[3]), expect, budget);
 }
@@ -143,7 +122,7 @@ TEST(box_accessor_center_form) {
     ASSERT_TRUE(kf.initiated());
 }
 
-}  // namespace
+}
 
 int main() {
     printf("=== KalmanBox Tests (vs SAMURAI Python reference) ===\n");

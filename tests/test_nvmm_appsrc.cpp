@@ -1,5 +1,3 @@
-/// Unit tests for GstNvmmAppSrc — shared memory source element.
-
 #include <gst/gst.h>
 
 #include "gstnvmmappsrc.h"

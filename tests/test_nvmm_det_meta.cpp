@@ -1,7 +1,3 @@
-/// Unit tests for the IPC metadata side-channel: the flat wire layout
-/// (shm_protocol.h) and the DeepStream-free GstNvmmDetMeta (nvmm_det_meta.h).
-/// No NvBufSurface or DeepStream needed — pure POD + GstMeta round-trips.
-
 #include "shm_protocol.h"
 #include "nvmm_det_meta.h"
 
@@ -14,8 +10,6 @@
 
 namespace {
 
-/* gst_init must run before the static-registered TEST constructors below; in a
-   single TU static objects initialize in declaration order, so this goes first. */
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
 static void fill_frame(NvmmFrameMeta *f, guint32 n)
@@ -37,8 +31,6 @@ static void fill_frame(NvmmFrameMeta *f, guint32 n)
     }
 }
 
-// --- wire-layout / pointer math ---
-
 TEST(segment_size_without_meta) {
     ASSERT_EQ(nvmm_shm_segment_size(0), sizeof(NvmmShmHeader));
 }
@@ -50,7 +42,6 @@ TEST(segment_size_with_meta) {
 }
 
 TEST(meta_slot_pointer_math) {
-    /* Slot i must sit at header + i*sizeof(NvmmFrameMeta), right after header. */
     unsigned char *base = (unsigned char *)g_malloc0(nvmm_shm_segment_size(1));
     NvmmFrameMeta *slot0 = nvmm_shm_meta(base, 0);
     NvmmFrameMeta *slot3 = nvmm_shm_meta(base, 3);
@@ -59,8 +50,6 @@ TEST(meta_slot_pointer_math) {
               3u * sizeof(NvmmFrameMeta));
     g_free(base);
 }
-
-// --- GstNvmmDetMeta round-trips ---
 
 TEST(add_get_roundtrip) {
     NvmmFrameMeta f;
@@ -82,7 +71,7 @@ TEST(add_get_roundtrip) {
     ASSERT_TRUE(got->objects[1].width == 11.0f);
     ASSERT_TRUE(strcmp(got->objects[2].label, "class_2") == 0);
 
-    gst_buffer_unref(buf);  /* must free m->objects without leaking/crashing */
+    gst_buffer_unref(buf);
 }
 
 TEST(empty_detections) {
@@ -98,10 +87,8 @@ TEST(empty_detections) {
 
 TEST(object_count_clamped) {
     NvmmFrameMeta f;
-    /* Claim more than the cap; the objects[] array only holds MAX, so the
-       serializer must clamp to avoid reading past the fixed array. */
     fill_frame(&f, NVMM_META_MAX_OBJECTS);
-    f.num_objects = NVMM_META_MAX_OBJECTS + 100;  /* lie about the count */
+    f.num_objects = NVMM_META_MAX_OBJECTS + 100;
 
     GstBuffer *buf = gst_buffer_new();
     GstNvmmDetMeta *m = gst_buffer_add_nvmm_det_meta(buf, &f);
@@ -116,7 +103,7 @@ TEST(survives_buffer_copy) {
     GstBuffer *buf = gst_buffer_new();
     gst_buffer_add_nvmm_det_meta(buf, &f);
 
-    GstBuffer *copy = gst_buffer_copy(buf);  /* triggers meta transform (copy) */
+    GstBuffer *copy = gst_buffer_copy(buf);
     GstNvmmDetMeta *got = gst_buffer_get_nvmm_det_meta(copy);
     ASSERT_TRUE(got != nullptr);
     ASSERT_EQ(got->num_objects, 5u);
@@ -127,7 +114,7 @@ TEST(survives_buffer_copy) {
     gst_buffer_unref(copy);
 }
 
-}  // namespace
+}
 
 int main() {
     printf("=== NVMM Detection Metadata Tests ===\n");

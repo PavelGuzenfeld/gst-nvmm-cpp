@@ -1,15 +1,3 @@
-/// Parity-checks the CUDA low_texture_motion (analytics_kernels.cu) against the
-/// host implementation (itself golden-validated vs OpenCV) on deterministic
-/// synthetic scenes — self-contained, no golden data. Same metric family as the
-/// golden tests: the mask threshold is a hard nonlinearity, so a handful of
-/// knife-edge pixels may flip (FMA contraction differs between host and
-/// device); bound the flip fraction and demand tight agreement elsewhere.
-/// Real-GPU test; runs only in the -Danalytics_cuda lane (suite nvidia_hwlib).
-///
-/// Tests run from main(), NOT via the self-registering TEST macro: that macro
-/// executes in static constructors, and cross-TU static-init order would let
-/// them race the .cu translation unit's CUDA symbol registration ("invalid
-/// device symbol") — the same reason samurai_kernel_probe is main()-driven.
 #include "analytics_kernels.hpp"
 #include "analytics_scene.h"
 #include "low_texture_motion.hpp"
@@ -71,16 +59,14 @@ void parity_case(int w, int h, unsigned seed, int diff_blur) {
     const double frac = (double)over / ((double)w * h);
     printf("[%dx%d blur=%d flips=%.4f%% worst=%.2e] ", w, h, diff_blur, 100.0 * frac,
            worst_ok);
-    ASSERT_TRUE(frac <= 0.001);     // knife-edge threshold flips only
-    ASSERT_TRUE(worst_ok <= 1e-3);  // tight agreement everywhere else
+    ASSERT_TRUE(frac <= 0.001);
+    ASSERT_TRUE(worst_ok <= 1e-3);
 }
 
 void parity_256_with_output_blur() { parity_case(256, 256, 3, 3); }
 void parity_256_no_output_blur() { parity_case(256, 256, 17, 0); }
 void parity_odd_size_1080p() { parity_case(1919, 1079, 5, 3); }
 
-// zero-copy path: pitched device planes in, pitched device plane out, explicit
-// stream — must agree exactly with the host-wrapper path on the same input.
 void device_api_pitched_zero_copy() {
     const int w = 253, h = 199;
     nvmm::img::Image<uint8_t> cur = make_scene(w, h, 13);
@@ -92,7 +78,7 @@ void device_api_pitched_zero_copy() {
 
     cudaStream_t stream;
     ASSERT_TRUE(cudaStreamCreate(&stream) == cudaSuccess);
-    const size_t in_pitch = 320, out_pitch = 512;   // deliberately > width
+    const size_t in_pitch = 320, out_pitch = 512;
     uint8_t *d_in = nullptr;
     float *d_out = nullptr;
     ASSERT_TRUE(cudaMalloc(&d_in, in_pitch * h) == cudaSuccess);
@@ -119,7 +105,6 @@ void device_api_pitched_zero_copy() {
 }
 
 void strided_view_upload() {
-    // run() must honor a stride > width (e.g. a mapped NVMM plane)
     nvmm::img::Image<uint8_t> big = make_scene(320, 240, 9);
     nvmm::img::View<const uint8_t> v(big.row(10) + 16, 256, 200, big.width());
     nvmm::img::Image<uint8_t> packed(256, 200);
@@ -135,7 +120,7 @@ void strided_view_upload() {
         for (int x = 0; x < 256; x++) ASSERT_NEAR(a.at(y, x), b.at(y, x), 0.0);
 }
 
-}  // namespace
+}
 
 int main() {
     printf("== analytics CUDA kernel parity ==\n");

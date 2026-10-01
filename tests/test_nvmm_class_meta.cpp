@@ -1,7 +1,3 @@
-/// Unit tests for GstNvmmClassMeta (the secondary-classifier sibling meta):
-/// attach/read-back, empty case, and copy-transform behavior. Pure GstMeta —
-/// no NvBufSurface/CUDA — so it runs on x86 CI.
-
 #include "nvmm_class_meta.h"
 
 #include <gst/gst.h>
@@ -14,8 +10,6 @@
 
 namespace {
 
-/* gst_init must run before the static-registered TEST constructors below; in a
-   single TU static objects initialize in declaration order, so this goes first. */
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
 NvmmClassEntry entry(gint32 id, gfloat conf, guint32 fresh, const char *label) {
@@ -27,7 +21,7 @@ NvmmClassEntry entry(gint32 id, gfloat conf, guint32 fresh, const char *label) {
     return e;
 }
 
-}  // namespace
+}
 
 TEST(attach_and_read_back) {
     GstBuffer *buf = gst_buffer_new();
@@ -54,14 +48,13 @@ TEST(empty_meta_has_null_objects) {
     gst_buffer_unref(buf);
 }
 
-// gst_buffer_copy propagates the meta via the copy-transform (deep entry copy).
 TEST(copy_transform_carries_entries) {
     GstBuffer *buf = gst_buffer_new();
     NvmmClassEntry in[1] = { entry(7, 0.42f, 0, "walking") };
     gst_buffer_add_nvmm_class_meta(buf, in, 1);
 
     GstBuffer *copy = gst_buffer_copy(buf);
-    gst_buffer_unref(buf);  // copy must own its own entries
+    gst_buffer_unref(buf);
 
     GstNvmmClassMeta *m = gst_buffer_get_nvmm_class_meta(copy);
     ASSERT_NOT_NULL(m);

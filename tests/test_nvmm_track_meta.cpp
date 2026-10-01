@@ -1,6 +1,3 @@
-/// Unit tests for GstNvmmTrackMeta (nvmm_track_meta.h): the single-target
-/// SAMURAI track record. Pure GstMeta round-trips — no NvBufSurface needed.
-
 #include "nvmm_track_meta.h"
 
 #include <gst/gst.h>
@@ -12,7 +9,6 @@
 
 namespace {
 
-/* gst_init must run before the static-registered TEST constructors below. */
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
 static void fill(GstNvmmTrackMeta *m)
@@ -53,7 +49,6 @@ TEST(zero_initialized_on_add) {
     GstBuffer *buf = gst_buffer_new();
     GstNvmmTrackMeta *m = gst_buffer_add_nvmm_track_meta(buf);
     ASSERT_TRUE(m != nullptr);
-    /* Fresh meta is a lost/unseeded track. */
     ASSERT_TRUE(!m->valid);
     ASSERT_EQ(m->target_id, 0u);
     ASSERT_TRUE(m->left == 0.f && m->width == 0.f);
@@ -65,7 +60,6 @@ TEST(fetch_or_create_is_idempotent) {
     GstBuffer *buf = gst_buffer_new();
     GstNvmmTrackMeta *a = gst_buffer_add_nvmm_track_meta(buf);
     a->target_id = 99;
-    /* Second add must return the SAME meta (so nvmmfusekf overwrites in place). */
     GstNvmmTrackMeta *b = gst_buffer_add_nvmm_track_meta(buf);
     ASSERT_TRUE(a == b);
     ASSERT_EQ(b->target_id, 99u);
@@ -76,7 +70,7 @@ TEST(survives_buffer_copy) {
     GstBuffer *buf = gst_buffer_new();
     fill(gst_buffer_add_nvmm_track_meta(buf));
 
-    GstBuffer *copy = gst_buffer_copy(buf);  /* triggers meta transform (copy) */
+    GstBuffer *copy = gst_buffer_copy(buf);
     GstNvmmTrackMeta *got = gst_buffer_get_nvmm_track_meta(copy);
     ASSERT_TRUE(got != nullptr);
     ASSERT_EQ(got->frame_number, 42u);
@@ -89,7 +83,7 @@ TEST(survives_buffer_copy) {
     gst_buffer_unref(copy);
 }
 
-}  // namespace
+}
 
 int main() {
     printf("=== NVMM Track Metadata Tests ===\n");

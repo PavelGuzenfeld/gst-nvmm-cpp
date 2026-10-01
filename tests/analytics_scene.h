@@ -1,8 +1,3 @@
-/// Synthetic-scene builders for the analytics tests — the OpenCV-free
-/// replacements for the cv::RNG / cv::circle / cv::warpAffine plumbing the
-/// original tests used. Deterministic (fixed-seed LCG); numeric sequences
-/// differ from cv::RNG, so tests assert on behavioural ranges, not exact
-/// pixel values (as they already did).
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -53,16 +48,12 @@ inline void gaussian_blur_u8(nvmm::img::Image<uint8_t> &im, int k)
         for (int x = 0; x < im.width(); x++) im.at(y, x) = clamp_u8(f.at(y, x));
 }
 
-/// BORDER_REFLECT index fold (fedcba|abcdefgh|hgfedcb) — what the original
-/// tests' cv::warpAffine(..., BORDER_REFLECT) used.
 inline int reflect(int i, int n)
 {
     while (i < 0 || i >= n) i = i < 0 ? -i - 1 : 2 * n - 1 - i;
     return i;
 }
 
-/// Translate by (dx, dy) with bilinear sampling and reflected border —
-/// replaces the tests' cv::warpAffine translation.
 inline nvmm::img::Image<uint8_t> translate(const nvmm::img::Image<uint8_t> &src,
                                            double dx, double dy)
 {
@@ -86,8 +77,6 @@ inline nvmm::img::Image<uint8_t> translate(const nvmm::img::Image<uint8_t> &src,
     return out;
 }
 
-/// Textured but band-limited background: soft bright blobs on gray + light blur
-/// (the dual_homography / gate tests' make_bg()).
 inline nvmm::img::Image<uint8_t> textured_bg(int size, unsigned seed)
 {
     nvmm::img::Image<uint8_t> bg(size, size, 100);
@@ -100,4 +89,4 @@ inline nvmm::img::Image<uint8_t> textured_bg(int size, unsigned seed)
     return bg;
 }
 
-}  // namespace scene
+}
