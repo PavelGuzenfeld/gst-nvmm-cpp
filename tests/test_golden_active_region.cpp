@@ -1,6 +1,3 @@
-/// Golden comparison for analytics/active_region.hpp — the fused single-sweep
-/// row/col range reduction vs the original cv::reduce chain. Integer min/max
-/// arithmetic on both sides, so the returned rectangle must match EXACTLY.
 #include "active_region.hpp"
 #include "analytics_scene.h"
 #include "golden_util.h"
@@ -8,7 +5,6 @@
 
 namespace {
 
-// the original OpenCV implementation, verbatim, as the oracle
 cv::Rect reference_active_region(const cv::Mat &gray, int bar_range)
 {
     cv::Mat cmin, cmax, rmin, rmax;
@@ -26,12 +22,12 @@ cv::Rect reference_active_region(const cv::Mat &gray, int bar_range)
     return cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
 }
 
+/// Both sides do integer min/max, so the rectangle must match exactly.
 TEST(rect_matches_reference_exactly) {
     scene::Rng rng(31);
     for (int trial = 0; trial < 40; trial++) {
         const int w = rng.uniform(40, 300), h = rng.uniform(40, 300);
         nvmm::img::Image<uint8_t> f(w, h, (uint8_t)rng.uniform(0, 256));
-        // random content block + random uniform bars (sometimes none, sometimes all)
         const int bx = rng.uniform(0, w / 2), bw = rng.uniform(1, w - bx);
         const int by = rng.uniform(0, h / 2), bh = rng.uniform(1, h - by);
         for (int y = by; y < by + bh; y++)
@@ -49,7 +45,7 @@ TEST(rect_matches_reference_exactly) {
     }
 }
 
-}  // namespace
+}
 
 int main() {
     printf("== golden: active_region vs OpenCV ==\n");

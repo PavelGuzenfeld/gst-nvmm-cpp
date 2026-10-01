@@ -1,15 +1,3 @@
-/// Golden comparisons for analytics/image_ops.hpp + the fused Sobel stage —
-/// OpenCV is the reference oracle.
-///
-/// Tolerances (documented per stage):
-///  - gaussian_kernel: 1e-6 vs cv::getGaussianKernel — same fixed tables /
-///    sigma formula, only float-vs-double rounding differs.
-///  - gaussian_blur (float): 2e-3 absolute on inputs up to ~1442 (the Sobel
-///    magnitude ceiling). Same separable kernel and REFLECT_101 border; the
-///    difference is accumulation order (row-then-col float accumulate vs
-///    OpenCV's SIMD filter engine).
-///  - sobel_magnitude: 2e-3 absolute — integer taps are exact, both sides take
-///    a float sqrt; differences come from cv::magnitude's vectorised sqrt.
 #include "low_texture_motion.hpp"
 #include "analytics_scene.h"
 #include "golden_util.h"
@@ -25,13 +13,13 @@ nvmm::img::Image<uint8_t> random_frame(int w, int h, unsigned seed) {
     nvmm::img::Image<uint8_t> f(w, h);
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) f.at(y, x) = (uint8_t)rng.uniform(0, 256);
-    // a few smooth structures so it isn't only white noise
     for (int i = 0; i < 20; i++)
         scene::fill_circle(f, rng.uniform(10, w - 10), rng.uniform(10, h - 10),
                            rng.uniform(3, 9), (uint8_t)rng.uniform(0, 256));
     return f;
 }
 
+/// 1e-6: same fixed tables and sigma formula; only float-vs-double rounding differs.
 TEST(gaussian_kernel_matches_getGaussianKernel) {
     for (int k : {1, 3, 5, 7, 9, 15, 31}) {
         const std::vector<float> ours = nvmm::img::gaussian_kernel(k);
@@ -41,8 +29,10 @@ TEST(gaussian_kernel_matches_getGaussianKernel) {
     }
 }
 
+/// 2e-3 absolute on inputs up to ~1442, the Sobel magnitude ceiling. Same kernel and
+/// REFLECT_101 border; only the accumulation order differs from OpenCV's SIMD engine.
 TEST(gaussian_blur_matches_GaussianBlur_float) {
-    nvmm::img::Image<uint8_t> u8 = random_frame(157, 121, 11);   // odd sizes on purpose
+    nvmm::img::Image<uint8_t> u8 = random_frame(157, 121, 11);
     nvmm::img::Image<float> in(u8.width(), u8.height());
     for (int y = 0; y < u8.height(); y++)
         for (int x = 0; x < u8.width(); x++) in.at(y, x) = 5.5f * u8.at(y, x);
@@ -59,6 +49,7 @@ TEST(gaussian_blur_matches_GaussianBlur_float) {
     }
 }
 
+/// 2e-3 absolute: integer taps are exact; the gap is cv::magnitude's vectorised sqrt.
 TEST(sobel_magnitude_matches_cv_chain) {
     nvmm::img::Image<uint8_t> f = random_frame(200, 150, 23);
     nvmm::img::Image<float> ours(200, 150);
@@ -91,7 +82,7 @@ TEST(window_max_matches_minMaxLoc) {
     }
 }
 
-}  // namespace
+}
 
 int main() {
     printf("== golden: image_ops vs OpenCV ==\n");

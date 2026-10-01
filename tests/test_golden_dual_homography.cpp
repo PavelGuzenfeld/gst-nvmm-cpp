@@ -1,21 +1,3 @@
-/// Golden comparison for analytics/dual_homography.hpp vs OpenCV.
-///
-/// RANSAC output is randomized in OpenCV (and seeded-deterministic here), so
-/// output equality is not measurable even in principle. The comparisons are:
-///  - fused residual stage, FIXED homography: vs the original warpPerspective/
-///    absdiff/erode chain. The valid-region semantics differ by construction
-///    (source-margin test vs dst-space mask erode), so the metric is: <= 3% of
-///    pixels may differ by > 1.0 (region edges), and inside the conservative
-///    interior of both valid regions the value tolerance is 2.0 — OpenCV warps
-///    through 5-bit fixed-point bilinear INTO U8 (±0.5 rounding + 1/32
-///    coefficient quantisation) before absdiff, while we sample in float.
-///  - homography QUALITY: our RANSAC and cv::findHomography on the same noisy
-///    correspondences, both measured by reprojection error against the KNOWN
-///    planted homography: ours <= max(0.35 px, 2x OpenCV's).
-///  - component level: mover-vs-background separation ratio on the pan scene,
-///    ours (both feature pipelines) >= half of the original ORB+OpenCV
-///    implementation's ratio, and the mover must clear the downstream gate
-///    threshold (12) with margin.
 #include "dual_homography.hpp"
 #include "analytics_scene.h"
 #include "golden_util.h"
@@ -29,7 +11,6 @@ namespace {
 
 using namespace nvmm;
 
-// --- original OpenCV implementation (verbatim), as the component oracle -----
 namespace reference {
 
 struct Params {
@@ -127,14 +108,14 @@ cv::Mat independent_motion_residual(const cv::Mat &cur, const cv::Mat &ref_a,
     return sc;
 }
 
-}  // namespace reference
+}
 
-// --- residual stage, fixed H -------------------------------------------------
-
+/// Valid regions differ by construction, so up to 3% of pixels may differ by > 1.0. In
+/// both interiors the bound is 2.0: OpenCV warps through 5-bit fixed-point bilinear into U8.
 TEST(fused_residual_matches_warp_chain_for_fixed_H) {
     img::Image<uint8_t> cur_i = scene::textured_bg(256, 21);
     img::Image<uint8_t> ref_i = scene::translate(cur_i, 5.3, -3.7);
-    motion::detail::Mat3 H;   // cur -> ref: translation + mild perspective
+    motion::detail::Mat3 H;
     H.m[0] = 1.002; H.m[1] = 0.001;  H.m[2] = 5.3;
     H.m[3] = -0.001; H.m[4] = 0.998; H.m[5] = -3.7;
     H.m[6] = 4e-6;  H.m[7] = -3e-6;  H.m[8] = 1.0;
@@ -152,7 +133,7 @@ TEST(fused_residual_matches_warp_chain_for_fixed_H) {
 
     long over = 0;
     double worst_interior = 0;
-    const int inset = erode_k + 8;   // conservatively inside BOTH valid regions
+    const int inset = erode_k + 8;
     for (int y = 0; y < 256; y++)
         for (int x = 0; x < 256; x++) {
             const double d = std::fabs((double)ours.at(y, x) - ref.at<float>(y, x));
@@ -166,8 +147,8 @@ TEST(fused_residual_matches_warp_chain_for_fixed_H) {
     ASSERT_TRUE(worst_interior <= 2.0);
 }
 
-// --- homography quality vs cv::findHomography --------------------------------
-
+/// OpenCV's RANSAC is randomized, so both fits are scored by reprojection error against
+/// the planted H: ours <= max(0.35 px, 2x OpenCV's).
 TEST(ransac_quality_comparable_to_findHomography) {
     motion::detail::Mat3 Ht;
     Ht.m[0] = 1.01; Ht.m[1] = 0.02;  Ht.m[2] = 6.0;
@@ -183,7 +164,7 @@ TEST(ransac_quality_comparable_to_findHomography) {
         ASSERT_TRUE(Ht.project(x, y, u, v));
         u += (rng.below(200) - 100) / 400.0;
         v += (rng.below(200) - 100) / 400.0;
-        if (i % 3 == 0) { u = rng.below(256); v = rng.below(256); }   // 33% outliers
+        if (i % 3 == 0) { u = rng.below(256); v = rng.below(256); }
         p1.push_back(motion::detail::Pt{x, y});
         p2.push_back(motion::detail::Pt{(float)u, (float)v});
         c1.push_back(cv::Point2f(x, y));
@@ -219,8 +200,8 @@ TEST(ransac_quality_comparable_to_findHomography) {
     ASSERT_TRUE(ours <= std::max(0.35, 2.0 * cvs));
 }
 
-// --- component level ----------------------------------------------------------
-
+/// Ours keeps at least half the reference's mover/background ratio and clears twice
+/// the downstream gate threshold (12).
 TEST(component_separation_comparable_to_reference) {
     img::Image<uint8_t> bg = scene::textured_bg(256, 12345);
     img::Image<uint8_t> cur = bg;
@@ -265,12 +246,12 @@ TEST(component_separation_comparable_to_reference) {
         const double our_ratio = mover / (bg_median(ov) + 1.0);
         printf("[p%d mover=%.1f ratio=%.1f (ref mover=%.1f ratio=%.1f)] ",
                pl, mover, our_ratio, ref_mover, ref_ratio);
-        ASSERT_TRUE(mover > 24.0f);                 // 2x the downstream gate threshold
-        ASSERT_TRUE(our_ratio >= 0.5 * ref_ratio);  // separation within 2x of OpenCV's
+        ASSERT_TRUE(mover > 24.0f);
+        ASSERT_TRUE(our_ratio >= 0.5 * ref_ratio);
     }
 }
 
-}  // namespace
+}
 
 int main() {
     printf("== golden: dual_homography vs OpenCV ==\n");

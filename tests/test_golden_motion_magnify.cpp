@@ -1,12 +1,3 @@
-/// Golden comparison for analytics/motion_magnify.hpp — the fused IIR pass vs
-/// the original cv::Mat-expression implementation, frame by frame over a
-/// mixed-frequency sequence.
-///
-/// Tolerance: 1e-2 absolute after 120 frames. The per-pixel recurrence is
-/// identical; drift comes from float rounding-order differences (cv::Mat
-/// expressions produce different intermediate temporaries) compounding through
-/// the IIR state. With blur enabled the blur tolerance (2e-3/frame) feeds the
-/// same recurrence, hence the shared bound.
 #include "motion_magnify.hpp"
 #include "analytics_scene.h"
 #include "golden_util.h"
@@ -16,7 +7,6 @@
 
 namespace {
 
-// the original OpenCV implementation, verbatim, as the oracle
 class ReferenceMagnifier {
 public:
     explicit ReferenceMagnifier(const nvmm::motion::MagnifyParams &p) : p_(p) {
@@ -41,6 +31,8 @@ private:
     bool init_ = false;
 };
 
+/// 1e-2 after 120 frames: the recurrence is identical, but cv::Mat temporaries change
+/// the rounding order and the IIR state compounds it. Blur's 2e-3/frame feeds the same bound.
 void run_case(int blur) {
     nvmm::motion::MagnifyParams p;
     p.fps = 30.f; p.low_hz = 1.f; p.high_hz = 6.f; p.alpha = 8.f; p.blur = blur;
@@ -54,7 +46,6 @@ void run_case(int blur) {
 
     double worst = 0;
     for (int n = 0; n < 120; n++) {
-        // global oscillation + a local one at a different frequency
         const float g = 6.f * std::sin(2.f * 3.14159265f * 3.f * n / 30.f);
         const float l = 9.f * std::sin(2.f * 3.14159265f * 0.4f * n / 30.f);
         nvmm::img::Image<uint8_t> f(64, 48);
@@ -72,7 +63,7 @@ void run_case(int blur) {
 TEST(fused_pass_matches_reference_no_blur) { run_case(0); }
 TEST(fused_pass_matches_reference_with_blur) { run_case(5); }
 
-}  // namespace
+}
 
 int main() {
     printf("== golden: motion_magnify vs OpenCV ==\n");

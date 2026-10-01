@@ -1,15 +1,3 @@
-/// Golden comparison for analytics/low_texture_motion.hpp vs the original
-/// OpenCV op chain (inlined below as the oracle).
-///
-/// Metrics (documented per stage):
-///  - mask stage (blur -> threshold -> morphological close): DISAGREEMENT RATE,
-///    not value diff — the threshold is a hard nonlinearity, so a ~1e-3 float
-///    difference in the blurred gradient near grad_thresh legitimately flips a
-///    pixel. Bound: <= 0.2% of pixels. The box-sum close itself is exact on a
-///    binary mask, so all disagreement stems from near-threshold flips.
-///  - full component: value tolerance 0.05 wherever both sides KEPT the pixel,
-///    plus <= 0.5% of pixels allowed to differ by more (mask-edge flips fed
-///    through the output blur).
 #include "low_texture_motion.hpp"
 #include "analytics_scene.h"
 #include "golden_util.h"
@@ -21,7 +9,6 @@ namespace {
 
 using nvmm::motion::LowTextureMotionParams;
 
-// original OpenCV implementation, verbatim, as the oracle
 cv::Mat reference_mask(const cv::Mat &cur, const LowTextureMotionParams &p)
 {
     cv::Mat gx, gy, grad, gblur, low;
@@ -55,7 +42,6 @@ cv::Mat reference_low_texture_motion(const cv::Mat &cur, const cv::Mat &ref_a,
     return out;
 }
 
-// mixed scene: flat regions, noise patch, smooth blobs — plenty of mask boundary
 nvmm::img::Image<uint8_t> make_scene(unsigned seed) {
     scene::Rng rng(seed);
     nvmm::img::Image<uint8_t> f(256, 256);
@@ -69,6 +55,8 @@ nvmm::img::Image<uint8_t> make_scene(unsigned seed) {
     return f;
 }
 
+/// The threshold is a hard nonlinearity: a ~1e-3 blur difference near grad_thresh
+/// legitimately flips a pixel, so the bound is a 0.2% disagreement rate.
 TEST(mask_stage_disagreement_below_bound) {
     for (unsigned seed : {3u, 17u, 99u}) {
         nvmm::img::Image<uint8_t> cur = make_scene(seed);
@@ -81,6 +69,8 @@ TEST(mask_stage_disagreement_below_bound) {
     }
 }
 
+/// 0.05 wherever both masks kept the pixel; mask-edge flips fed through the output
+/// blur may exceed it on at most 0.5% of pixels.
 TEST(component_matches_reference) {
     nvmm::img::Image<uint8_t> cur = make_scene(7);
     scene::Rng rng(1234);
@@ -105,11 +95,11 @@ TEST(component_matches_reference) {
         }
     const double frac = (double)over / (256.0 * 256.0);
     printf("[>0.5 diff: %.4f%%, worst elsewhere %.2e] ", 100.0 * frac, worst_ok);
-    ASSERT_TRUE(frac <= 0.005);      // mask-edge flips only
-    ASSERT_TRUE(worst_ok <= 0.05);   // agreement wherever the masks agree
+    ASSERT_TRUE(frac <= 0.005);
+    ASSERT_TRUE(worst_ok <= 0.05);
 }
 
-}  // namespace
+}
 
 int main() {
     printf("== golden: low_texture_motion vs OpenCV ==\n");
