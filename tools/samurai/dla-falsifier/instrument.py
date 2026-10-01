@@ -17,8 +17,7 @@ def rep(old, new, s):
 s = rep("#include <vector>\n",
         "#include <vector>\n#include <chrono>\n", s)
 
-s = rep("}  // namespace\n\nstruct SamuraiTracker::Impl {",
-        "}  // namespace\n\n"
+s = rep("struct SamuraiTracker::Impl {",
         "static double g_prebox_ms = 0, g_tail_ms = 0, g_memenc_ms = -1;\n\n"
         "struct SamuraiTracker::Impl {", s)
 
