@@ -85,7 +85,8 @@ inline nvmm::img::Image<uint8_t> textured_bg(int size, unsigned seed)
     Rng rng(seed);
     for (int i = 0; i < 160; i++) {
         const int x = rng.uniform(8, size - 8), y = rng.uniform(8, size - 8);
-        fill_circle(bg, x, y, rng.uniform(2, 5), (uint8_t)rng.uniform(150, 240));
+        const uint8_t val = (uint8_t)rng.uniform(150, 240);
+        fill_circle(bg, x, y, rng.uniform(2, 5), val);
     }
     gaussian_blur_u8(bg, 5);
     return bg;
