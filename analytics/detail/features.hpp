@@ -210,6 +210,10 @@ inline img::Image<uint8_t> resize_bilinear(img::View<const uint8_t> src, int dw,
     return dst;
 }
 
+/// Rotation keeps |p| <= radius and rounding cannot pass an integer bound, so no
+/// orientation-disc or rotated-BRIEF access reaches farther from the keypoint.
+constexpr int orb_patch_radius = 15;
+
 /// 256 BRIEF pairs in the 31x31 patch from a fixed-seed sampler, so descriptors are
 /// deterministic but differ bit-for-bit from cv::ORB's learned table.
 inline const int8_t *brief_pattern()
@@ -226,7 +230,8 @@ inline const int8_t *brief_pattern()
         };
         while (v.size() < (size_t)256 * 4) {
             const int8_t x0 = coord(), y0 = coord(), x1 = coord(), y1 = coord();
-            if (x0 * x0 + y0 * y0 > 15 * 15 || x1 * x1 + y1 * y1 > 15 * 15) continue;
+            if (x0 * x0 + y0 * y0 > orb_patch_radius * orb_patch_radius ||
+                x1 * x1 + y1 * y1 > orb_patch_radius * orb_patch_radius) continue;
             if (x0 == x1 && y0 == y1) continue;
             v.push_back(x0); v.push_back(y0); v.push_back(x1); v.push_back(y1);
         }
@@ -239,7 +244,7 @@ inline const int8_t *brief_pattern()
 inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
                             float &cosA, float &sinA)
 {
-    static const int R = 15;
+    static const int R = orb_patch_radius;
     long m10 = 0, m01 = 0;
     for (int dy = -R; dy <= R; dy++) {
         const int span = (int)std::sqrt((float)(R * R - dy * dy));
@@ -255,10 +260,9 @@ inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
     sinA = (float)m01 / norm;
 }
 
-/// The border margin covers the rotated BRIEF reach (<= 15, +1 for rounding); the FAST ring needs no more.
 inline std::vector<OrbFeature> orb_detect(img::View<const uint8_t> im, const OrbParams &p)
 {
-    const int margin = 17;
+    const int margin = orb_patch_radius;
     std::vector<OrbFeature> out;
     img::Image<uint8_t> level_store;
     img::Image<float> blur_tmp;
