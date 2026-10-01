@@ -25,7 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Public SAM2 (vendored under the SAMURAI repo as the `sam2` package).
 from sam2.build_sam import build_sam2_video_predictor
 from sam2.modeling.sam import transformer as TR
 
@@ -145,7 +144,6 @@ class MDdeploy(nn.Module):
         return masks, ious, mto, obj
 
 
-# --- memory_encoder (skip_mask_sigmoid=True). -----------------------------------
 class ME(nn.Module):
     def __init__(self, e):
         super().__init__()
@@ -221,20 +219,17 @@ def main():
         a.config, ckpt_path=a.ckpt, device=dev, mode="eval",
         hydra_overrides_extra=[f"++model.image_size={a.image_size}"])
     S = a.image_size
-    g = S // 16            # embed grid (32 at 512)
+    g = S // 16
     print(f"model built. image_size={S} embed_grid={g}", flush=True)
 
-    # image_encoder
     x = torch.randn(1, 3, S, S, device=dev)
     save_onnx(a.out, "image_encoder", ImageEnc(m.image_encoder), (x,),
               ["input"], ["out1", "out2", "out3", "out4", "out5", "out6"], a.opset)
 
-    # prompt_encoder (box-seed)
     coords = torch.tensor([[[100., 100.], [200., 200.]]], device=dev)
     save_onnx(a.out, "prompt_encoder", PEBox(m.sam_prompt_encoder), (coords,),
               ["coords"], ["sparse", "dense"], a.opset)
 
-    # mask_decoder (deploy: dynamic sparse Np axis)
     ie = torch.randn(1, 256, g, g, device=dev)
     pe = m.sam_prompt_encoder.get_dense_pe().to(dev)
     sp = torch.randn(1, 3, 256, device=dev)
@@ -247,13 +242,11 @@ def main():
               ["masks", "ious", "tokens", "obj_score"], a.opset,
               dynamic={"sparse": {1: "Np"}})
 
-    # memory_encoder
     pix = torch.randn(1, 256, g, g, device=dev)
     mask = torch.randn(1, 1, S, S, device=dev)
     save_onnx(a.out, "memory_encoder", ME(m.memory_encoder), (pix, mask),
               ["pix_feat", "mask"], ["maskmem_feat", "maskmem_pos"], a.opset)
 
-    # memory_attention (real-RoPE)
     for mod in m.memory_attention.modules():
         if isinstance(mod, TR.RoPEAttention):
             fc = mod.freqs_cis
@@ -261,7 +254,7 @@ def main():
             mod.register_buffer("_rope_sin", fc.imag.contiguous().to(dev), persistent=False)
     TR.RoPEAttention.forward = _rope_forward
     n_optr = 64                                    # kObjTok: trailing obj_ptr tokens
-    hw = g * g                                     # 1024 at 512
+    hw = g * g
     ktotal = 7 * hw + n_optr                        # kMask*kTok + kObjTok = 7232
     curr = torch.randn(hw, 1, 256, device=dev)
     memory = torch.randn(ktotal, 1, 64, device=dev)

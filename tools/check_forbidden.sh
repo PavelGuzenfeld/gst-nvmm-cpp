@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # Leak guard for a public repo: no private names, site paths or ticket ids in tracked
 # files or commit messages.
-#
-#   check_forbidden.sh files      scan tracked file contents
-#   check_forbidden.sh messages   scan commit messages for the current range
-#   check_forbidden.sh selftest   prove both halves actually reject
-#
 # Two halves, deliberately:
 #
 #   DENYLIST ($FORBIDDEN)  specific names no pattern could infer -- internal org and
@@ -17,7 +12,6 @@
 #                          Catches identifiers nobody has thought of yet, which is the
 #                          case the denylist structurally cannot cover.
 #
-# Run it locally exactly as CI does before pushing.
 set -euo pipefail
 
 : "${FORBIDDEN:=rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone}"

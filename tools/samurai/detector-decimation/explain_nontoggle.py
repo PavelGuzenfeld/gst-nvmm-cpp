@@ -55,7 +55,6 @@ print(f"clustered into {len(runs)} runs; first 8: {runs[:8]}")
 near = sum(1 for f, _ in bad if any((f + d) in tog for d in range(-5, 6)))
 print(f"within 5 frames of a toggle: {near}/{len(bad)}")
 
-# Centre agreement vs scale agreement, to separate drift from size mismatch.
 cds, srs = [], []
 for f, _ in bad:
     ax, ay, aw, ah = box(b[f])

@@ -31,4 +31,4 @@ inline nvmm::img::Image<uint8_t> textured(int w, int h, unsigned seed)
     return f;
 }
 
-}  // namespace bench
+}

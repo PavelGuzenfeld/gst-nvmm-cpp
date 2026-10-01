@@ -45,8 +45,6 @@
 
 #include <NvInfer.h>
 
-// ---- tiny status helpers (match the VPI probes' [ OK ]/[FAIL] style) --------
-
 static bool cuda_ok(const char* what, cudaError_t e) {
     if (e == cudaSuccess) { printf("  [ OK ] %s\n", what); return true; }
     printf("  [FAIL] %s -> %s\n", what, cudaGetErrorString(e));
@@ -70,8 +68,6 @@ struct Logger : nvinfer1::ILogger {
     }
 } gLogger;
 
-// ---- NvBufSurface allocation (mirrors the VPI probe's make_* helper) --------
-
 static NvBufSurface* make_surface(uint32_t w, uint32_t h,
                                   NvBufSurfaceColorFormat fmt,
                                   NvBufSurfaceLayout layout,
@@ -88,7 +84,6 @@ static NvBufSurface* make_surface(uint32_t w, uint32_t h,
     return surf;
 }
 
-// Is `ptr` ordinary CUDA device memory usable without a host bounce?
 static bool is_cuda_device_ptr(const char* what, void* ptr) {
     cudaPointerAttributes attr;
     cudaError_t e = cudaPointerGetAttributes(&attr, ptr);
@@ -106,7 +101,7 @@ static bool is_cuda_device_ptr(const char* what, void* ptr) {
 }
 
 int main() {
-    const uint32_t W = 640, H = 640;   // typical detector network size
+    const uint32_t W = 640, H = 640;
     bool gate = true;
 
     printf("== Step 1: pitch-linear RGBA surface -> CUDA device pointer ==\n");
@@ -120,8 +115,6 @@ int main() {
     gate &= is_cuda_device_ptr("surface.dataPtr", surf_ptr);
 
     printf("== Step 2: NPP op on the surface pointer (device->device) ==\n");
-    // Write a constant into the surface via NPP — proves NPP consumes dataPtr
-    // in place with no host copy.
     {
         const Npp8u val[4] = {16, 32, 48, 255};
         NppiSize roi = { (int)W, (int)H };
@@ -139,7 +132,6 @@ int main() {
         std::unique_ptr<nvinfer1::IBuilderConfig> cfg(
             builder ? builder->createBuilderConfig() : nullptr);
         if (check("createInferBuilder / network / config", builder && net && cfg)) {
-            // Input: 1x3xHxW float (NCHW), one ReLU, output same shape.
             auto* in = net->addInput("in", nvinfer1::DataType::kFLOAT,
                                      nvinfer1::Dims4{1, 3, (int)H, (int)W});
             auto* act = net->addActivation(*in, nvinfer1::ActivationType::kRELU);
@@ -175,7 +167,6 @@ int main() {
                                           cudaMemcpyDeviceToDevice));
 
                 if (mem) {
-                    // THE proof: TRT binds raw device pointers we own.
                     bool bound = check("setInputTensorAddress(in, d_input)",
                                        ctx->setInputTensorAddress("in", d_in))
                                & check("setOutputTensorAddress(out, d_output)",

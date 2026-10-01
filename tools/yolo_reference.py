@@ -65,13 +65,12 @@ def main():
     H, W = img.shape[:2]
 
     padded, scale, px, py = letterbox(img, a.imgsz)
-    # BGR->RGB, HWC->CHW, [0,1], add batch dim.
     blob = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     blob = np.transpose(blob, (2, 0, 1))[None]
 
     sess = ort.InferenceSession(a.onnx, providers=["CPUExecutionProvider"])
-    out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]  # [1,84,8400]
-    pred = out[0].T                                             # [8400,84]
+    out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]
+    pred = out[0].T
 
     boxes_cxcywh = pred[:, :4]
     scores_all = pred[:, 4:]
@@ -80,7 +79,6 @@ def main():
     keep = confs >= a.conf
     boxes_cxcywh, class_ids, confs = boxes_cxcywh[keep], class_ids[keep], confs[keep]
 
-    # cxcywh (letterboxed space) -> xywh top-left, then un-letterbox to original.
     xywh = boxes_cxcywh.copy()
     xywh[:, 0] = (boxes_cxcywh[:, 0] - boxes_cxcywh[:, 2] / 2 - px) / scale
     xywh[:, 1] = (boxes_cxcywh[:, 1] - boxes_cxcywh[:, 3] / 2 - py) / scale

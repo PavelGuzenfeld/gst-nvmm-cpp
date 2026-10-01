@@ -33,7 +33,6 @@ echo "Device: $(cat /proc/device-tree/model 2>/dev/null || echo unknown)"
 echo "L4T:    $(head -1 /etc/nv_tegra_release 2>/dev/null | sed 's/.*R\([0-9]*\).*/R\1/' || echo unknown)"
 echo ""
 
-# --- Build ---
 echo "--- Build ---"
 if [ ! -d "$BUILD" ]; then
     ~/.local/bin/meson setup "$BUILD" -Dcpp_std=c++14 -Dbuildtype=debugoptimized -Dwerror=false
@@ -41,17 +40,14 @@ fi
 ninja -C "$BUILD"
 echo ""
 
-# --- Clear GStreamer cache ---
 rm -f ~/.cache/gstreamer-1.0/registry.*.bin
 
-# --- Unit tests ---
 echo "--- Unit Tests ---"
 ~/.local/bin/meson test -C "$BUILD" --print-errorlogs
 echo ""
 
 [ $QUICK -eq 1 ] && { echo "Quick mode: $PASS passed, $FAIL failed"; exit $FAIL; }
 
-# --- Pipeline tests ---
 echo "--- Pipeline Tests ---"
 mkdir -p "$OUT"
 
@@ -71,7 +67,6 @@ run_pipeline "flip-180" \
     nvvidconv ! 'video/x-raw,format=I420' ! nvjpegenc ! \
     filesink location="$OUT/ci_flip180.jpg"
 
-# rotate-90 / rotate-270 swap width and height (640x480 -> 480x640).
 run_pipeline "rotate-90" \
     videotestsrc num-buffers=1 pattern=smpte ! \
     'video/x-raw,width=640,height=480,format=I420' ! \
@@ -148,11 +143,6 @@ run_pipeline "30f-throughput" \
 
 echo ""
 
-# --- IPC pipeline test (two-process nvmmsink -> nvmmappsrc) ---
-# Verifies frames actually cross the process boundary: a background producer
-# publishes NVMM frames to a shared pool; a separate consumer process imports
-# the pool fds and pulls a fixed number of frames. Implementation-agnostic —
-# counts buffers that reach the consumer's sink, no reliance on debug logging.
 echo "--- IPC Pipeline Test (two-process nvmmsink -> nvmmappsrc) ---"
 SHM_NAME="/nvmm_test_e2e_$$"
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
@@ -172,7 +162,6 @@ gst-launch-1.0 -e \
     nvmmsink shm-name="$SHM_NAME" sync=true >/dev/null 2>&1 &
 IPC_PROD_PID=$!
 
-# Wait for the producer to create the shm segment.
 for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
 
 # Consumer (separate process): import the pool and pull 20 frames cross-process.
@@ -196,11 +185,9 @@ fi
 
 echo ""
 
-# --- Benchmarks ---
 echo "--- Benchmarks ---"
 "$BUILD/benchmarks/bench_nvmm" 2>/dev/null | grep -E '^(benchmark|alloc|map|transform)'
 echo ""
 
-# --- Summary ---
 echo "=== Results: $PASS passed, $FAIL failed ==="
 exit $FAIL

@@ -7,11 +7,6 @@ bench_nvmm = executable('bench_nvmm',
 
 benchmark('nvmm_operations', bench_nvmm, protocol : 'exitcode')
 
-# OpenCV vs hand-rolled (fused) analytics throughput — needs OpenCV, so it lives
-# in the golden lane. Emits the same CSV convention as bench_nvmm. Shares its
-# scene generator (bench_scene.h) with bench_analytics_cuda below, and its
-# img::Image<->cv::Mat conversion (golden_util.h, hence tests_inc) with the
-# golden-comparison tests.
 if have_analytics_golden
   bench_analytics = executable('bench_analytics',
     'bench_analytics.cpp',
@@ -22,8 +17,6 @@ if have_analytics_golden
     timeout : 600)
 endif
 
-# Fused host vs CUDA low_texture_motion (upload/download included) — real-GPU,
-# no OpenCV. Shares its scene generator (bench_scene.h) with bench_analytics above.
 if have_analytics_cuda
   bench_analytics_cuda = executable('bench_analytics_cuda',
     ['bench_analytics_cuda.cpp', '../analytics/analytics_kernels.cu'],
@@ -39,10 +32,6 @@ if have_analytics_cuda
     timeout : 600)
 endif
 
-# GMC estimator micro-bench (ncc / fft-cpu / fft-cuda / pva): us/frame + shift
-# error on synthetic known-shift patches, isolated from the pipeline. Needs nvcc
-# for the GMC CUDA kernels (samurai_kernels.cu); VPI enables the fft-cuda + pva
-# backends. Jetson-only (real CUDA/VPI); also gates numeric correctness (exitcode).
 if have_tensorrt
   bench_gmc_deps = [trt_dep]
   bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']

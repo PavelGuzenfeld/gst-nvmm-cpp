@@ -19,7 +19,7 @@
 # its own exit status explicitly, so it does not need -e to detect failure.
 set -uo pipefail
 
-require_env() {  # require_env VAR...  -- fail loudly and early, naming what is missing
+require_env() {
   local missing=() v
   for v in "$@"; do
     if [ -z "${!v:-}" ]; then missing+=("$v"); fi
@@ -136,9 +136,7 @@ nvmm_source_jpegs() { echo "multifilesrc location=$1/%06d.jpg index=1 stop-index
 # $1 asset dir, $2 extra nvmmsamurai args (max-kf, seed, kf-vel-noise, ...).
 # Named 'trk' because pipeline_bench.py counts buffers at that pad.
 nvmm_tracker() { echo "nvmmsamurai name=trk engine-dir=$1/trt consts-file=$1/trt/samurai_consts.bin ${2:-} gmc=false ! queue"; }
-# $1 extra nvmmfusekf args (teardown, flush-carry, ...).
 nvmm_fusekf()  { echo "nvmmfusekf target-class=0 ${1:-} ! fakesink sync=false"; }
-# Seed-gate element, present only in the deployed shape.
 nvmm_detgate() { echo "nvmmdetgate target-class=0 border-frac=${1:-0.02} ! queue"; }
 # $1 asset dir, $2 infer-interval, $3 infer-gate-frames.
 # Emit a property ONLY when it is not the default: gst-launch hard-rejects an unknown

@@ -31,7 +31,7 @@ void bench(const char *impl, int w, int h, int iters, Fn &&fn)
            total, total / iters, mn, mx);
 }
 
-}  // namespace
+}
 
 int main()
 {

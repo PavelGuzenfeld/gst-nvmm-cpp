@@ -21,17 +21,14 @@ def rep(old, new, s):
         print("ANCHOR NOT FOUND:\n" + old); sys.exit(2)
     return s.replace(old, new, 1)
 
-# A) include <chrono>
 s = rep("#include <vector>\n",
         "#include <vector>\n#include <chrono>\n", s)
 
-# B) file-static timing accumulators after the first anon namespace close
 s = rep("}  // namespace\n\nstruct SamuraiTracker::Impl {",
         "}  // namespace\n\n"
         "static double g_prebox_ms = 0, g_tail_ms = 0, g_memenc_ms = -1;\n\n"
         "struct SamuraiTracker::Impl {", s)
 
-# C) track_frame entry
 s = rep("    frame_idx++;\n",
         "    frame_idx++;\n"
         "    const bool _tmg = std::getenv(\"SAMURAI_TIMING\") != nullptr;\n"
@@ -42,7 +39,6 @@ s = rep("    frame_idx++;\n",
         "        if (!_evM0) { cudaEventCreate(&_evM0); cudaEventCreate(&_evM1); }\n"
         "    }\n", s)
 
-# D) box-ready timestamp
 s = rep("    out.target_id = 1;\n",
         "    out.target_id = 1;\n"
         "    if (_tmg) _tbox = std::chrono::steady_clock::now();\n", s)
@@ -64,7 +60,6 @@ s = rep(
     "    if (_tmg) { float _ms = 0; cudaEventElapsedTime(&_ms, _evM0, _evM1); g_memenc_ms = _ms; }\n",
     s)
 
-# F) capture tail wall just before the end-of-frame GST_LOG
 s = rep('    GST_LOG("track f=%ld sel=%d obj=%.2f stable=%d box',
         "    if (_tmg) {\n"
         "        auto _tf1 = std::chrono::steady_clock::now();\n"
@@ -74,7 +69,6 @@ s = rep('    GST_LOG("track f=%ld sel=%d obj=%.2f stable=%d box',
         "    }\n"
         '    GST_LOG("track f=%ld sel=%d obj=%.2f stable=%d box', s)
 
-# G) track(): time run_encoder + print the CSV line after track_frame
 s = rep(
     "    if (!impl_->run_encoder(frame, impl_->last, err)) {\n"
     "        GST_WARNING(\"track encoder failed: %s\", err.c_str());\n"

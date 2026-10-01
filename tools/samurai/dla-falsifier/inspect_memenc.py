@@ -14,7 +14,6 @@ from collections import Counter, OrderedDict
 
 path = sys.argv[1] if len(sys.argv) > 1 else "/onnx/memory_encoder.onnx"
 
-# DLA core count via TRT (authoritative for the target).
 try:
     import tensorrt as trt
     b = trt.Builder(trt.Logger(trt.Logger.ERROR))

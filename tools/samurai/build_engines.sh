@@ -6,11 +6,6 @@
 #   docker run --rm --runtime nvidia --network host \
 #     -v <onnx_dir>:/onnx -v <out_dir>:/out gst-nvmm-infer:jp6 \
 #     bash /src/tools/samurai/build_engines.sh
-#
-# Env knobs (defaults shown):
-#   ONNX  ONNX input dir   (default: /onnx)
-#   OUT   engine output dir(default: /out)
-#   T     trtexec path     (default: /usr/src/tensorrt/bin/trtexec)
 set -eu
 ONNX="${ONNX:-/onnx}"
 OUT="${OUT:-/out}"

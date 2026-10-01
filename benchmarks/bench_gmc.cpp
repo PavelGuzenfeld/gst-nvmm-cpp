@@ -29,7 +29,6 @@ using Us = std::chrono::duration<double, std::micro>;
 namespace {
 constexpr int kIters = 300;
 
-// Broadband noise base, big enough to crop shifted patches of any tested size.
 std::vector<uint8_t> g_base;
 int g_bw = 0, g_bh = 0;
 uint8_t base_at(int x, int y) {
@@ -41,7 +40,6 @@ void make_base(int w, int h) {
     uint32_t s = 0x9e3779b9u;
     for (auto &v : g_base) { s = s * 1664525u + 1013904223u; v = (uint8_t)((s >> 24) & 0xFF); }
 }
-// prev/curr patches (n x n) where curr content is moved by (sx,sy) vs prev.
 void make_pair(int n, int sx, int sy, std::vector<uint8_t> &prev, std::vector<uint8_t> &curr) {
     prev.resize((size_t)n * n); curr.resize((size_t)n * n);
     for (int y = 0; y < n; y++)
@@ -53,7 +51,6 @@ void make_pair(int n, int sx, int sy, std::vector<uint8_t> &prev, std::vector<ui
 
 struct Acc { double mean_err = 0, max_err = 0, mean_resp = 0; int nfail = 0; };
 
-// Run `fn(prev,curr)->(dx,dy,resp)` over a shift set; return accuracy + gate.
 template <typename Fn>
 Acc accuracy(int n, double tol, Fn fn) {
     const int shifts[][2] = {{0, 0}, {2, 0}, {0, 3}, {3, -2}, {-4, 5}, {6, -3}, {-7, -5}};
@@ -72,12 +69,11 @@ Acc accuracy(int n, double tol, Fn fn) {
     return a;
 }
 
-// Median us/frame over kIters on a single representative pair.
 template <typename Fn>
 double timing(int n, Fn fn) {
     std::vector<uint8_t> p, c; make_pair(n, 5, -4, p, c);
     double dx, dy, resp;
-    fn(p.data(), c.data(), dx, dy, resp);  // warm up
+    fn(p.data(), c.data(), dx, dy, resp);
     double best = 1e18;
     for (int i = 0; i < kIters; i++) {
         const auto t0 = Clock::now();
@@ -87,7 +83,7 @@ double timing(int n, Fn fn) {
     }
     return best;  // min = least-noisy estimate of compute cost
 }
-}  // namespace
+}
 
 int main() {
     make_base(320, 320);
@@ -96,7 +92,6 @@ int main() {
     std::printf("benchmark,patch,min_us_per_frame\n");
     std::vector<std::pair<const char *, Acc>> accs;
 
-    // --- ncc (128) ---
     {
         auto fn = [](const uint8_t *p, const uint8_t *c, double &dx, double &dy, double &r) {
             const nvmm::GmcShift s = nvmm::estimate_shift(p, c, 128, 24);
@@ -105,7 +100,6 @@ int main() {
         std::printf("ncc,128,%.2f\n", timing(128, fn));
         accs.emplace_back("ncc", accuracy(128, 0.5, fn));
     }
-    // --- fft-cpu (128) ---
     {
         nvmm::PhaseCorrelator pc(128, 128);
         std::vector<float> pf, cf;
@@ -119,7 +113,6 @@ int main() {
         accs.emplace_back("fft-cpu", accuracy(128, 0.15, fn));
     }
 #ifdef NVMM_HAVE_VPI
-    // --- fft-cuda (128) ---
     if (nvmm::GmcVpiFft::available()) {
         nvmm::GmcVpiFft fft; std::string e;
         if (fft.init(128, e)) {

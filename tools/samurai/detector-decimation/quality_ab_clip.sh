@@ -38,8 +38,6 @@ for N in 2 3; do
   echo
   echo "==== $C: infer-interval=$N vs baseline ===="
   python3 "$O/trajectory_compare.py" --baseline "$R/${C}_v_n1.csv" --test "$R/${C}_v_n$N.csv" || true
-  # Attribute the failures: fusion-flag toggle vs genuine trajectory divergence.
-  # Shared with the other harnesses rather than re-implemented inline.
   python3 "$O/explain_nontoggle.py" "$R/${C}_v_n1.csv" "$R/${C}_v_n$N.csv" || true
 done
 echo "CLIP-DONE-$C"

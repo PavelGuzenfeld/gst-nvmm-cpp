@@ -22,7 +22,7 @@ static void* surface_of(GstBuffer* buf) {
     GstMemory* m = gst_buffer_peek_memory(buf, 0);
     GstMapInfo mi;
     if (!m || !gst_memory_map(m, &mi, GST_MAP_READ)) return nullptr;
-    void* p = mi.data;  // NVMM convention: mapped data == NvBufSurface*
+    void* p = mi.data;
     gst_memory_unmap(m, &mi);
     return p;
 }
@@ -39,7 +39,7 @@ static GstPadProbeReturn branch_a(GstPad*, GstPadProbeInfo* info, gpointer) {
     void* before = surface_of(buf);
     buf = gst_buffer_make_writable(buf);
     void* after = surface_of(buf);
-    GST_PAD_PROBE_INFO_DATA(info) = buf;  // hand back the (possibly new) buffer
+    GST_PAD_PROBE_INFO_DATA(info) = buf;
 
     frames++;
     const bool same = before && before == after;

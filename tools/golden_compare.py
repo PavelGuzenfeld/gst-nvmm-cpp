@@ -64,8 +64,6 @@ def main():
 
     print(f"reference: {len(ref)} det(s) >= {a.conf}; actual: {len(act)} det(s) >= {a.conf}")
 
-    # Floor: a reference with detections but an empty parse means the log format
-    # changed or GST_DEBUG=nvmminfer:6 was missing — fail loudly, don't pass on 0.
     if ref and not act:
         print("GOLDEN FAIL: reference has detections but none parsed from the "
               "actual log (format change or missing GST_DEBUG=nvmminfer:6?)")

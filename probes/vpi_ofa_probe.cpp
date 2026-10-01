@@ -38,7 +38,7 @@ static NvBufSurface* make_nv12_bl(uint32_t w, uint32_t h) {
     p.width = w; p.height = h;
     p.colorFormat = NVBUF_COLOR_FORMAT_NV12;
     p.layout = NVBUF_LAYOUT_BLOCK_LINEAR;   // OFA requires block-linear
-    p.memType = NVBUF_MEM_SURFACE_ARRAY;    // Jetson NVMM
+    p.memType = NVBUF_MEM_SURFACE_ARRAY;
     NvBufSurface* surf = nullptr;
     if (NvBufSurfaceCreate(&surf, 1, &p) != 0) { printf("  [FAIL] NvBufSurfaceCreate NV12/BL\n"); return nullptr; }
     surf->numFilled = surf->batchSize ? surf->batchSize : 1;
@@ -103,7 +103,6 @@ int main() {
         vpiSubmitOpticalFlowDense(stream, be, payload, prev, cur, mv))
         && vpi_ok("vpiStreamSync after OFA", vpiStreamSync(stream));
 
-    /* Read the flow field back to host (what the element copies into meta). */
     bool read_ok = false;
     if (ofa_ok) {
         VPIImageData out;

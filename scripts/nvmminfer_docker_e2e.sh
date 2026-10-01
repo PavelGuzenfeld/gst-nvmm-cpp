@@ -4,15 +4,6 @@
 # plugins inside the container (under --runtime nvidia, so the tegra BSP libs +
 # CUDA/TRT are visible), then streams an annotated H.264 feed over TCP. Watch it
 # from any machine on the LAN with the printed gst-launch command.
-#
-# Env (override as needed):
-#   ENGINE   TensorRT engine file          (default ~/yolo/yolo11n_fp16.engine)
-#   VIDEO    looped H.264 elementary src   (default JetPack car sample if present)
-#   IMG      still-image fallback source   (default ~/yolo/bus.jpg)
-#   FPS      stream framerate              (default 60)
-#   PORT     tcpserversink port            (default 6000)
-#   IMAGE    docker image tag              (default gst-nvmm-infer:jp6)
-#   NAME     server container name         (default nvmm-e2e)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

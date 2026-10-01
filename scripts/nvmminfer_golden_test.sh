@@ -6,13 +6,6 @@
 # Produces an independent CPU reference (onnxruntime on the SAME onnx the TRT
 # engine was built from) and compares it, box-by-box, to nvmminfer's TRT output
 # on the same image — guarding against silent preprocess/parser regressions.
-#
-# Env (override as needed):
-#   ONNX     reference onnx model     (default ~/yolo/yolo11n.onnx)
-#   ENGINE   TensorRT engine          (default ~/yolo/yolo11n_fp16.engine)
-#   IMG      test image               (default ~/yolo/bus.jpg)
-#   IMGSZ    network size             (default 640)
-#   CONF IOU CONF_TOL                 (compare thresholds; defaults 0.3/0.5/0.15)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

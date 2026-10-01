@@ -38,7 +38,7 @@ static bool vpi_ok(const char* what, VPIStatus s) {
 }
 
 static VPIImage wrap_nvmm(NvBufSurface* surf, uint64_t backends, const char* label) {
-    int fd = (int)surf->surfaceList[0].bufferDesc;  // DMABUF fd of the NVMM surface
+    int fd = (int)surf->surfaceList[0].bufferDesc;
     VPIImageData d;
     memset(&d, 0, sizeof(d));
     d.bufferType = VPI_IMAGE_BUFFER_NVBUFFER;
@@ -55,7 +55,7 @@ static NvBufSurface* make_gray8(uint32_t w, uint32_t h, NvBufSurfaceLayout layou
     p.width = w; p.height = h;
     p.colorFormat = NVBUF_COLOR_FORMAT_GRAY8;
     p.layout = layout;
-    p.memType = NVBUF_MEM_SURFACE_ARRAY;  // Jetson NVMM
+    p.memType = NVBUF_MEM_SURFACE_ARRAY;
     NvBufSurface* surf = nullptr;
     if (NvBufSurfaceCreate(&surf, 1, &p) != 0) { printf("  [FAIL] NvBufSurfaceCreate GRAY8\n"); return nullptr; }
     surf->numFilled = surf->batchSize ? surf->batchSize : 1;
@@ -88,7 +88,6 @@ int main(int argc, char** argv) {
         vpiSubmitErode(stream, VPI_BACKEND_CUDA, in, out, nullptr, 3, 3, VPI_BORDER_ZERO))
         && vpi_ok("vpiStreamSync after CUDA", vpiStreamSync(stream));
 
-    // The actual gate: PVA erode on the zero-copy-wrapped NVMM surface.
     bool pva_ok = vpi_ok("vpiSubmitErode(PVA) on wrapped NVMM",
         vpiSubmitErode(stream, VPI_BACKEND_PVA, in, out, nullptr, 3, 3, VPI_BORDER_ZERO))
         && vpi_ok("vpiStreamSync after PVA", vpiStreamSync(stream));

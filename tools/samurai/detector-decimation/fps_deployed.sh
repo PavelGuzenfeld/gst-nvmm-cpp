@@ -18,7 +18,6 @@ TEARDOWN=${TEARDOWN:-teardown=true teardown-border-frac=0.05 teardown-border-fra
 src=$(nvmm_source_clip "$O/clip1.mp4")
 tail="$(nvmm_detgate) ! $(nvmm_tracker "$O" "max-kf=2 $SEED kf-vel-noise=0.1") ! $(nvmm_fusekf "$TEARDOWN")"
 
-# label : infer-interval : infer-gate-frames
 for A in "n1:1:0" "n2g5:2:5" "n3g5:3:5"; do
   L=${A%%:*}; rest=${A#*:}; IV=${rest%%:*}; GATE=${rest##*:}
   echo "##### deployed shape, $L (interval=$IV gate=$GATE) #####"

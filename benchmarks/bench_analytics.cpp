@@ -23,7 +23,7 @@ namespace {
 template <typename Fn>
 void bench(const char *component, const char *impl, int w, int h, int iters, Fn &&fn)
 {
-    fn();  // warm-up
+    fn();
     double total = 0, mn = 1e12, mx = 0;
     for (int i = 0; i < iters; i++) {
         const auto t0 = Clock::now();
@@ -37,7 +37,6 @@ void bench(const char *component, const char *impl, int w, int h, int iters, Fn 
            total, total / iters, mn, mx);
 }
 
-// original OpenCV chains (the pre-port implementations), as the baselines
 cv::Rect cv_active_region(const cv::Mat &gray)
 {
     cv::Mat cmin, cmax, rmin, rmax;
@@ -161,7 +160,7 @@ nvmm::img::Image<uint8_t> shift(const nvmm::img::Image<uint8_t> &src, int dx, in
     return out;
 }
 
-}  // namespace
+}
 
 int main()
 {
@@ -178,20 +177,17 @@ int main()
         cv::Mat cv_frame = golden::to_cv(frame), cv_ra = golden::to_cv(ref_a),
                 cv_rb = golden::to_cv(ref_b);
 
-        // active_region
         bench("active_region", "fused", w, h, iters,
               [&] { (void)nvmm::video::active_region(frame); });
         bench("active_region", "opencv", w, h, iters,
               [&] { (void)cv_active_region(cv_frame); });
 
-        // low_texture_motion
         nvmm::motion::LowTextureMotionParams ltp;
         bench("low_texture_motion", "fused", w, h, iters,
               [&] { (void)nvmm::motion::low_texture_motion(frame, ref_a, ref_b, ltp); });
         bench("low_texture_motion", "opencv", w, h, iters,
               [&] { (void)cv_low_texture_motion(cv_frame, cv_ra, cv_rb, ltp); });
 
-        // motion_magnify (blurless + blurred)
         for (int blur : {0, 5}) {
             nvmm::motion::MagnifyParams mp;
             mp.blur = blur;
@@ -203,7 +199,6 @@ int main()
                   [&] { (void)cvm.process(cv_frame); });
         }
 
-        // dual_homography (fewer iters — heavy)
         const int hiters = w >= 1920 ? 5 : 10;
         for (int pl = 0; pl < 2; pl++) {
             nvmm::motion::DualHomographyParams dp;

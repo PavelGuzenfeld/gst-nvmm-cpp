@@ -97,7 +97,6 @@ def main():
             continue
         ious.append((n, iou(b, t)))
 
-    # YOLO's actual contribution rate, to show the mechanism rather than infer it.
     fused_base = sum(v["yolo_fused"] for v in base.values())
     fused_test = sum(v["yolo_fused"] for v in test.values())
 
