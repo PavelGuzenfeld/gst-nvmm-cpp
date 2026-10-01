@@ -24,19 +24,27 @@ test_command = 'docker run --rm --shm-size=256m -v "$PWD":/src -w /src gst-nvmm-
 # TensorRT, VPI or CUDA toolkit, so meson.build never descends into these and a
 # mutant there survives for want of a build, not for want of a test — measured,
 # all 70 mutants on gst/nvmmsamurai/samurai_seed_math.hpp survived that way.
-# probes/ has no meson target at all. Drop an entry when the gate can run in a
-# JetPack image on-device.
+# probes/ has no meson target at all. The on-device run is in docs/mutation-gate.md.
 #
 # These are path prefixes, not suffix rules, so a new .cu outside them would be
 # gated against a build that cannot compile it: list every .cu here by name.
 exclude_paths = [
     "probes/",
     "gst/nvmmofa/",
-    "gst/nvmminfer/",
-    "gst/nvmmsecondaryinfer/",
     "gst/nvmmdrawdet/",
-    "gst/nvmmsamurai/",
     "gst/nvmmdetgate/",
+    "gst/nvmminfer/gstnvmminfer.",
+    "gst/nvmminfer/preprocess.",
+    "gst/nvmminfer/trt_engine.",
+    "gst/nvmmsecondaryinfer/gstnvmmsecondaryinfer.",
+    "gst/nvmmsecondaryinfer/roi_preprocess.",
+    "gst/nvmmsamurai/gmc_vpi_fft.hpp",
+    "gst/nvmmsamurai/gmc_vpi_pva.hpp",
+    "gst/nvmmsamurai/gstnvmmsamurai.",
+    "gst/nvmmsamurai/samurai_consts.hpp",
+    "gst/nvmmsamurai/samurai_kernels.",
+    "gst/nvmmsamurai/samurai_memory.hpp",
+    "gst/nvmmsamurai/samurai_seed_math.hpp",
+    "gst/nvmmsamurai/samurai_tracker.",
     "analytics/analytics_kernels.cu",
-    "gst/nvmmsamurai/samurai_kernels.cu",
 ]
