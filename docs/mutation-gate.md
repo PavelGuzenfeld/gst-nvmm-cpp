@@ -101,9 +101,38 @@ TensorRT, VPI or CUDA toolkit, so `meson.build` never descends into
 `nvmmdetgate`, and `probes/` has no meson target at all. A mutant in any of them
 survives for want of a build, not for want of a test — measured: all 70 mutants
 on `gst/nvmmsamurai/samurai_seed_math.hpp` survived for exactly that reason.
-Those paths are listed in `exclude_paths` in `.mutation-gate.toml` and the gate
-announces each one it skips. Drop an entry when the gate can run in a JetPack
-image on-device.
+Those files are listed in `exclude_paths` in `.mutation-gate.toml` and the gate
+announces each one it skips.
+
+Eight files under those directories do compile in the dev image, because a test
+builds them directly, and the gate covers them: `yolo_parser.{cpp,hpp}`,
+`secondary_cache.{cpp,hpp}`, `samurai_view.hpp`, `samurai_gmc.hpp`,
+`gmc_mask.hpp` and `gmc_backend.hpp`. Their first full run (#80, 2026-10-01)
+was 235 mutants, 115 killed, 120 survived. Those survivors are untested
+boundaries, not build artifacts, and are tracked in #85.
+
+The rest only build on a Jetson. To gate one there, run the gate from a scratch
+checkout whose `test_command` rsyncs the tree to an Orin and runs
+`ninja && meson test --no-suite fuzz` in a warm native build dir configured with
+`-Danalytics=enabled -Danalytics_cuda=enabled`. JetPack 6.2 ships CUDA,
+TensorRT and VPI on the host, so the build needs no container, and `/dev/nvmap`
+is reachable for the hwlib suite. Set `mutant_timeout` explicitly: a mutant there
+costs about 12 s (rebuild + suite on 8 cores) against a 7.6 s baseline. The first
+on-device run (JetPack 6.2, L4T R36.4.3):
+
+| file | mutants | killed | survived |
+|---|---|---|---|
+| `samurai_seed_math.hpp` | 70 | 45 | 25 |
+| `samurai_memory.hpp` | 59 | 52 | 7 |
+| `samurai_consts.hpp` | 36 | 12 | 24 |
+| `samurai_kernels.cu` | 134 | 93 | 41 |
+| `analytics_kernels.cu` | 248 | 188 | 60 |
+
+`samurai_seed_math.hpp` is the before/after: 0 of 70 killed in the dev image, 45
+on-device. The table's survivors are tracked in #91. The element sources (`gstnvmm*.cpp`, `samurai_tracker.cpp`,
+`preprocess.cpp`, `trt_engine.cpp`, `roi_preprocess.cpp`, `detgate.hpp`) are
+linked by no test target on any build, so a run there measures that absence. They
+stay excluded until a test drives them (#86).
 
 `analytics/` headers are reached only through the component tests
 (`-Danalytics=enabled`). The OpenCV golden oracle (`-Danalytics_golden`) does not
