@@ -20,8 +20,7 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 run_pipeline() {
     local name="$1"; shift
-    timeout 10 gst-launch-1.0 -e "$@" 2>/dev/null
-    if [ $? -eq 0 ]; then pass "$name"; else fail "$name"; fi
+    if timeout 10 gst-launch-1.0 -e "$@" 2>/dev/null; then pass "$name"; else fail "$name"; fi
 }
 
 echo "=== gst-nvmm-cpp Jetson Validation ==="
@@ -108,7 +107,7 @@ run_pipeline "format-convert-NV12-RGBA" \
 
 run_pipeline "decoder-nvmmconvert" \
     videotestsrc num-buffers=5 ! \
-    'video/x-raw,width=640,height=480' ! x264enc tune=zerolatency ! \
+    'video/x-raw,width=640,height=480,format=I420' ! x264enc tune=zerolatency ! \
     'video/x-h264,stream-format=byte-stream' ! \
     nvv4l2decoder ! 'video/x-raw(memory:NVMM)' ! \
     nvmmconvert flip-method=rotate-180 ! \
@@ -158,7 +157,7 @@ for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
 IPC_RX=$(timeout 20 gst-launch-1.0 -e \
     nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers="$IPC_FRAMES" ! \
     'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
-    fakesink silent=false -v 2>/dev/null | grep -c "chain")
+    fakesink silent=false -v 2>/dev/null | grep -c "chain" || true)
 
 kill "$IPC_PROD_PID" 2>/dev/null || true
 wait "$IPC_PROD_PID" 2>/dev/null || true
