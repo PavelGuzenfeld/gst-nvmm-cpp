@@ -172,7 +172,7 @@ fi
 echo ""
 
 echo "--- Benchmarks ---"
-"$BUILD/benchmarks/bench_nvmm" 2>/dev/null | grep -E '^(benchmark|alloc|map|transform)'
+"$BUILD/benchmarks/bench_nvmm" 2>/dev/null | grep -E '^(benchmark|alloc|map|transform)' || true
 echo ""
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
