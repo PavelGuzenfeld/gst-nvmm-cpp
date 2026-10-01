@@ -59,34 +59,6 @@ inline std::vector<Match> filter_matches(const float* sim, const float* z0, cons
     return out;
 }
 
-/// Same set as np.argpartition(d, k)[:k]; order is not part of the contract.
-inline std::vector<int> k_nearest(const std::vector<Pt2>& pts, Pt2 p, int k) {
-    const int n = (int)pts.size();
-    std::vector<int> idx(n);
-    for (int i = 0; i < n; ++i) idx[i] = i;
-    auto d2 = [&](int i){ double dx = pts[i].x - p.x, dy = pts[i].y - p.y; return dx*dx + dy*dy; };
-    if (k >= n) return idx;
-    std::nth_element(idx.begin(), idx.begin() + k, idx.end(),
-                     [&](int a, int b){ return d2(a) < d2(b); });
-    idx.resize(k);
-    return idx;
-}
-
-inline std::array<int,3> most_non_collinear_triplet(const std::vector<Pt2>& sub) {
-    const int n = (int)sub.size();
-    double best = -1; std::array<int,3> tri{0,1,2};
-    for (int a = 0; a < n; ++a)
-        for (int b = a + 1; b < n; ++b)
-            for (int c = b + 1; c < n; ++c) {
-                double area = 0.5 * std::fabs(
-                    sub[a].x*(sub[b].y - sub[c].y) +
-                    sub[b].x*(sub[c].y - sub[a].y) +
-                    sub[c].x*(sub[a].y - sub[b].y));
-                if (area > best) { best = area; tri = {a, b, c}; }
-            }
-    return tri;
-}
-
 inline bool affine_from_3pts(const std::array<Pt2,3>& src, const std::array<Pt2,3>& dst,
                              double M[6]) {
     double a[3][3];
@@ -111,43 +83,6 @@ inline bool affine_from_3pts(const std::array<Pt2,3>& src, const std::array<Pt2,
     solve3(dst[0].y, dst[1].y, dst[2].y, row1);
     M[0]=row0[0]; M[1]=row0[1]; M[2]=row0[2];
     M[3]=row1[0]; M[4]=row1[1]; M[5]=row1[2];
-    return true;
-}
-
-/// Port of XFeat registration.py PointToPointProjector: affine from the
-/// max-area triplet of the 9 matches nearest `point`. False under 9 matches.
-inline bool project_point(const std::vector<Pt2>& mref, const std::vector<Pt2>& mqry,
-                          Pt2 point, Pt2& out) {
-    if (mref.size() < 9) return false;
-    std::vector<int> near = k_nearest(mref, point, 9);
-    std::vector<Pt2> subR(9), subQ(9);
-    for (int i = 0; i < 9; ++i) { subR[i] = mref[near[i]]; subQ[i] = mqry[near[i]]; }
-    auto tri = most_non_collinear_triplet(subR);
-    std::array<Pt2,3> sr{ subR[tri[0]], subR[tri[1]], subR[tri[2]] };
-    std::array<Pt2,3> dq{ subQ[tri[0]], subQ[tri[1]], subQ[tri[2]] };
-    double M[6];
-    if (!affine_from_3pts(sr, dq, M)) return false;
-    out.x = M[0]*point.x + M[1]*point.y + M[2];
-    out.y = M[3]*point.x + M[4]*point.y + M[5];
-    return true;
-}
-
-struct BBox { long x, y, w, h; };
-enum RegMode { REG_FREEZE_VL, REG_FLIP };
-
-/// Port of tracker_engine.py registration(): casts truncate like Python int().
-/// False (keep the prior box) when projection fails.
-inline bool registration_bbox(const std::vector<Pt2>& mref, const std::vector<Pt2>& mqry,
-                              BBox in, double scale, RegMode mode, BBox& out) {
-    long cx = (long)((double)in.x + (double)in.w / 2.0);
-    long cy = (long)((double)in.y + (double)in.h / 2.0);
-    Pt2 pt{ cx * scale, cy * scale }, proj;
-    if (!project_point(mref, mqry, pt, proj)) return false;
-    long nx = (long)(proj.x / scale);
-    long ny = (long)(proj.y / scale);
-    long nw = (mode == REG_FLIP) ? (in.w / 2) : in.w;
-    long nh = (mode == REG_FLIP) ? (in.h / 2) : in.h;
-    out = { nx - nw / 2, ny - nh / 2, nw, nh };
     return true;
 }
 

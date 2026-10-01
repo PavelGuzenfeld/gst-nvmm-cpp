@@ -16,15 +16,6 @@ inline const char *gmc_backend_name(GmcBackend b) {
     return "auto";
 }
 
-inline GmcBackend gmc_backend_from_string(const char *s) {
-    if (!s) return GmcBackend::Auto;
-    if (!std::strcmp(s, "ncc"))      return GmcBackend::Ncc;
-    if (!std::strcmp(s, "fft-cpu"))  return GmcBackend::FftCpu;
-    if (!std::strcmp(s, "fft-cuda")) return GmcBackend::FftCuda;
-    if (!std::strcmp(s, "pva"))      return GmcBackend::Pva;
-    return GmcBackend::Auto;
-}
-
 /// auto walks fft-cuda -> pva -> fft-cpu -> ncc. An unavailable explicit request
 /// degrades to the CPU form of the same algorithm, never to a higher tier or to a
 /// different algorithm, so a CI build always lands on a CPU backend.

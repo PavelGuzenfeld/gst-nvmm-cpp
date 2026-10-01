@@ -29,7 +29,6 @@ public:
     static constexpr int    kXH = 256, kXW = 480;
     static constexpr int    kXHC = 32, kXWC = 60;
     static constexpr double kRW = 480.0, kRH = 270.0;
-    static constexpr double kRegScale = 0.25;
     /// Bounds LightGlue's O(N0*N1) cost and its kTopK^2-float sim buffer (4 MB).
     static constexpr int    kTopK = 1024;
 

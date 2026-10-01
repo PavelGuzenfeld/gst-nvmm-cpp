@@ -21,7 +21,6 @@ struct MotionSample { float x, y, resid; };
 /// registration space, not intensity absdiff. borderfrac rejects near the full
 /// frame edge and is not letterbox-aware.
 struct GateCfg {
-    int   dlt      = 5;
     float rmin     = 12.f;
     float dist     = 45.f;
     int   amin     = 6;
@@ -36,9 +35,7 @@ struct GateCfg {
     int   motion_minpts  = 4;
     float motion_cell    = 48.f;
 
-    /// Unused since the sky-diff path was dropped; kept for property compatibility.
-    float ds = 2.f, rminsky = 8.f, confsky = 0.55f, cleanconf = 0.6f, skydom = 0.95f;
-    int   cleanmax = 2; float motion_minarea = 4.f; int stride = 3;
+    float confsky = 0.55f;
 };
 
 /// Keeps only the YOLO det that moves independently of the background transform.

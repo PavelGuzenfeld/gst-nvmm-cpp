@@ -105,8 +105,8 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         }
         self->matcher_ready = TRUE;
         nvmm::GateCfg cfg;
-        cfg.dlt = self->dlt; cfg.rmin = (float)self->rmin;
-        cfg.rminsky = (float)self->rminsky; cfg.confsky = (float)self->confsky;
+        cfg.rmin = (float)self->rmin;
+        cfg.confsky = (float)self->confsky;
         cfg.dist = (float)self->dist; cfg.amin = self->amin; cfg.ksup = self->ksup;
         cfg.maxlost = self->maxlost; cfg.borderfrac = (float)self->borderfrac;
         cfg.seed_on_motion = self->seed_on_motion; cfg.motion_silent = self->motion_silent;
