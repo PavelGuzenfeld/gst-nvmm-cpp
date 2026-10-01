@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# On a JP6 Orin: build the infer image and the plugins under --runtime nvidia, then stream
-# nvmminfer + nvmmdrawdet output as H.264 over TCP; it prints the viewer command.
+# JP6 Orin: build the infer image and plugins (--runtime nvidia), stream nvmminfer + nvmmdrawdet H.264 over TCP.
+# Mounted paths go absolute (docker -v reads relative ones as volumes); caps stay quoted for the container's bash -c.
+# Builds use host networking: this kernel lacks the iptables 'raw' table BuildKit's bridge needs.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,10 +17,8 @@ fail() { echo "E2E FAIL: $1" >&2; exit 1; }
 case "$FPS"  in ''|*[!0-9]*) fail "FPS must be a positive integer (got: $FPS)";; esac
 case "$PORT" in ''|*[!0-9]*) fail "PORT must be a positive integer (got: $PORT)";; esac
 [ -f "$ENGINE" ] || fail "engine not found: $ENGINE (build with trtexec)"
-# docker -v reads a relative host path as a named volume, so every mounted path goes absolute.
 ENGINE="$(realpath "$ENGINE")"
 
-# Caps stay single-quoted so '(memory:NVMM)' survives the container's bash -c re-parse.
 if [ -f "$VIDEO" ]; then
   VIDEO="$(realpath "$VIDEO")"
   SOURCE="multifilesrc location=/data/src.h264 loop=true caps='video/x-h264,framerate=$FPS/1' \
@@ -38,7 +37,6 @@ fi
 GST_PLUGIN_PATH=/src/builddir-docker/gst/nvmminfer:/src/builddir-docker/gst/nvmmdrawdet:/src/builddir-docker/gst/nvmmalloc
 
 echo "== [1/3] build image $IMAGE =="
-# Host networking: this kernel lacks the iptables 'raw' table that BuildKit's bridge needs.
 docker build --network=host -f "$ROOT/docker/Dockerfile.jetson-jp6-infer" \
   -t "$IMAGE" "$ROOT" >/dev/null || fail "docker build failed"
 

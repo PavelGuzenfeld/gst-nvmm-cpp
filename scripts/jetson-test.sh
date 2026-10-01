@@ -1,5 +1,6 @@
 #!/bin/bash
 # Usage: jetson-test.sh [--quick]   on a Jetson with JetPack 5+; --quick runs the unit tests only.
+# The IPC producer is live-paced (is-live) so it outlives the consumer's connect instead of tearing down the shm first.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -142,20 +143,20 @@ echo "--- IPC Pipeline Test (two-process nvmmsink -> nvmmappsrc) ---"
 SHM_NAME="/nvmm_test_e2e_$$"
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-# is-live paces the producer so it outlives the consumer's connect; an unpaced one tears down
-# the shm first. The default pool-size (16) must exceed the consumer's RELEASE_DELAY (12).
+POOL_SIZE_ABOVE_RELEASE_DELAY=16
+IPC_FRAMES=20
+IPC_MIN_RX_ALLOWING_HANDSHAKE_LOSS=15
 gst-launch-1.0 -e \
     videotestsrc is-live=true num-buffers=300 pattern=ball ! \
     'video/x-raw,width=640,height=480,format=I420,framerate=30/1' ! \
     nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
-    nvmmsink shm-name="$SHM_NAME" sync=true >/dev/null 2>&1 &
+    nvmmsink shm-name="$SHM_NAME" pool-size="$POOL_SIZE_ABOVE_RELEASE_DELAY" sync=true >/dev/null 2>&1 &
 IPC_PROD_PID=$!
 
 for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
 
-# 15 of 20, not 20: frames during the connect/preroll handshake are not always counted.
 IPC_RX=$(timeout 20 gst-launch-1.0 -e \
-    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers=20 ! \
+    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers="$IPC_FRAMES" ! \
     'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
     fakesink silent=false -v 2>/dev/null | grep -c "chain")
 
@@ -163,7 +164,7 @@ kill "$IPC_PROD_PID" 2>/dev/null || true
 wait "$IPC_PROD_PID" 2>/dev/null || true
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-if [ "${IPC_RX:-0}" -ge 15 ]; then
+if [ "${IPC_RX:-0}" -ge "$IPC_MIN_RX_ALLOWING_HANDSHAKE_LOSS" ]; then
     pass "ipc-pipeline (${IPC_RX} frames RX cross-process)"
 else
     fail "ipc-pipeline (frames_rx=${IPC_RX:-0})"

@@ -17,7 +17,7 @@ tail="$(nvmm_detgate) ! $(nvmm_tracker "$O" "max-kf=2 $SEED kf-vel-noise=0.1") !
 for A in "n1:1:0" "n2g5:2:5" "n3g5:3:5"; do
   L=${A%%:*}; rest=${A#*:}; IV=${rest%%:*}; GATE=${rest##*:}
   echo "##### deployed shape, $L (interval=$IV gate=$GATE) #####"
-  python3 "$O/pipeline_bench.py" --probe trk --iterations "$ITERS" \
+  python3 "$O/pipeline_bench.py" --probe "$PIPELINE_BENCH_PROBE" --iterations "$ITERS" \
     --pipeline "$src ! $(nvmm_detector "$O" "$IV" "$GATE") ! $tail" 2>&1 \
     | grep -viE "Argus|nvargus|engine plan file|BLOCKING" | tail -5
   echo

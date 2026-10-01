@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Ground-truth score for infer-interval 1 vs 3 on the repo build: removing a Kalman measurement
-# makes parity unreachable, so the question is whether the track is worse. No nvmmdetgate here,
-# so absolute scores do not compare to the deployed scorecard; the A/B is internally valid.
+# Ground-truth score for infer-interval 1 vs 3 on the repo build: without a Kalman measurement parity is
+# unreachable, so the question is whether the track is worse. nvmmdetgate and kf-vel-noise exist only in
+# the deploy checkout, so absolute scores do not compare to the deployed scorecard; the A/B is internally valid.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC EVALSET_ZIP SCORER GT_LABEL
@@ -30,7 +30,6 @@ for N in 1 3; do
   echo "=== Phase 2: run infer-interval=$N ==="
   while IFS=$'\t' read -r seq stop; do
     [ -z "$seq" ] && continue
-    # No kf-vel-noise: only the deploy checkout has it, and gst-launch rejects an unknown property.
     export NVMMFUSEKF_CSV="$OUT/$seq.csv"
     # shellcheck disable=SC2086  # the pipeline must word-split into gst-launch args
     run_pipeline "N=$N $seq" "$NVMMFUSEKF_CSV" "$stop" \

@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# Public-repo leak guard. $FORBIDDEN only knows leaks already found; SHAPES fail closed on
-# the classes that leak (home paths, user@host, ticket ids, bare IPv4), catching new ones too.
+# Public-repo leak guard: $FORBIDDEN knows past leaks; SHAPES fail closed on home paths, user@host, ticket ids, IPv4.
+# SHAPES match case-sensitively, else the ticket-id shape fires on rotate-90; this file is skipped as it names the terms.
+# drop_benign exempts versions, loopback and dataset ids (COCO-80) only; widening it to silence a real hit defeats the guard.
 set -euo pipefail
 
 : "${FORBIDDEN:=rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone}"
 
-# Ticket ids need >= 2 letters so "NV12-1" passes. Keep every shape narrow enough for prose.
 SHAPES='(^|[^A-Za-z0-9_])/home/[a-z][a-z0-9_-]+/|[a-z][a-z0-9_.-]*@([a-z][a-z0-9.-]*\.[a-z]{2,}|([0-9]{1,3}\.){3}[0-9]{1,3})|\b[A-Z]{2,}-[0-9]{2,}\b|\b(([0-9]{1,3})\.){3}[0-9]{1,3}\b'
 
-# meson.build has no extension yet names subdirs: an extension-only filter misses a leaked dir name.
 list_files() {
   git ls-files \
     | grep -E '\.(cpp|hpp|h|cu|md|sh|py|yml|yaml|txt|build|json|cmake)$|(^|/)meson\.build$' \
     | grep -v '^\.github/' \
-    | grep -v '^tools/check_forbidden\.sh$'   # this file names the terms it forbids
+    | grep -v '^tools/check_forbidden\.sh$'
 }
 
-# Product names before four-part versions, loopback/netmask literals, and dataset or standard
-# ids (COCO-80) that the shapes cannot tell apart. Widening this to silence a real hit defeats it.
 drop_benign() {
   grep -viE 'version|tensorrt|cuda|jetpack|l4t|cudnn|driver|0\.0\.0\.0|127\.0\.0\.1|255\.255|\b(COCO|IMAGENET|VOC|MNIST|CIFAR|KITTI|NUSCENES|UTF|ISO|RFC|SHA|AES|ITU|IEC)-[0-9]+' || true
 }
@@ -33,7 +30,6 @@ scan_files() {
     fail=1
   fi
 
-  # Case-sensitive: case-folded, the uppercase ticket-id shape fires on rotate-90 and batch-30.
   hits=$(list_files | xargs -r grep -nE "$SHAPES" 2>/dev/null | drop_benign)
   if [ -n "$hits" ]; then
     echo "ERROR: forbidden SHAPE (home path, user@host, ticket id, or IP) in tracked files:"
@@ -46,7 +42,6 @@ scan_files() {
   return "$fail"
 }
 
-# On push base_ref is empty and origin/main..HEAD is too, which once passed without reading a commit.
 commit_range() {
   if [ -n "${BASE_REF:-}" ]; then
     git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null || true

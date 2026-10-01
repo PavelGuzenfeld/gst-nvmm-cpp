@@ -24,7 +24,7 @@ for MAXKF in 2 0; do
       chain="$src";                          lbl="detector ABSENT"
     fi
     echo "##### max-kf=$MAXKF  ARM=$ARM  ($lbl) #####"
-    python3 "$O/pipeline_bench.py" --probe trk --iterations "$ITERS" \
+    python3 "$O/pipeline_bench.py" --probe "$PIPELINE_BENCH_PROBE" --iterations "$ITERS" \
       --pipeline "$chain ! $(nvmm_tracker "$O" "max-kf=$MAXKF $SEED") ! $sink" 2>&1 \
       | grep -viE "Argus|nvargus|engine plan file" | tail -12
     echo

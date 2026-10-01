@@ -40,8 +40,7 @@ run_pipeline() {
   echo "  $label: ok ($rows rows)"
 }
 
-# docker_gst <label> <host-csv> <expected-rows|0> <pipeline>: run_pipeline's contract in a container.
-# Pass everything with -e: a single-quoted bash -lc '$VAR' expands to nothing in the container.
+# docker_gst <label> <host-csv> <expected-rows|0> <pipeline>: run_pipeline in a container, env passed via -e only
 docker_gst() {
   local label=$1 csv=$2 want=$3 pipeline=$4
   local log="${csv%.csv}.gst.log" rc=0
@@ -78,8 +77,7 @@ docker_score() {
     bash -lc 'python3 "/o/$SCORER" --pred-dir "'"$1"'" --gt /o/seqs/train --gt-name "$GT_LABEL" --out "'"$2"'"'
 }
 
-# extract_sequence <name> <archive> <destdir>: echoes the jpg count, 0 if absent. Paths go
-# through argv because a quoted heredoc leaves "$VAR" as a literal filename.
+# extract_sequence <name> <archive> <destdir>: echoes the jpg count, 0 if absent; paths via argv, not the quoted heredoc
 extract_sequence() {
   python3 - "$1" "$2" "$3" <<'PY'
 import sys, zipfile
@@ -93,18 +91,17 @@ print(sum(1 for n in mem if n.endswith(".jpg")))
 PY
 }
 
-# decodebin, not h264parse: the host lacks plugins-bad, and decodebin picks nvv4l2decoder itself.
 nvmm_source_clip()  { echo "filesrc location=$1 ! decodebin ! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! queue"; }
 nvmm_source_jpegs() { echo "multifilesrc location=$1/%06d.jpg index=1 stop-index=$2 caps=image/jpeg,framerate=25/1 ! jpegparse ! nvv4l2decoder mjpeg=1 ! queue ! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! queue"; }
 
-# Named trk because pipeline_bench.py counts buffers at that pad.
-nvmm_tracker() { echo "nvmmsamurai name=trk engine-dir=$1/trt consts-file=$1/trt/samurai_consts.bin ${2:-} gmc=false ! queue"; }
+PIPELINE_BENCH_PROBE=trk
+nvmm_tracker() { echo "nvmmsamurai name=$PIPELINE_BENCH_PROBE engine-dir=$1/trt consts-file=$1/trt/samurai_consts.bin ${2:-} gmc=false ! queue"; }
 nvmm_fusekf()  { echo "nvmmfusekf target-class=0 ${1:-} ! fakesink sync=false"; }
 nvmm_detgate() { echo "nvmmdetgate target-class=0 border-frac=${1:-0.02} ! queue"; }
-# nvmm_detector <asset-dir> [interval] [gate]: a default gate is omitted, since gst-launch
-# rejects the unknown property on builds that predate it.
+# nvmm_detector <asset-dir> [interval=1] [gate=0, omitted so builds predating the property still parse]
 nvmm_detector() {
-  local args="infer-interval=${2:-1}"
-  [ "${3:-0}" != "0" ] && args="$args infer-gate-frames=$3"
-  echo "nvmminfer engine-file=$1/trt/detector.engine $args ! queue"
+  local asset_dir=$1 interval=${2:-1} gate=${3:-0}
+  local args="infer-interval=$interval"
+  [ "$gate" != "0" ] && args="$args infer-gate-frames=$gate"
+  echo "nvmminfer engine-file=$asset_dir/trt/detector.engine $args ! queue"
 }
