@@ -2,9 +2,6 @@
 #include "image_ops.hpp"
 
 #include <cuda_runtime.h>
-#ifdef ANALYTICS_KERNELS_DEBUG
-#include <cstdio>
-#endif
 
 namespace nvmm {
 namespace motion {
@@ -125,9 +122,6 @@ struct LowTextureMotionCuda::Impl {
     cudaError_t err = cudaSuccess;
 
     bool ok(cudaError_t e) {
-#ifdef ANALYTICS_KERNELS_DEBUG
-        if (e != cudaSuccess) fprintf(stderr, "cuda err: %s\n", cudaGetErrorString(e));
-#endif
         if (e != cudaSuccess && err == cudaSuccess) err = e;
         return e == cudaSuccess;
     }

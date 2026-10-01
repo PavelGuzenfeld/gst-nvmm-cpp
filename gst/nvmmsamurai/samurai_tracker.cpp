@@ -366,17 +366,8 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     constexpr int CH = kHid;
     frame_idx++;
 
-#ifdef SAMURAI_HOST_OPS
-    { std::vector<float> o6((size_t)CH*HW), o3((size_t)CH*HW), cu((size_t)HW*CH), cp((size_t)HW*CH);
-      cudaMemcpy(o6.data(), d_image_embed, o6.size()*sizeof(float), cudaMemcpyDeviceToHost);
-      cudaMemcpy(o3.data(), d_curr_pos, o3.size()*sizeof(float), cudaMemcpyDeviceToHost);
-      for (int c=0;c<CH;c++) for (int i=0;i<HW;i++){ cu[(size_t)i*CH+c]=o6[(size_t)c*HW+i]; cp[(size_t)i*CH+c]=o3[(size_t)c*HW+i]; }
-      cudaMemcpyAsync(d_ma_curr, cu.data(), cu.size()*sizeof(float), cudaMemcpyHostToDevice, stream);
-      cudaMemcpyAsync(d_ma_curr_pos, cp.data(), cp.size()*sizeof(float), cudaMemcpyHostToDevice, stream); }
-#else
     k_transpose(d_image_embed, d_ma_curr, CH, HW, stream);
     k_transpose(d_curr_pos, d_ma_curr_pos, CH, HW, stream);
-#endif
 
     const float *mm[kMask];
     mm[0] = d_cond_maskmem;
@@ -404,15 +395,7 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
                       d_ma_memory, d_ma_memory_pos, HW, stream);
 
     if (!mem_attn->infer(stream)) { err = "memory_attention infer failed"; return false; }
-#ifdef SAMURAI_HOST_OPS
-    { if (cudaStreamSynchronize(stream) != cudaSuccess) { err = "memattn sync"; return false; }
-      std::vector<float> at((size_t)HW*CH), de((size_t)CH*HW);
-      cudaMemcpy(at.data(), d_ma_attn, at.size()*sizeof(float), cudaMemcpyDeviceToHost);
-      for (int c=0;c<CH;c++) for (int i=0;i<HW;i++) de[(size_t)c*HW+i]=at[(size_t)i*CH+c];
-      cudaMemcpyAsync(d_dec_embed, de.data(), de.size()*sizeof(float), cudaMemcpyHostToDevice, stream); }
-#else
     k_transpose(d_ma_attn, d_dec_embed, HW, CH, stream);
-#endif
 
     decoder->bind("sparse", d_empty_sparse);
     decoder->bind("dense", d_dense_const);
@@ -428,16 +411,6 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
 
     MaskBox cbox[3];
     float ciou[3] = {ious[1], ious[2], ious[3]};
-#ifdef SAMURAI_HOST_OPS
-    std::vector<float> cand_high[3];
-    { std::vector<float> low((size_t)M * M);
-      for (int j = 0; j < 3; j++) {
-          cudaMemcpy(low.data(), d_dmasks + (size_t)(1 + j) * M * M, low.size() * sizeof(float), cudaMemcpyDeviceToHost);
-          cand_high[j] = bilinear_upsample(low.data(), M, M, HI, HI);
-          MaskBox b = appearing ? mask_to_box(cand_high[j].data(), HI, HI, 0.f) : MaskBox{};
-          if (b.valid) cbox[j] = MaskBox{b.x + view.x, b.y + view.y, b.w, b.h, true};
-      } }
-#else
     const int initbox[4] = {HI, HI, -1, -1};
     for (int j = 0; j < 3; j++) {
         k_bilinear(d_dmasks + (size_t)(1 + j) * M * M, d_high, M, M, HI, HI, stream);
@@ -449,7 +422,6 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
             cbox[j] = MaskBox{bx[0] + view.x, bx[1] + view.y, (float)(bx[2] - bx[0]),
                               (float)(bx[3] - bx[1]), true};
     }
-#endif
 
     int sel = 0;
     MaskBox kfbox;
@@ -516,14 +488,8 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     const float *no_ptr = consts.data("no_obj_ptr");
     for (int i = 0; i < CH; i++) optr[i] = lambda * optr[i] + (1.f - lambda) * no_ptr[i];
 
-#ifdef SAMURAI_HOST_OPS
-    { std::vector<float> mem((size_t)HI * HI); const float *h = cand_high[sel].data();
-      for (size_t i = 0; i < mem.size(); i++) mem[i] = (1.f / (1.f + std::exp(-h[i]))) * 20.f - 10.f;
-      cudaMemcpyAsync(d_mem_mask, mem.data(), mem.size() * sizeof(float), cudaMemcpyHostToDevice, stream); }
-#else
     k_bilinear(d_dmasks + (size_t)(1 + sel) * M * M, d_high, M, M, HI, HI, stream);
     k_sigmoid_scale(d_high, d_mem_mask, HI * HI, 20.f, -10.f, stream);
-#endif
     if (!mem_encoder->infer(stream)) { err = "memory_encoder infer failed"; return false; }
     if (cudaStreamSynchronize(stream) != cudaSuccess) { err = "memenc sync"; return false; }
     float *slot = d_ring_bufs[ring_write];
