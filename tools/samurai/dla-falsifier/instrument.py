@@ -37,11 +37,9 @@ s = rep("    out.target_id = 1;\n",
 
 s = rep(
     "    k_sigmoid_scale(d_high, d_mem_mask, HI * HI, 20.f, -10.f, stream);\n"
-    "#endif\n"
     "    if (!mem_encoder->infer(stream)) { err = \"memory_encoder infer failed\"; return false; }\n"
     "    if (cudaStreamSynchronize(stream) != cudaSuccess) { err = \"memenc sync\"; return false; }\n",
     "    k_sigmoid_scale(d_high, d_mem_mask, HI * HI, 20.f, -10.f, stream);\n"
-    "#endif\n"
     "    if (_tmg) cudaEventRecord(_evM0, stream);\n"
     "    if (!mem_encoder->infer(stream)) { err = \"memory_encoder infer failed\"; return false; }\n"
     "    if (_tmg) cudaEventRecord(_evM1, stream);\n"
