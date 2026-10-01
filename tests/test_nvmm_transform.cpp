@@ -2,7 +2,6 @@
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
 
-#include <cassert>
 #include <cstdio>
 #include <cstring>
 

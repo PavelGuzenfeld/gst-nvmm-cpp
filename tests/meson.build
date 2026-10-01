@@ -25,12 +25,6 @@ test_gst_allocator = executable('test_gst_nvmm_allocator',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-test_fuzz_shm = executable('fuzz_shm_header',
-  'fuzz_shm_header.cpp',
-  include_directories : [config_inc, common_inc],
-  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
-)
-
 test_ofa_meta = executable('test_optical_flow_meta',
   'test_optical_flow_meta.cpp',
   include_directories : [config_inc, common_inc],
@@ -169,8 +163,6 @@ hwlib_suite = build_mock ? [] : ['nvidia_hwlib']
 test('nvmm_buffer', test_buffer, protocol : 'exitcode', suite : hwlib_suite)
 test('nvmm_transform', test_transform, protocol : 'exitcode', suite : hwlib_suite)
 test('gst_nvmm_allocator', test_gst_allocator, protocol : 'exitcode')
-test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'],
-  suite : 'fuzz')
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')

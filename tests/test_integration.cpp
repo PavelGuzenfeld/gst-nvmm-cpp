@@ -1,15 +1,9 @@
 #include <gst/gst.h>
-#include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 
 #include "gstnvmmallocator.h"
 
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <thread>
-#include <chrono>
-#include <atomic>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -34,7 +28,6 @@ static int tests_failed = 0;
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
 #include "shm_protocol.h"
-typedef NvmmShmHeader ShmHeader;
 
 /// Sequential, because each segment is ~33MB and Docker's /dev/shm is small.
 static void test_multiple_shm_segments() {
@@ -94,44 +87,6 @@ static void test_convert_dynamic_properties() {
 
     gst_element_set_state(convert, GST_STATE_NULL);
     gst_object_unref(convert);
-
-    PASS();
-}
-
-static void __attribute__((unused)) test_allocator_video_info_alloc() {
-    GstAllocator *alloc = gst_nvmm_allocator_new(0);
-    ASSERT_NOT_NULL(alloc);
-
-    gsize nv12_size = 1920 * 1080 * 3 / 2;
-    GstMemory *mem = gst_allocator_alloc(alloc, nv12_size, NULL);
-    ASSERT_NOT_NULL(mem);
-    ASSERT_TRUE(gst_is_nvmm_memory(mem));
-    ASSERT_TRUE(mem->size > 0);
-
-    GstMapInfo map;
-    gboolean ok = gst_memory_map(mem, &map, GST_MAP_WRITE);
-    ASSERT_TRUE(ok);
-    memset(map.data, 0x42, map.size);
-    gst_memory_unmap(mem, &map);
-
-    ok = gst_memory_map(mem, &map, GST_MAP_READ);
-    ASSERT_TRUE(ok);
-    ASSERT_EQ(((uint8_t *)map.data)[0], 0x42);
-    ASSERT_EQ(((uint8_t *)map.data)[map.size - 1], 0x42);
-    gst_memory_unmap(mem, &map);
-
-    void *surface = gst_nvmm_memory_get_surface(mem);
-    ASSERT_NOT_NULL(surface);
-
-    gst_memory_unref(mem);
-
-    gsize rgba_size = 1280 * 720 * 4;
-    mem = gst_allocator_alloc(alloc, rgba_size, NULL);
-    ASSERT_NOT_NULL(mem);
-    ASSERT_TRUE(mem->size > 0);
-
-    gst_memory_unref(mem);
-    gst_object_unref(alloc);
 
     PASS();
 }
@@ -199,12 +154,12 @@ static void test_shm_header_protocol() {
 
     struct stat st;
     fstat(fd, &st);
-    ASSERT_TRUE(st.st_size >= (off_t)sizeof(ShmHeader));
+    ASSERT_TRUE(st.st_size >= (off_t)sizeof(NvmmShmHeader));
 
     void *ptr = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
     ASSERT_TRUE(ptr != MAP_FAILED);
 
-    auto *header = static_cast<const ShmHeader *>(ptr);
+    auto *header = static_cast<const NvmmShmHeader *>(ptr);
 
     ASSERT_EQ(header->ready, 0u);
     ASSERT_EQ(header->frame_number, 0u);

@@ -10,7 +10,6 @@
 #include <nvbufsurface.h>
 #endif
 
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 

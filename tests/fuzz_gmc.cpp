@@ -31,8 +31,8 @@ bool fuzz_gmc_once(const uint8_t *data, size_t size) {
 
 /// The raw ints bypass the mapper to prove the masker's own clamp is OOB-safe.
 /// Nothing is asserted: ASan and UBSan are the oracle.
-bool fuzz_gmc_mask_once(const uint8_t *data, size_t size) {
-    if (size < 48) return true;
+void fuzz_gmc_mask_once(const uint8_t *data, size_t size) {
+    if (size < 48) return;
     double box[4];
     std::memcpy(box, data, sizeof(box));
     const nvmm::GmcMaskBox mb = nvmm::gmc_map_box_to_patch(box[0], box[1], box[2], box[3],
@@ -45,7 +45,6 @@ bool fuzz_gmc_mask_once(const uint8_t *data, size_t size) {
     int32_t ivals[4];
     std::memcpy(ivals, data + 32, sizeof(ivals));
     nvmm::gmc_mask_box_to_mean(patch, N, ivals[0], ivals[1], ivals[2], ivals[3]);
-    return true;
 }
 }
 
@@ -71,10 +70,7 @@ int main() {
             std::printf("FAIL: non-finite estimator output at iter %d (seed-derived)\n", iter);
             return 1;
         }
-        if (!fuzz_gmc_mask_once(buf.data(), sz)) {
-            std::printf("FAIL: gmc_mask crash/OOB at iter %d (seed-derived)\n", iter);
-            return 1;
-        }
+        fuzz_gmc_mask_once(buf.data(), sz);
     }
     std::printf("OK (3000 iters, estimator + mask)\n");
     return 0;

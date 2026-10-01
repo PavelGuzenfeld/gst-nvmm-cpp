@@ -7,7 +7,6 @@
 #include <nvbufsurface.h>
 #endif
 
-#include <cassert>
 #include <cstdio>
 #include <cstring>
 
