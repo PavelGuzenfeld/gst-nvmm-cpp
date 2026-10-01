@@ -1,7 +1,6 @@
-/// Benchmark: fused host low_texture_motion vs the CUDA implementation
-/// (including upload/download — the honest end-to-end cost for a host-resident
-/// frame). CSV to stdout, same convention as bench_nvmm. Lives behind
-/// -Danalytics_cuda (needs a CUDA device; no OpenCV).
+/// Fused host low_texture_motion vs the CUDA implementation, upload/download included:
+/// the honest end-to-end cost for a host-resident frame. CSV in bench_nvmm's convention.
+/// The untimed warm-up also absorbs the first CUDA call's context and buffer setup.
 #include <chrono>
 #include <cstdio>
 
@@ -17,7 +16,7 @@ namespace {
 template <typename Fn>
 void bench(const char *impl, int w, int h, int iters, Fn &&fn)
 {
-    fn();  // warm-up (first CUDA call also builds the context + buffers)
+    fn();
     double total = 0, mn = 1e12, mx = 0;
     for (int i = 0; i < iters; i++) {
         const auto t0 = Clock::now();
@@ -31,7 +30,7 @@ void bench(const char *impl, int w, int h, int iters, Fn &&fn)
            total, total / iters, mn, mx);
 }
 
-}  // namespace
+}
 
 int main()
 {

@@ -1,29 +1,10 @@
 #!/usr/bin/env bash
-# Generic on-device TensorRT engine builder: wrap trtexec to turn ANY .onnx into
-# a serialized .engine, on the box (and at the TensorRT version) the consuming
-# element links against. Not model-specific -- it builds a YOLO detector, a
-# SAMURAI segment, or anything else you hand it.
-#
-# A TensorRT engine is version- and hardware-locked: build it with the same
-# trtexec (same TensorRT major.minor) that the element loads it with, on the same
-# GPU arch, or IRuntime::deserializeCudaEngine rejects it ("Version tag does not
-# match"). That is the whole reason this is an on-device step, not a build-host
-# artifact.
-#
-#   build_engine.sh <model.onnx> <out.engine> [extra trtexec args...]
-#
-# Env knobs:
-#   T     trtexec path (default: /usr/src/tensorrt/bin/trtexec)
-#   FP16  1 = pass --fp16 (default), 0 = full precision
-#
-# Examples:
-#   build_engine.sh yolo.onnx yolo.engine
-#   # dynamic input axis (e.g. a decoder whose sparse-prompt count varies):
-#   build_engine.sh mask_decoder.onnx mask_decoder.engine \
-#     --minShapes=sparse:1x2x256 --optShapes=sparse:1x3x256 --maxShapes=sparse:1x3x256
+# On-device only: an engine is locked to the TensorRT version and GPU arch that built it,
+# and deserializeCudaEngine rejects any other ("Version tag does not match").
 set -eu
 if [ "$#" -lt 2 ]; then
-  echo "usage: $0 <model.onnx> <out.engine> [extra trtexec args...]" >&2
+  echo "usage: [T=trtexec] [FP16=1|0] $0 <model.onnx> <out.engine> [extra trtexec args...]" >&2
+  echo "  e.g. $0 mask_decoder.onnx mask_decoder.engine --minShapes=sparse:1x2x256 --optShapes=sparse:1x3x256 --maxShapes=sparse:1x3x256" >&2
   exit 2
 fi
 ONNX="$1"; OUT="$2"; shift 2

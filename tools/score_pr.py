@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
-"""Precision / recall of per-frame boxes against ground truth.
+"""Per-frame box precision, recall, F1 and mean matched IoU against ground truth; scores, never gates.
 
-Both --pred and --gt are JSONL, one object per frame:
-
-    {"frame": 12, "boxes": [[x, y, w, h, score], ...]}   # score optional
-
-Boxes are xywh in pixel coordinates. For each frame the predicted boxes are
-greedily matched to GT boxes best-IoU-first; a pair is a true positive when
-IoU >= --iou. Unmatched predictions are false positives, unmatched GT are false
-negatives. Predictions with a score below --conf are dropped before matching.
-
-    score_pr.py --pred pred.jsonl --gt gt.jsonl [--iou 0.5] [--conf 0.3] [--json out.json]
-
-Prints precision, recall, F1 and mean matched IoU. Exit 0 always -- this scores,
-it does not gate.
-"""
+Matching is greedy best-IoU-first; a pair is a true positive at IoU >= --iou."""
 import argparse
 import json
 import sys
@@ -64,18 +51,17 @@ def match_frame(preds, gts, thr):
 
 def main():
     ap = argparse.ArgumentParser(description="Per-frame box precision/recall vs GT.")
-    ap.add_argument("--pred", required=True, help="predictions JSONL")
-    ap.add_argument("--gt", required=True, help="ground-truth JSONL")
+    jsonl = 'JSONL, one {"frame": N, "boxes": [[x, y, w, h, score?], ...]} per line, pixel xywh'
+    ap.add_argument("--pred", required=True, help="predictions " + jsonl)
+    ap.add_argument("--gt", required=True, help="ground-truth " + jsonl)
     ap.add_argument("--iou", type=float, default=0.5)
-    ap.add_argument("--conf", type=float, default=0.0)
+    ap.add_argument("--conf", type=float, default=0.0,
+                    help="drop predictions scoring below this before matching")
     ap.add_argument("--json", help="write metrics JSON to this path")
     args = ap.parse_args()
 
     pred, gt = load(args.pred), load(args.gt)
 
-    # A near-empty frame-key overlap almost always means the two files number
-    # frames differently (a common off-by-one), not that the tracker missed
-    # everything -- warn rather than silently reporting precision=recall=0.
     if pred and gt:
         shared = set(pred) & set(gt)
         if not shared:

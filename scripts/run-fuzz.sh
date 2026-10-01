@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Coverage-guided fuzzing of the GMC estimator + target-masking core
-# (tests/fuzz_gmc.cpp) with clang's libFuzzer, under ASan+UBSan.
-#
-# The standalone build of tests/fuzz_gmc.cpp (meson test `fuzz_gmc`, run under
-# scripts/run-sanitizers.sh) is a deterministic smoke sweep — it always passes once
-# the code is correct and never gets deeper. THIS script is the actual fuzzer:
-# coverage-guided, runs until the time budget expires or it finds a crash.
-#
-# Usage: ./scripts/run-fuzz.sh [seconds]     # default 60s
-#
-# Run inside the dev container (docker/Dockerfile.dev) or any host with clang +
-# libFuzzer (clang ships libFuzzer since ~6.0). Requires clang, not gcc.
+# Usage: run-fuzz.sh [seconds=60]   libFuzzer + ASan/UBSan over tests/fuzz_gmc.cpp; needs clang.
+# The meson fuzz_gmc test is only a deterministic smoke sweep; this is the coverage-guided run.
 set -eu
 
 SECONDS_BUDGET="${1:-60}"

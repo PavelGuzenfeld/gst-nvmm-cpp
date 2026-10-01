@@ -25,7 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Public SAM2 (vendored under the SAMURAI repo as the `sam2` package).
 from sam2.build_sam import build_sam2_video_predictor
 from sam2.modeling.sam import transformer as TR
 
@@ -43,13 +42,13 @@ def parse_args():
     return p.parse_args()
 
 
-# ONNX-export shim: torch.repeat_interleave builds its index on CPU during trace,
-# clashing with cuda inputs. B=1 here so repeat-by-1 is a no-op; build the index
-# on-device otherwise.
 _orig_ri = torch.repeat_interleave
 
 
 def _safe_ri(x, repeats, dim=None, output_size=None):
+    """Export shim: repeat_interleave builds its index on CPU during trace, clashing with cuda inputs.
+
+    B=1, so a dim-0 repeat is a no-op; elsewhere the index is built on-device."""
     if dim == 0:
         return x
     if isinstance(repeats, int):
@@ -58,10 +57,10 @@ def _safe_ri(x, repeats, dim=None, output_size=None):
     return _orig_ri(x, repeats, dim=dim, output_size=output_size)
 
 
-# --- image_encoder: stock forward returns a dict; flatten to the out1..out6 list
-# the C++ binds (out3=pos 32x32, out4=feat_s0 128x128, out5=feat_s1 64x64,
-# out6=image_embed 32x32). ----------------------------------------------------
 class ImageEnc(nn.Module):
+    """Flattens the stock dict to the out1..out6 the C++ binds: out3 pos 32x32, out4 feat_s0 128x128,
+    out5 feat_s1 64x64, out6 image_embed 32x32."""
+
     def __init__(self, enc):
         super().__init__()
         self.enc = enc
@@ -73,29 +72,31 @@ class ImageEnc(nn.Module):
         return pos[0], pos[1], pos[2], fpn[0], fpn[1], fpn[2]
 
 
-# --- prompt_encoder (BOX seed: 2 corners labels 2,3 + 1 pad label -1). Rewritten
-# without boolean-mask scatter (TRT cannot parse it): slice + concat instead. ---
 class PEBox(nn.Module):
+    """Box seed: coords [1,2,2] corners take labels 2 and 3, plus one pad point labelled -1.
+
+    Slice + concat instead of boolean-mask scatter, which TRT cannot parse."""
+
     def __init__(self, pe):
         super().__init__()
         self.pe = pe
 
-    def forward(self, coords):                     # coords [1,2,2] box corners
+    def forward(self, coords):
         bs = coords.shape[0]
         pts = torch.cat([coords + 0.5, torch.zeros((bs, 1, 2), device=coords.device)], dim=1)
         emb = self.pe.pe_layer.forward_with_coords(pts, self.pe.input_image_size)
         e0 = emb[:, 0:1, :] + self.pe.point_embeddings[2].weight
         e1 = emb[:, 1:2, :] + self.pe.point_embeddings[3].weight
-        e2 = emb[:, 2:3, :] * 0.0 + self.pe.not_a_point_embed.weight     # label -1
+        e2 = emb[:, 2:3, :] * 0.0 + self.pe.not_a_point_embed.weight
         sparse = torch.cat([e0, e1, e2], dim=1)
         dense = self.pe.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
             bs, -1, *self.pe.image_embedding_size)
         return sparse, dense
 
 
-# --- mask_decoder (deploy): raw predict_masks, 4 candidates, batched hypernetwork
-# (the stock per-token MLP loop will not export), selection done in C++. ---------
 class BatchedHyper(nn.Module):
+    """Batched hypernetwork: the stock per-token MLP loop will not export."""
+
     def __init__(self, mlps):
         super().__init__()
         self.nl = mlps[0].num_layers
@@ -117,6 +118,8 @@ class BatchedHyper(nn.Module):
 
 
 class MDdeploy(nn.Module):
+    """Raw predict_masks with all 4 candidates; the C++ does the selection."""
+
     def __init__(self, d):
         super().__init__()
         self.d = d
@@ -145,7 +148,6 @@ class MDdeploy(nn.Module):
         return masks, ious, mto, obj
 
 
-# --- memory_encoder (skip_mask_sigmoid=True). -----------------------------------
 class ME(nn.Module):
     def __init__(self, e):
         super().__init__()
@@ -156,9 +158,8 @@ class ME(nn.Module):
         return o["vision_features"], o["vision_pos_enc"][0]
 
 
-# --- memory_attention: replace the complex view_as_complex RoPE with a real-valued
-# path TRT can parse, baking cos/sin as constant buffers. ------------------------
-def _rope_real(x, cos, sin):                      # x:[B,H,L,D]  cos/sin:[L,D/2]
+def _rope_real(x, cos, sin):
+    """Real-valued RoPE TRT can parse, replacing view_as_complex. x [B,H,L,D]; cos, sin [L,D/2] constants."""
     xr = x.reshape(*x.shape[:-1], -1, 2)
     x0 = xr[..., 0]
     x1 = xr[..., 1]
@@ -190,6 +191,8 @@ def _rope_forward(self, q, k, v, num_k_exclude_rope=0):
 
 
 class MA(nn.Module):
+    """n_optr mirrors kObjTok in samurai_memory.hpp; the memory length is kMask * kTok + kObjTok."""
+
     def __init__(self, ma, n_optr):
         super().__init__()
         self.ma = ma
@@ -221,20 +224,17 @@ def main():
         a.config, ckpt_path=a.ckpt, device=dev, mode="eval",
         hydra_overrides_extra=[f"++model.image_size={a.image_size}"])
     S = a.image_size
-    g = S // 16            # embed grid (32 at 512)
+    g = S // 16
     print(f"model built. image_size={S} embed_grid={g}", flush=True)
 
-    # image_encoder
     x = torch.randn(1, 3, S, S, device=dev)
     save_onnx(a.out, "image_encoder", ImageEnc(m.image_encoder), (x,),
               ["input"], ["out1", "out2", "out3", "out4", "out5", "out6"], a.opset)
 
-    # prompt_encoder (box-seed)
     coords = torch.tensor([[[100., 100.], [200., 200.]]], device=dev)
     save_onnx(a.out, "prompt_encoder", PEBox(m.sam_prompt_encoder), (coords,),
               ["coords"], ["sparse", "dense"], a.opset)
 
-    # mask_decoder (deploy: dynamic sparse Np axis)
     ie = torch.randn(1, 256, g, g, device=dev)
     pe = m.sam_prompt_encoder.get_dense_pe().to(dev)
     sp = torch.randn(1, 3, 256, device=dev)
@@ -247,22 +247,20 @@ def main():
               ["masks", "ious", "tokens", "obj_score"], a.opset,
               dynamic={"sparse": {1: "Np"}})
 
-    # memory_encoder
     pix = torch.randn(1, 256, g, g, device=dev)
     mask = torch.randn(1, 1, S, S, device=dev)
     save_onnx(a.out, "memory_encoder", ME(m.memory_encoder), (pix, mask),
               ["pix_feat", "mask"], ["maskmem_feat", "maskmem_pos"], a.opset)
 
-    # memory_attention (real-RoPE)
     for mod in m.memory_attention.modules():
         if isinstance(mod, TR.RoPEAttention):
             fc = mod.freqs_cis
             mod.register_buffer("_rope_cos", fc.real.contiguous().to(dev), persistent=False)
             mod.register_buffer("_rope_sin", fc.imag.contiguous().to(dev), persistent=False)
     TR.RoPEAttention.forward = _rope_forward
-    n_optr = 64                                    # kObjTok: trailing obj_ptr tokens
-    hw = g * g                                     # 1024 at 512
-    ktotal = 7 * hw + n_optr                        # kMask*kTok + kObjTok = 7232
+    n_optr = 64
+    hw = g * g
+    ktotal = 7 * hw + n_optr
     curr = torch.randn(hw, 1, 256, device=dev)
     memory = torch.randn(ktotal, 1, 64, device=dev)
     curr_pos = torch.randn(hw, 1, 256, device=dev)

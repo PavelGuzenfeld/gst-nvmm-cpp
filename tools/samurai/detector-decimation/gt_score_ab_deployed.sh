@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# Ground-truth A/B of detector decimation at the DEPLOYED operating point.
-#
-# Parity against an undecimated run is unachievable by construction once a Kalman
-# measurement is removed, so the question is whether the different track is WORSE.
-# Only ground truth answers that.
-#
-# Mirrors the deployed harness element-for-element (detector -> seed gate ->
-# nvmmsamurai -> nvmmfusekf with teardown) so the scores are comparable to the
-# deployed scorecard. Measuring on the simplified chain instead understated the cost
-# roughly threefold, because a barely-working pipeline has little left to lose.
-#
-# Per-sequence extract -> run both arms -> delete frames: all sequences must never be
-# resident at once.
+# Ground-truth decimation A/B on the deployed chain element for element: the simplified chain
+# understated the cost about threefold. Parity is unreachable once a Kalman measurement goes.
+# Sequences are extracted and deleted one at a time; all of them never fit on disk at once.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR DEPLOY_SRC EVALSET_ZIP SEQ_LIST SCORER GT_LABEL
@@ -39,7 +29,6 @@ while read -r S; do
     docker_gst "n$IV" "$O/$out/$S.csv" "$N" "$pipe" || true
   done
 
-  # Container wrote the CSVs as root; the frames are ours. Delete frames only.
   find "seqs/train/$S" -name '*.jpg' -delete 2>/dev/null || true
 done < "$SEQFILE"
 

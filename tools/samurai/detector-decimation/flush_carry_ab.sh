@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# Does nvmmfusekf flush-carry unlock detector decimation?
-#   flush_carry_ab.sh <clip> <seed-roi> <seed-delay>
-#
-# Two questions:
-#   1. NEUTRALITY -- at infer-interval=1 (nothing decimated), does flush-carry change
-#      what is published? It fires on frames where the detector simply found nothing,
-#      so it is NOT a decimation-only change and must be characterised on its own.
-#   2. PARITY -- at infer-interval=3, does carry bring the emitted box back to the
-#      undecimated baseline (median IoU >= 0.99, no frame < 0.9)?
-# Baseline for both is (interval=1, carry=0) = today's deployed behaviour.
+# Does flush-carry restore parity at interval=3, and is it neutral at interval=1? It also fires
+# where the detector found nothing, so it is not decimation-only. Baseline: interval=1, carry=0.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC
+[ "$#" -ge 2 ] || { echo "usage: $0 <clip> <seed-roi> [seed-delay]" >&2; exit 2; }
 
 C=$1; SEED=$2; DELAY=${3:-0}
 O=$ASSET_DIR
@@ -21,13 +14,14 @@ export GST_PLUGIN_PATH="$REPO_SRC/builddir" GST_DEBUG=0
 
 src=$(nvmm_source_clip "$O/$C.mp4")
 
-run() { # <interval> <carry> <tag>
-  export NVMMFUSEKF_CSV="$R/${C}_$3.csv"
+run() {
+  local interval=$1 carry=$2 tag=$3
+  export NVMMFUSEKF_CSV="$R/${C}_$tag.csv"
   # shellcheck disable=SC2086  # the pipeline must word-split into gst-launch args
-  run_pipeline "$3 (interval=$1 carry=$2)" "$NVMMFUSEKF_CSV" 0 \
-    $src ! $(nvmm_detector "$O" "$1") \
+  run_pipeline "$tag (interval=$interval carry=$carry)" "$NVMMFUSEKF_CSV" 0 \
+    $src ! $(nvmm_detector "$O" "$interval") \
     ! $(nvmm_tracker "$O" "max-kf=2 seed-roi=$SEED seed-delay=$DELAY") \
-    ! $(nvmm_fusekf "flush-carry=$2") || true
+    ! $(nvmm_fusekf "flush-carry=$carry") || true
   unset NVMMFUSEKF_CSV
 }
 

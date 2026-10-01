@@ -1,32 +1,7 @@
 #!/usr/bin/env python3
-"""Compare two nvmmfusekf per-frame box dumps -- a tracked path against a baseline.
-
-Reads the CSV that nvmmfusekf writes when $NVMMFUSEKF_CSV is set
-(frame,valid,left,top,width,height,score,yolo_fused) from a baseline run and a
-test run of the SAME clip, and judges whether the test run tracks the same path.
-
-This is the behavioural-parity gate for changes that alter the math rather than
-just the placement of work -- detector decimation (nvmminfer infer-interval),
-speculative cropping, precision changes. It reads *fusekf's emitted box*, which
-is what downstream consumers actually receive: nvmmfusekf takes the best YOLO
-detection as a per-frame gated measurement and its flush-BB path can publish the
-tight detection box, so anything that removes detections on some frames moves
-this signal on those frames -- not merely at reseed.
-
-Default thresholds are the agreed bar: per-frame IoU >= 0.99 median, no frame
-below 0.9, and no valid-flag flips.
-
-    trajectory_compare.py --baseline base.csv --test n3.csv
-                          [--median-iou 0.99] [--min-iou 0.9]
-                          [--allow-flips 0] [--verbose]
-
-Frames present in one run but not the other are reported as missing and fail the
-comparison -- a differing frame count means the runs are not comparable.
-Frames where BOTH runs are invalid (no track) are excluded from the IoU stats
-but still checked for flag agreement: IoU is undefined with no box.
-
-Exit 0 on PASS, 1 on FAIL.
-"""
+"""Parity gate: does a test run's emitted nvmmfusekf box ($NVMMFUSEKF_CSV) track a baseline run of the same clip?
+Frames in only one run fail. A valid-flag flip scores IoU 0 rather than being skipped, which would flatter the runs
+that flip most; frames invalid in both are excluded."""
 import argparse
 import csv
 import statistics as st
@@ -81,10 +56,6 @@ def main():
     missing = sorted(set(base) ^ set(test))
     common = sorted(set(base) & set(test))
 
-    # A valid-flag flip scores 0, it is not skipped. Excluding flips from the IoU
-    # distribution flatters exactly the runs that are worst: one that flips on most
-    # frames would report a high median over the surviving minority. One run having a
-    # box where the other has none IS maximal disagreement, so 0 is the honest score.
     ious, flips, both_invalid = [], [], 0
     for n in common:
         b, t = base[n], test[n]
@@ -97,7 +68,6 @@ def main():
             continue
         ious.append((n, iou(b, t)))
 
-    # YOLO's actual contribution rate, to show the mechanism rather than infer it.
     fused_base = sum(v["yolo_fused"] for v in base.values())
     fused_test = sum(v["yolo_fused"] for v in test.values())
 
@@ -107,8 +77,6 @@ def main():
           f" ({100.0 * fused_base / max(1, len(base)):.1f}%)"
           f"  test={fused_test} ({100.0 * fused_test / max(1, len(test)):.1f}%)")
     print(f"both-invalid frames excluded from IoU: {both_invalid}")
-    # Headline, not a footnote: a flip means one run reports a target and the other
-    # does not, which matters more than any IoU number printed beside it.
     print(f"valid-flag flips (scored 0, allowed {a.allow_flips}): {len(flips)}")
 
     fails = []

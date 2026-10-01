@@ -63,13 +63,12 @@ def main():
         for pn, p in mod.named_parameters():
             add(f"{mod_name}.{pn}", p)
 
-    # Empty-prompt sparse + dense for tracking frames: 1 empty point (label -1) + pad.
     with torch.no_grad():
         coords = torch.zeros(1, 1, 2, device=dev)
         labels = -torch.ones(1, 1, dtype=torch.int32, device=dev)
         sparse, dense = m.sam_prompt_encoder(points=(coords, labels), boxes=None, masks=None)
-    add("empty_sparse", sparse)      # (1,2,256)
-    add("dense_no_mask", dense)      # (1,256,g,g)  -> 32x32 at image_size 512
+    add("empty_sparse", sparse)
+    add("dense_no_mask", dense)
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "wb") as f:

@@ -1,18 +1,11 @@
-/// Benchmark framework for NVMM operations.
-/// Measures alloc/free, map/unmap, and transform throughput.
-/// On host: uses mock API (measures framework overhead).
-/// On Jetson: measures real VIC hardware performance.
-///
-/// Output: CSV to stdout for easy plotting.
-
+/// NVMM alloc/free, map/unmap and VIC transform timings as CSV on stdout.
+/// Under the mock API this measures framework overhead only; on a Jetson, real VIC.
 #include "nvmm_buffer.hpp"
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"
 
 #include <chrono>
 #include <cstdio>
-#include <cstring>
-#include <vector>
 
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double, std::micro>;
@@ -34,8 +27,6 @@ static void print_csv_row(const BenchResult &r) {
     printf("%s,%d,%.2f,%.2f,%.2f,%.2f\n",
            r.name, r.iterations, r.total_us, r.avg_us, r.min_us, r.max_us);
 }
-
-/* --- Benchmarks --- */
 
 static BenchResult bench_alloc_free(int iterations, uint32_t w, uint32_t h,
                                      nvmm::ColorFormat fmt) {
@@ -159,15 +150,12 @@ int main() {
 
     print_csv_header();
 
-    /* Allocation benchmarks */
     print_csv_row(bench_alloc_free(N, 1920, 1080, nvmm::ColorFormat::kNV12));
     print_csv_row(bench_alloc_free(N, 1920, 1080, nvmm::ColorFormat::kRGBA));
 
-    /* Map/unmap benchmarks */
     print_csv_row(bench_map_unmap(N, 1920, 1080));
     print_csv_row(bench_map_unmap(N, 640, 480));
 
-    /* Transform benchmarks (VIC hardware) */
     print_csv_row(bench_transform(N, 1920, 1080, 640, 480));
     print_csv_row(bench_transform(N, 1920, 1080, 1280, 720));
 

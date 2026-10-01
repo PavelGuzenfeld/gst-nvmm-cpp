@@ -1,10 +1,6 @@
 #!/bin/bash
-# Jetson hardware validation script.
-# Run on a Jetson device with JetPack 5+ and GStreamer installed.
-#
-# Usage:
-#   ./scripts/jetson-test.sh           # full test suite
-#   ./scripts/jetson-test.sh --quick   # unit tests only
+# Usage: jetson-test.sh [--quick]   on a Jetson with JetPack 5+; --quick runs the unit tests only.
+# The IPC producer is live-paced (is-live) so it outlives the consumer's connect instead of tearing down the shm first.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,7 +29,6 @@ echo "Device: $(cat /proc/device-tree/model 2>/dev/null || echo unknown)"
 echo "L4T:    $(head -1 /etc/nv_tegra_release 2>/dev/null | sed 's/.*R\([0-9]*\).*/R\1/' || echo unknown)"
 echo ""
 
-# --- Build ---
 echo "--- Build ---"
 if [ ! -d "$BUILD" ]; then
     ~/.local/bin/meson setup "$BUILD" -Dcpp_std=c++14 -Dbuildtype=debugoptimized -Dwerror=false
@@ -41,17 +36,14 @@ fi
 ninja -C "$BUILD"
 echo ""
 
-# --- Clear GStreamer cache ---
 rm -f ~/.cache/gstreamer-1.0/registry.*.bin
 
-# --- Unit tests ---
 echo "--- Unit Tests ---"
 ~/.local/bin/meson test -C "$BUILD" --print-errorlogs
 echo ""
 
 [ $QUICK -eq 1 ] && { echo "Quick mode: $PASS passed, $FAIL failed"; exit $FAIL; }
 
-# --- Pipeline tests ---
 echo "--- Pipeline Tests ---"
 mkdir -p "$OUT"
 
@@ -71,7 +63,6 @@ run_pipeline "flip-180" \
     nvvidconv ! 'video/x-raw,format=I420' ! nvjpegenc ! \
     filesink location="$OUT/ci_flip180.jpg"
 
-# rotate-90 / rotate-270 swap width and height (640x480 -> 480x640).
 run_pipeline "rotate-90" \
     videotestsrc num-buffers=1 pattern=smpte ! \
     'video/x-raw,width=640,height=480,format=I420' ! \
@@ -148,39 +139,24 @@ run_pipeline "30f-throughput" \
 
 echo ""
 
-# --- IPC pipeline test (two-process nvmmsink -> nvmmappsrc) ---
-# Verifies frames actually cross the process boundary: a background producer
-# publishes NVMM frames to a shared pool; a separate consumer process imports
-# the pool fds and pulls a fixed number of frames. Implementation-agnostic —
-# counts buffers that reach the consumer's sink, no reliance on debug logging.
 echo "--- IPC Pipeline Test (two-process nvmmsink -> nvmmappsrc) ---"
 SHM_NAME="/nvmm_test_e2e_$$"
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-# Producer: a LIVE source paced at 30fps (is-live=true) so it stays alive ~10s
-# while the consumer connects and pulls — an un-paced source blasts its frames
-# and tears down the shm/socket before the consumer can read them.
-#
-# Use the default pool-size (16). It MUST exceed the consumer's delayed-release
-# depth (RELEASE_DELAY=12): a consumer holds a ref on up to that many in-flight
-# buffers, so a smaller pool (e.g. 8) starves the producer of free slots and the
-# stream stalls after pool-size frames.
+POOL_SIZE_ABOVE_RELEASE_DELAY=16
+IPC_FRAMES=20
+IPC_MIN_RX_ALLOWING_HANDSHAKE_LOSS=15
 gst-launch-1.0 -e \
     videotestsrc is-live=true num-buffers=300 pattern=ball ! \
     'video/x-raw,width=640,height=480,format=I420,framerate=30/1' ! \
     nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' ! \
-    nvmmsink shm-name="$SHM_NAME" sync=true >/dev/null 2>&1 &
+    nvmmsink shm-name="$SHM_NAME" pool-size="$POOL_SIZE_ABOVE_RELEASE_DELAY" sync=true >/dev/null 2>&1 &
 IPC_PROD_PID=$!
 
-# Wait for the producer to create the shm segment.
 for _ in $(seq 1 50); do [ -e "/dev/shm${SHM_NAME}" ] && break; sleep 0.1; done
 
-# Consumer (separate process): import the pool and pull 20 frames cross-process.
-# Pass on a clear majority (>=15) — the first frame(s) during the connect/preroll
-# handshake aren't always counted, so we allow startup slack rather than demand
-# an exact count. The point is that frames demonstrably cross the boundary.
 IPC_RX=$(timeout 20 gst-launch-1.0 -e \
-    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers=20 ! \
+    nvmmappsrc shm-name="$SHM_NAME" is-live=true num-buffers="$IPC_FRAMES" ! \
     'video/x-raw(memory:NVMM)' ! nvvidconv ! 'video/x-raw,format=I420' ! \
     fakesink silent=false -v 2>/dev/null | grep -c "chain")
 
@@ -188,7 +164,7 @@ kill "$IPC_PROD_PID" 2>/dev/null || true
 wait "$IPC_PROD_PID" 2>/dev/null || true
 rm -f "/dev/shm${SHM_NAME}" 2>/dev/null
 
-if [ "${IPC_RX:-0}" -ge 15 ]; then
+if [ "${IPC_RX:-0}" -ge "$IPC_MIN_RX_ALLOWING_HANDSHAKE_LOSS" ]; then
     pass "ipc-pipeline (${IPC_RX} frames RX cross-process)"
 else
     fail "ipc-pipeline (frames_rx=${IPC_RX:-0})"
@@ -196,11 +172,9 @@ fi
 
 echo ""
 
-# --- Benchmarks ---
 echo "--- Benchmarks ---"
 "$BUILD/benchmarks/bench_nvmm" 2>/dev/null | grep -E '^(benchmark|alloc|map|transform)'
 echo ""
 
-# --- Summary ---
 echo "=== Results: $PASS passed, $FAIL failed ==="
 exit $FAIL

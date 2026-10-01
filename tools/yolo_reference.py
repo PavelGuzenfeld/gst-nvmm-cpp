@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
-"""Independent YOLO11/v8 reference detector (onnxruntime + numpy + cv2).
+"""YOLO11/v8 reference on the ONNX the TRT engine was built from, with its own letterbox, decode and NMS.
 
-Runs the *same* ONNX the Jetson TRT engine was built from, but with a wholly
-independent preprocess (letterbox), decode and NMS, so comparing its output to
-nvmminfer's catches silent preprocess/parser bugs in the C++ path. Emits JSON
-detections in ORIGINAL-image pixel space (matching nvmminfer's box=left,top WxH):
-
-    {"image_w":W,"image_h":H,"detections":[
-        {"class_id":5,"label":"bus","conf":0.92,"x":..,"y":..,"w":..,"h":..}, ...]}
-
-Usage:
-    yolo_reference.py --onnx yolo11n.onnx --image bus.jpg [--imgsz 640]
-                      [--conf 0.25] [--iou 0.45]
-"""
+Prints {"image_w", "image_h", "detections": [{class_id, label, conf, x, y, w, h}]} in original-image pixels."""
 import argparse
 import json
 import sys
@@ -21,8 +10,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-# COCO-80 class names (YOLO default training set).
-COCO = [
+COCO_CLASS_NAMES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
     "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
     "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
@@ -65,13 +53,12 @@ def main():
     H, W = img.shape[:2]
 
     padded, scale, px, py = letterbox(img, a.imgsz)
-    # BGR->RGB, HWC->CHW, [0,1], add batch dim.
     blob = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     blob = np.transpose(blob, (2, 0, 1))[None]
 
     sess = ort.InferenceSession(a.onnx, providers=["CPUExecutionProvider"])
-    out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]  # [1,84,8400]
-    pred = out[0].T                                             # [8400,84]
+    out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]
+    pred = out[0].T
 
     boxes_cxcywh = pred[:, :4]
     scores_all = pred[:, 4:]
@@ -80,7 +67,6 @@ def main():
     keep = confs >= a.conf
     boxes_cxcywh, class_ids, confs = boxes_cxcywh[keep], class_ids[keep], confs[keep]
 
-    # cxcywh (letterboxed space) -> xywh top-left, then un-letterbox to original.
     xywh = boxes_cxcywh.copy()
     xywh[:, 0] = (boxes_cxcywh[:, 0] - boxes_cxcywh[:, 2] / 2 - px) / scale
     xywh[:, 1] = (boxes_cxcywh[:, 1] - boxes_cxcywh[:, 3] / 2 - py) / scale
@@ -94,7 +80,7 @@ def main():
         x, y, w, h = (float(v) for v in xywh[i])
         dets.append({
             "class_id": cid,
-            "label": COCO[cid] if cid < len(COCO) else str(cid),
+            "label": COCO_CLASS_NAMES[cid] if cid < len(COCO_CLASS_NAMES) else str(cid),
             "conf": round(float(confs[i]), 4),
             "x": round(x, 1), "y": round(y, 1),
             "w": round(w, 1), "h": round(h, 1),

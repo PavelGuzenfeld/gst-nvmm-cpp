@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# infer-interval sweep at the deployed max-kf=2, forced seed so tracker work is
-# constant across arms and the detector is the only variable.
-#
-# interval=1000 is a functional check, not a data point: only frame 0 infers, so it
-# must reproduce the detector-absent arm. If it does not, frames are not actually
-# being skipped and every other number here is suspect.
+# fps per infer-interval at max-kf=2 with a forced seed, so the detector is the only variable.
+# interval=1000 infers frame 0 only and must match the detector-absent arm, or frames are not skipped.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC
@@ -20,7 +16,7 @@ sink=$(nvmm_fusekf)
 
 for N in 1 2 3 6 1000; do
   echo "##### infer-interval=$N #####"
-  python3 "$O/pipeline_bench.py" --probe trk --iterations "$ITERS" \
+  python3 "$O/pipeline_bench.py" --probe "$PIPELINE_BENCH_PROBE" --iterations "$ITERS" \
     --pipeline "$src ! $(nvmm_detector "$O" "$N") ! $trk ! $sink" 2>&1 \
     | grep -viE "Argus|nvargus|engine plan file|BLOCKING" | tail -6
   echo

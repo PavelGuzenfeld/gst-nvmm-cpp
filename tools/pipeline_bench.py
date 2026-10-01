@@ -1,25 +1,7 @@
 #!/usr/bin/env python3
-"""Measure the real frame throughput of a GStreamer pipeline.
-
-Counts the buffers crossing a named element's src pad and times the window from
-the first such buffer to the last -- the honest steady-state rate. Timing from
-the first buffer (rather than from the set_state(PLAYING) call) excludes
-pipeline preroll and one-time engine/CUDA warmup, which would otherwise be
-folded into the wall-clock and depress the rate by a different amount for every
-clip length. This also deliberately ignores any in-band FPS HUD (for example an
-overlay's exponential-moving-average counter): an EMA of inter-frame gaps
-over-reports 2-3x when a queue drains in a burst, so it is the wrong number to
-judge throughput by. To know how fast a pipeline actually processes frames,
-count buffers at a pad.
-
-    pipeline_bench.py --probe infer --iterations 3 \\
-        --pipeline "filesrc location=clip.mp4 ! parsebin ! nvv4l2decoder
-                    ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12'
-                    ! nvmminfer name=infer engine-file=y.engine ! fakesink"
-
---pipeline is any gst-launch string. --probe is the name= of the element whose
-src pad is counted. Exit 0 if every iteration reached EOS; 1 on pipeline error.
-"""
+"""Steady-state fps from buffers counted at one element's src pad, timed first buffer to last.
+That excludes preroll and engine/CUDA warmup, and ignores in-band FPS HUDs, whose EMA of
+inter-frame gaps over-reports 2-3x when a queue drains in a burst."""
 import argparse
 import json
 import sys
@@ -32,18 +14,9 @@ from gi.repository import GLib, Gst  # noqa: E402
 
 
 def run_once(pipeline_str, probe_name, timeout_s=0.0):
-    """Run the pipeline to EOS, return (frames, seconds, fps).
+    """Return (frames, seconds, fps), fps = (frames - 1) / seconds: n buffers bound n - 1 intervals.
 
-    ``seconds`` is the window from the first buffer at the probe pad to the
-    last, and ``fps`` is measured across it as ``(frames - 1) / seconds`` --
-    the count of inter-frame intervals over their span. Warmup before the first
-    buffer (preroll, engine deserialization, CUDA context) is excluded by
-    construction, so short and long clips are directly comparable.
-
-    ``timeout_s`` > 0 bounds a single run: if neither EOS nor an error arrives
-    within that wall-clock budget the run is abandoned and raised as an error,
-    so a stalled or non-prerolling pipeline cannot hang an unattended sweep.
-    """
+    timeout_s > 0 raises after that many wall-clock seconds, so a stalled pipeline cannot hang a sweep."""
     pipeline = Gst.parse_launch(pipeline_str)
     elem = pipeline.get_by_name(probe_name)
     if elem is None:
@@ -86,7 +59,7 @@ def run_once(pipeline_str, probe_name, timeout_s=0.0):
                 f"(reached {stats['n']} frames, no EOS)"
             )
             loop.quit()
-            return False  # one-shot
+            return GLib.SOURCE_REMOVE
         GLib.timeout_add(int(timeout_s * 1000), on_timeout)
 
     ret = pipeline.set_state(Gst.State.PLAYING)
@@ -100,7 +73,6 @@ def run_once(pipeline_str, probe_name, timeout_s=0.0):
     if state["error"]:
         raise RuntimeError(state["error"])
     n = stats["n"]
-    # First-to-last buffer span: n buffers bound n-1 inter-frame intervals.
     elapsed = (stats["last"] - stats["first"]) if n >= 2 else 0.0
     fps = (n - 1) / elapsed if elapsed > 0 else 0.0
     return n, elapsed, fps

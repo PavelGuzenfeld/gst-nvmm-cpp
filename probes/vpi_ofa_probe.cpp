@@ -1,18 +1,6 @@
-// Phase-0 go/no-go probe for B3 (nvmmofa — Optical Flow Accelerator via VPI).
-//
-// OFA is Orin-only hardware. Unlike B4's PVA morphology (which needed
-// pitch-linear), OFA dense optical flow REQUIRES block-linear input
-// (VPI_IMAGE_FORMAT_NV12_BL / Y8_BL / ...), which is exactly what nvvidconv
-// emits for NVMM — so the natural pipeline feeds OFA zero-copy. This probe
-// proves: wrap two block-linear NV12 NvBufSurfaces zero-copy, run
-// vpiSubmitOpticalFlowDense on VPI_BACKEND_OFA, get motion vectors out.
-//
-// Build (Orin / JP6, VPI 3):
-//   g++ -std=c++17 -O2 vpi_ofa_probe.cpp -o vpi_ofa_probe \
-//     -I/usr/src/jetson_multimedia_api/include -I/opt/nvidia/vpi3/include \
-//     -L/usr/lib/aarch64-linux-gnu/tegra -L/opt/nvidia/vpi3/lib/aarch64-linux-gnu \
-//     -lnvbufsurface -lnvvpi
-
+/// Phase-0 go/no-go for nvmmofa (Orin only): dense flow on VPI_BACKEND_OFA over two zero-copy-wrapped
+/// NV12 NvBufSurfaces. OFA requires block-linear input, which is what nvvidconv emits for NVMM.
+/// Build (JP6, VPI 3): g++ -std=c++17 -O2 vpi_ofa_probe.cpp -o vpi_ofa_probe -I/usr/src/jetson_multimedia_api/include -I/opt/nvidia/vpi3/include -L/usr/lib/aarch64-linux-gnu/tegra -L/opt/nvidia/vpi3/lib/aarch64-linux-gnu -lnvbufsurface -lnvvpi
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -37,8 +25,8 @@ static NvBufSurface* make_nv12_bl(uint32_t w, uint32_t h) {
     memset(&p, 0, sizeof(p));
     p.width = w; p.height = h;
     p.colorFormat = NVBUF_COLOR_FORMAT_NV12;
-    p.layout = NVBUF_LAYOUT_BLOCK_LINEAR;   // OFA requires block-linear
-    p.memType = NVBUF_MEM_SURFACE_ARRAY;    // Jetson NVMM
+    p.layout = NVBUF_LAYOUT_BLOCK_LINEAR;
+    p.memType = NVBUF_MEM_SURFACE_ARRAY;
     NvBufSurface* surf = nullptr;
     if (NvBufSurfaceCreate(&surf, 1, &p) != 0) { printf("  [FAIL] NvBufSurfaceCreate NV12/BL\n"); return nullptr; }
     surf->numFilled = surf->batchSize ? surf->batchSize : 1;
@@ -57,9 +45,12 @@ static VPIImage wrap(NvBufSurface* surf, uint64_t backends, const char* label) {
     return img;
 }
 
+/// OFA limits: input >= 32x32, gridSize 1/2/4/8, output grid >= 4x4. inputFmt is queried because
+/// VPI maps a wrapped NvBuffer NV12 to an ER/BL variant, not plain NV12_BL. The MV must be a
+/// VPI-native 2S16_BL image (a wrapped SIGNED_R16G16 surface is rejected), read back via lock.
 int main() {
-    const uint32_t W = 640, H = 480;     // >= 32x32; /gridSize stays >= 4x4
-    const int32_t  gridSize = 4;         // OFA allows 1,2,4,8
+    const uint32_t W = 640, H = 480;
+    const int32_t  gridSize = 4;
     const int32_t  outW = (W + gridSize - 1) / gridSize;
     const int32_t  outH = (H + gridSize - 1) / gridSize;
     const uint64_t be = VPI_BACKEND_OFA;
@@ -74,17 +65,10 @@ int main() {
     VPIImage cur  = wrap(cur_s,  be, "cur");
     if (!prev || !cur) return 3;
 
-    /* The payload's inputFmt must match what VPI actually assigned the wrapped
-       NvBufSurface (NvBuffer NV12 maps to an ER/BL variant, not plain NV12_BL),
-       so query it rather than hardcoding. */
     VPIImageFormat inFmt;
     vpiImageGetFormat(prev, &inFmt);
     printf("  wrapped input format = 0x%llx\n", (unsigned long long)inFmt);
 
-    /* OFA only accepts a VPI-native 2S16_BL output (a wrapped SIGNED_R16G16
-       NvBufSurface is rejected — verified), so allocate the MV in VPI and read
-       it back to host with a lock (de-tiled to pitch-linear) — the path the
-       element uses to copy the small flow field into per-frame metadata. */
     VPIImage mv = nullptr;
     if (!vpi_ok("vpiImageCreate(mv, 2S16_BL, OFA|CPU)",
                 vpiImageCreate(outW, outH, VPI_IMAGE_FORMAT_2S16_BL,
@@ -103,7 +87,6 @@ int main() {
         vpiSubmitOpticalFlowDense(stream, be, payload, prev, cur, mv))
         && vpi_ok("vpiStreamSync after OFA", vpiStreamSync(stream));
 
-    /* Read the flow field back to host (what the element copies into meta). */
     bool read_ok = false;
     if (ofa_ok) {
         VPIImageData out;

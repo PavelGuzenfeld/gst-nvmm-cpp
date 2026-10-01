@@ -1,6 +1,5 @@
 #!/bin/bash
-# Falsifier — whole memory_encoder.onnx: DLA layer placement + GPU baseline.
-# Runs inside the jp6 container. ONNX at /onnx, outputs to /work.
+# In the jp6 container: DLA layer placement and GPU baseline for /onnx/memory_encoder.onnx.
 set -u
 TRTEXEC=/usr/src/tensorrt/bin/trtexec
 ONNX=/onnx/memory_encoder.onnx

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Corrected: both ONNX inputs are already static -> no shape flags.
+# Both ONNX inputs are static, so no shape flags.
 set -u
 T=/usr/src/tensorrt/bin/trtexec
 OUT=/work/exp_ab; mkdir -p "$OUT"

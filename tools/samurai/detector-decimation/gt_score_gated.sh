@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Ground-truth A/B of ACQUISITION-GATED decimation at the deployed operating point.
-#   arms: "interval:gate" pairs. Baseline is results/gtd_n1 from gt_score_ab_deployed.sh.
-#
-# Ungated decimation cost ~23% GT success with 3 of 12 sequences never acquiring at
-# all. The gate holds decimation off until `gate` consecutive inferred frames have
-# produced a detection and re-arms the hold the moment one produces none, so
-# acquisition and reacquisition run at full detector rate -- which is where the damage
-# was. Note the gate keys on ANY detection, not target class: nvmminfer cannot see the
-# target class, so it is a proxy for track state, not the real signal.
+# Ground-truth A/B of acquisition-gated decimation; ARMS are interval:gate pairs, baseline is
+# results/gtd_n1. Ungated, 3 of 12 sequences never acquired. The gate keys on any detection,
+# not the target class nvmminfer cannot see, so it is a proxy for track state.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR DEPLOY_SRC EVALSET_ZIP SEQ_LIST SCORER GT_LABEL

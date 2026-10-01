@@ -1,19 +1,11 @@
 #!/usr/bin/env bash
-# Behavioural-parity gate for infer-interval on one clip.
-#   quality_ab_clip.sh <clip-basename> <seed-roi x,y,w,h> [seed-delay-frame]
-#
-# Seed is forced so every arm seeds at the identical box on the identical frame. With
-# auto-seed, decimation can delay the first detection by up to N-1 frames and shift
-# the whole trajectory, which confounds the comparison.
-#
-# The seed MUST be a VISUALLY VERIFIED target. Seeding from whatever the detector
-# emitted on the first frames put two clips on false positives; the tracker then
-# tracked noise, fusekf distance-gated out the REAL detections, and the run produced a
-# convincing but entirely bogus "decimation diverges the track" result. Use
-# find_targets.sh, then extract the frame and look at it.
+# Forced seed: auto-seed lets decimation delay the first detection and shift the trajectory.
+# The seed must be visually verified (find_targets.sh); an unverified one tracked a false
+# positive and produced a bogus "decimation diverges the track" result.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC
+[ "$#" -ge 2 ] || { echo "usage: $0 <clip-basename> <seed-roi x,y,w,h> [seed-delay-frame]" >&2; exit 2; }
 
 C=$1; SEED=$2; DELAY=${3:-0}
 O=$ASSET_DIR
@@ -38,8 +30,6 @@ for N in 2 3; do
   echo
   echo "==== $C: infer-interval=$N vs baseline ===="
   python3 "$O/trajectory_compare.py" --baseline "$R/${C}_v_n1.csv" --test "$R/${C}_v_n$N.csv" || true
-  # Attribute the failures: fusion-flag toggle vs genuine trajectory divergence.
-  # Shared with the other harnesses rather than re-implemented inline.
   python3 "$O/explain_nontoggle.py" "$R/${C}_v_n1.csv" "$R/${C}_v_n$N.csv" || true
 done
 echo "CLIP-DONE-$C"

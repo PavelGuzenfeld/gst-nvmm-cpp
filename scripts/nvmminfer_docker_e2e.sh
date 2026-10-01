@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# Dockerised end-to-end demo for the nvmminfer detector + nvmmdrawdet overlay.
-# Run ON the Jetson (JetPack 6 / L4T 36.4, Orin). Builds the image, builds the
-# plugins inside the container (under --runtime nvidia, so the tegra BSP libs +
-# CUDA/TRT are visible), then streams an annotated H.264 feed over TCP. Watch it
-# from any machine on the LAN with the printed gst-launch command.
-#
-# Env (override as needed):
-#   ENGINE   TensorRT engine file          (default ~/yolo/yolo11n_fp16.engine)
-#   VIDEO    looped H.264 elementary src   (default JetPack car sample if present)
-#   IMG      still-image fallback source   (default ~/yolo/bus.jpg)
-#   FPS      stream framerate              (default 60)
-#   PORT     tcpserversink port            (default 6000)
-#   IMAGE    docker image tag              (default gst-nvmm-infer:jp6)
-#   NAME     server container name         (default nvmm-e2e)
+# JP6 Orin: build the infer image and plugins (--runtime nvidia), stream nvmminfer + nvmmdrawdet H.264 over TCP.
+# Mounted paths go absolute (docker -v reads relative ones as volumes); caps stay quoted for the container's bash -c.
+# Builds use host networking: this kernel lacks the iptables 'raw' table BuildKit's bridge needs.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,13 +17,8 @@ fail() { echo "E2E FAIL: $1" >&2; exit 1; }
 case "$FPS"  in ''|*[!0-9]*) fail "FPS must be a positive integer (got: $FPS)";; esac
 case "$PORT" in ''|*[!0-9]*) fail "PORT must be a positive integer (got: $PORT)";; esac
 [ -f "$ENGINE" ] || fail "engine not found: $ENGINE (build with trtexec)"
-# `docker -v` treats a RELATIVE host path as a named volume, not a bind-mount,
-# so canonicalize every mounted path to absolute before handing it to docker.
 ENGINE="$(realpath "$ENGINE")"
 
-# A moving video makes the better demo; fall back to the still image if absent.
-# Caps are single-quoted so the '(memory:NVMM)' parens survive intact when the
-# pipeline string is re-parsed by the container's shell under `bash -c`.
 if [ -f "$VIDEO" ]; then
   VIDEO="$(realpath "$VIDEO")"
   SOURCE="multifilesrc location=/data/src.h264 loop=true caps='video/x-h264,framerate=$FPS/1' \
@@ -53,14 +37,10 @@ fi
 GST_PLUGIN_PATH=/src/builddir-docker/gst/nvmminfer:/src/builddir-docker/gst/nvmmdrawdet:/src/builddir-docker/gst/nvmmalloc
 
 echo "== [1/3] build image $IMAGE =="
-# The kernel here lacks the iptables 'raw' table, so BuildKit's bridge fails —
-# build with host networking.
 docker build --network=host -f "$ROOT/docker/Dockerfile.jetson-jp6-infer" \
   -t "$IMAGE" "$ROOT" >/dev/null || fail "docker build failed"
 
 echo "== [2/3] build plugins inside the container (runtime nvidia) =="
-# meson setup self-skips an already-configured dir; ninja is a fast no-op when
-# up to date, so this is cheap on repeat runs yet still picks up source edits.
 docker run --rm --runtime nvidia --network host -v "$ROOT":/src -w /src "$IMAGE" \
   bash -c 'meson setup builddir-docker -Dbuildtype=debugoptimized -Dwerror=false || true
            ninja -C builddir-docker' || fail "in-container build failed"

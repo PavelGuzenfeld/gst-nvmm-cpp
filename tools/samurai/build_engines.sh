@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Build the five SAMURAI TensorRT engines from the ONNX produced by export_onnx.py.
-# Run inside the gst-nvmm-infer:jp6 container on the Jetson (it ships trtexec at
-# the TensorRT version the nvmmsamurai element links against).
-#
-#   docker run --rm --runtime nvidia --network host \
-#     -v <onnx_dir>:/onnx -v <out_dir>:/out gst-nvmm-infer:jp6 \
-#     bash /src/tools/samurai/build_engines.sh
-#
-# Env knobs (defaults shown):
-#   ONNX  ONNX input dir   (default: /onnx)
-#   OUT   engine output dir(default: /out)
-#   T     trtexec path     (default: /usr/src/tensorrt/bin/trtexec)
+# In gst-nvmm-infer:jp6 on the Jetson, whose trtexec matches the TensorRT nvmmsamurai links:
+# docker run --rm --runtime nvidia --network host -v <onnx>:/onnx -v <out>:/out gst-nvmm-infer:jp6 bash /src/tools/samurai/build_engines.sh
 set -eu
 ONNX="${ONNX:-/onnx}"
 OUT="${OUT:-/out}"
