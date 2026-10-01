@@ -311,7 +311,7 @@ elements that use the meta get wrong plane offsets.
 `gst_buffer_add_video_meta_full()` (GstVideoInfo only as fallback when no
 surface).
 
-**Test (done):** `test_gst_nvmm_allocator` → `pool_video_meta_real_strides`
+**Test (done):** `test_gst_meta_and_allocator` → `pool_video_meta_real_strides`
 acquires a pooled buffer and asserts `vmeta->stride[i] == planeParams.pitch[i]`
 (and offsets). Passes in mock and on Jetson Xavier NX, where the real pitch is
 hardware-aligned and differs from the GstVideoInfo stride.

@@ -92,18 +92,19 @@ entries align by index with the det meta's objects array on the same buffer.
 
 Algorithm logic lives in a dependency-free class next to the element, not in
 the GObject code: `nvmmtracker/tracker.cpp`, `nvmmsecondaryinfer/
-secondary_cache.cpp`, `common/nvmm_motion.cpp`. The matching unit test in
-`tests/` compiles that file directly and runs on the x86 CI build:
+secondary_cache.cpp`, `common/nvmm_motion.cpp`. Their cases live in
+`tests/test_host_cores.cpp`, and the `test_host_cores` executable compiles each
+core directly, so it runs on the x86 CI build. Add yours to both:
 
 ```meson
-test_my_core = executable('test_my_core',
-  'test_my_core.cpp',
+test_host_cores = executable('test_host_cores',
+  'test_host_cores.cpp',
+  ...
   '../gst/mynewelement/my_core.cpp',
-  include_directories : [config_inc, common_inc,
+  include_directories : [config_inc, common_inc, ...,
                          include_directories('../gst/mynewelement')],
-  cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
+  cpp_args : mock_args,
 )
-test('my_core', test_my_core, protocol : 'exitcode')
 ```
 
 Tests use the self-registering harness in `tests/test_harness.h`

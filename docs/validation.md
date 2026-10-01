@@ -7,26 +7,30 @@ Validated on two Jetson platforms (both in Docker and native):
 
 ## Test results
 
-All 11 test suites pass on both Xavier NX and Orin NX (65 assertions + a fuzz run):
+Native debug build at C++14 with `analytics` and `analytics_cuda` enabled, run on
+Orin NX (JP6.2, GStreamer 1.20.3). The x86 mock build runs the same set minus
+the two CUDA kernel probes.
 
 ```
-  1/11 nvmm_buffer         OK   10 passed   (create, map, move, release, export_fd, planes)
-  2/11 nvmm_transform      OK   10 passed   (scale, crop, convert, flip, rotate 90/270, interpolation, compute-mode, null safety)
-  3/11 gst_nvmm_allocator  OK    9 passed   (create, alloc, surface map, per-plane, roundtrip, pool video-meta strides)
-  4/11 fuzz_shm_header     OK              (200k random NvmmShmHeader inputs through the consumer's validation — no crash/OOB/UB)
-  5/11 optical_flow_meta   OK    4 passed   (api type, add/get, S10.5 decode, copy transform)
-  6/11 nvmm_compositor     OK    4 passed   (create, output props, request pads, pad placement props)
-  7/11 nvmm_sink           OK    5 passed   (create, properties, pool-size guard, state, shm lifecycle)
-  8/11 nvmm_appsrc         OK    2 passed   (create, properties)
-  9/11 gstcheck_elements   OK    8 passed   (discovery, state, properties, caps, pipeline)
- 10/11 nvmm_det_meta       OK    7 passed   (wire layout/segment size, slot pointer math, add/get roundtrip, empty + count-clamped objects, survives buffer copy)
- 11/11 integration         OK    6 passed   (multi-shm, dynamic props, pipeline bin, alloc stress, protocol, missing-shm)
-Ok: 11   Fail: 0
+ 1/13 pure_cpp - kalman_box              OK    4 cases
+ 2/13 host_cores                         OK   26 cases
+ 3/13 gst_meta_and_allocator             OK   23 cases
+ 4/13 nvidia_hwlib - nvmm_surface        OK   10 cases
+ 5/13 nvidia_hwlib - samurai_kernels     OK
+ 6/13 pure_cpp - pure_cpp_headers        OK   12 cases
+ 7/13 pure_cpp+fuzz - fuzz_gmc           OK   44.2s
+ 8/13 plugin - nvmm_compositor           OK    3 cases
+ 9/13 plugin - nvmm_sink_appsrc          OK    4 cases
+10/13 plugin - integration               OK    8 cases
+11/13 programmatic_pipeline              OK
+12/13 nvidia_hwlib - analytics_kernels   OK
+13/13 analytics                          OK   24 cases
+Ok: 13   Fail: 0
 ```
 
-> The `nvmm_det_meta` suite is DeepStream-free POD + `GstMeta` (no `NvBufSurface`),
-> so it is hardware-agnostic; re-confirmed 7/7 on Orin NX (JP6) and the x86 dev
-> image. Note: inside the Jetson build container the NVMM-allocating suites fail
+> The det-meta cases in `gst_meta_and_allocator` are DeepStream-free POD + `GstMeta`
+> (no `NvBufSurface`), so they are hardware-agnostic and pass on Orin (JP6) and the
+> x86 dev image. Note: inside the Jetson build container the NVMM-allocating suites fail
 > with `NvRmMemInitNvmap … Memory Manager Not supported` (no `/dev/nvmap` in the
 > container) — build in the container, run the NVMM suites on the host.
 
@@ -126,7 +130,7 @@ The optional [metadata side-channel](metadata-ipc.md) carries flat detection
 records (`NvmmFrameMeta`) alongside each frame so a consumer can recover them
 without re-running inference. Validated on Orin NX (JP6, L4T R36.4.3):
 
-- **Wire format + `GstMeta` (unit, host):** `nvmm_det_meta` 7/7 — segment-size
+- **Wire format + `GstMeta` (unit, host):** the 7 det-meta cases, now in `gst_meta_and_allocator` — segment-size
   math with/without the metadata region, per-slot pointer arithmetic, add/get
   round-trip, empty and count-clamped object lists, and survival across
   `gst_buffer_copy` (copy-transform only; non-copy transforms drop the meta).
@@ -152,7 +156,8 @@ without re-running inference. Validated on Orin NX (JP6, L4T R36.4.3):
 ## Sanitizer results
 
 `./scripts/run-sanitizers.sh` builds and runs the suite under ASan+UBSan and,
-separately, TSan. It is exercised two ways:
+separately, TSan. These runs predate the merged test executables, so the tables
+name the old suites:
 
 **Mock build (x86 dev container):**
 
@@ -169,20 +174,20 @@ separately, TSan. It is exercised two ways:
 | ASan + UBSan | all 11 | Clean |
 | ThreadSanitizer | 4 (allocator, fuzz, optical_flow, det_meta) | Clean |
 
-The element tests (`nvmm_compositor`, `nvmm_sink`, `nvmm_appsrc`,
-`gstcheck_elements`, `integration`) load plugins via `dlopen`, which trips ASan's
+The element tests (`nvmm_compositor`, `nvmm_sink_appsrc`, `integration`) load
+plugins via `dlopen`, which trips ASan's
 *"runtime does not come first"* check unless `libasan` is `LD_PRELOAD`ed — the
-runner does this, so all 11 suites pass clean under ASan+UBSan; the loader leak
+runner does this, so every suite passes clean under ASan+UBSan; the loader leak
 is GStreamer's, not this code. Under **TSan** those dlopen tests can't run (the
 unsanitized plugin scanner can't load a sanitized `.so`), so the `plugin` suite
 is excluded; TSan needs `setarch -R` (a privileged container or bare host) to
-disable ASLR. On the **real-API** build, `nvmm_buffer` and `nvmm_transform` are
-also excluded from TSan (suite `nvidia_hwlib`): they delegate to closed NVIDIA
+disable ASLR. On the **real-API** build, `nvmm_surface` and the CUDA probes are
+excluded from TSan (suite `nvidia_hwlib`): they delegate to closed NVIDIA
 libs that TSan flags but we cannot fix — `libnvbufsurftransform` double-locks its
 own global mutex and the CUDA allocator OOMs under TSan's shadow reservation. On
-the mock build those two use the mock NvBufSurface and stay TSan-clean, so the
-skip is a no-op there. The atomic-heavy IPC paths (shm header/fuzz, det-meta,
-allocator) are covered under TSan on both builds.
+the mock build `nvmm_surface` uses the mock NvBufSurface and stays TSan-clean, so the
+skip is a no-op there. On the merged tree under TSan on Orin,
+`gst_meta_and_allocator` hangs at process exit; main does the same.
 
 ## Benchmark results
 
