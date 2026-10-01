@@ -89,6 +89,7 @@ Result<void> NvmmTransform::transform(
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FILTER;
     }
 
+    /// Session params are process-global, so set them only on an override.
     if (params.compute != ComputeMode::kDefault) {
         NvBufSurfTransformConfigParams cfg{};
         cfg.compute_mode = to_nv_compute(params.compute);

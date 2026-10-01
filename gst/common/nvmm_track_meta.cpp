@@ -5,7 +5,7 @@
 #include <cstring>
 
 static gboolean
-nvmm_track_meta_init(GstMeta *meta, gpointer , GstBuffer * )
+nvmm_track_meta_init(GstMeta *meta, gpointer, GstBuffer *)
 {
     auto *m = reinterpret_cast<GstNvmmTrackMeta *>(meta);
     memset(reinterpret_cast<char *>(m) + sizeof(GstMeta), 0,
@@ -14,8 +14,8 @@ nvmm_track_meta_init(GstMeta *meta, gpointer , GstBuffer * )
 }
 
 static gboolean
-nvmm_track_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * ,
-                          GQuark type, gpointer )
+nvmm_track_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer *,
+                          GQuark type, gpointer)
 {
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;

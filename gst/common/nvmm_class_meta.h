@@ -5,9 +5,13 @@
 
 G_BEGIN_DECLS
 
+/// Entry i belongs to GstNvmmDetMeta object i on the same buffer.
 typedef struct _NvmmClassEntry {
+    /// -1 when the classifier skipped the object.
     gint32  class_id;
+    /// Top-1 score after activation.
     gfloat  confidence;
+    /// 1 when inferred on this frame, 0 when served from the cache.
     guint32 fresh;
     gchar   label[NVMM_META_LABEL_LEN];
 } NvmmClassEntry;

@@ -16,6 +16,8 @@ struct ConstTensor {
 
 class SamuraiConsts {
 public:
+    /// Little-endian: u32 magic 0x5341434E (SACN), u32 count; per tensor u32 name_len,
+    /// name bytes, u32 ndim, ndim*u32 dims, row-major f32 data.
     bool load(const std::string &path, std::string &err)
     {
         std::FILE *f = std::fopen(path.c_str(), "rb");

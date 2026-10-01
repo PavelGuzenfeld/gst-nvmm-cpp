@@ -63,6 +63,8 @@ struct _GstNvmmInfer {
     int     net_w, net_h;
     int     num_classes, num_proposals;
     guint64 frame_no;
+    /// Every frame, driving infer-interval; frame_no counts only inferred frames and
+    /// is the det-meta frame_number.
     guint64 seen_frames;
     guint   acq_run;
 
@@ -70,6 +72,8 @@ struct _GstNvmmInfer {
     cudaEvent_t ev0, ev1, ev2, ev3;
     gdouble    acc_pre, acc_infer, acc_copy, acc_parse;
     guint      perf_frames;
+    /// All frames in the window, unlike perf_frames. Once infer-interval skips, a rate
+    /// from perf_frames alone reads as 1/N of the stream rate.
     guint      perf_stream_frames;
     gint64     window_start_us;
 };
@@ -169,6 +173,8 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
                         nvmm::dims_str(t.dims).c_str(), nvmm::dtype_str(t.dtype), t.bytes);
     }
 
+    /// The parser binds only input0()/output0(); a multi-head engine (an NMS-plugin
+    /// export) would leave tensors unbound and enqueueV3 would fail.
     size_t n_in = 0, n_out = 0;
     for (const auto &t : self->engine->tensors()) (t.is_input ? n_in : n_out)++;
     if (n_in != 1 || n_out != 1) {
@@ -187,6 +193,8 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         gst_nvmm_infer_stop(bt);
         return FALSE;
     }
+    /// FP32 I/O only: INT8/FP16-IO bindings would be read as garbage. trtexec --fp16
+    /// keeps FP32 I/O bindings, so fp16 engines pass.
     if (in->dtype != nvinfer1::DataType::kFLOAT ||
         out->dtype != nvinfer1::DataType::kFLOAT) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
@@ -205,6 +213,8 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
+    /// Head is [1, 4+num_classes, num_proposals]. Requiring channels < proposals rejects
+    /// a transposed export, which would otherwise over-read the heap.
     if (out->dims.nbDims != 3 || out->dims.d[1] <= 4 ||
         out->dims.d[1] >= out->dims.d[2]) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
@@ -249,6 +259,9 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
     auto *self = GST_NVMM_INFER(bt);
 
+    /// A skipped frame carries no det meta, never the previous dets: stale meta drags
+    /// the fused KF to an old position. infer-gate-frames keeps decimation off until
+    /// detections flow; at N=3 ungated, 3 of 12 GT sequences never acquired.
     self->perf_stream_frames++;
 
     const gboolean gate_open = self->infer_gate_frames == 0 ||

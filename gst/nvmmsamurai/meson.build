@@ -28,6 +28,8 @@ gstnvmmsamurai = library('gstnvmmsamurai',
   cuda_args : samurai_cuda_base_args +
               ['-Werror', 'all-warnings', '-Xcompiler', '-Wall,-Wextra'],
   cpp_args : samurai_cpp_args,
+  # nvcc as linker rejects the unwrapped -Wl,-rpath meson emits for mixed
+  # C++/CUDA targets; g++ links the .cu.o fine, there is no relocatable device code.
   link_language : 'cpp',
   install : true,
   install_dir : get_option('libdir') / 'gstreamer-1.0',

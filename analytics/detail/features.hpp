@@ -17,6 +17,8 @@ struct Corner {
     float score = 0.f;
 };
 
+/// FAST-9/16, 3x3 non-max suppression on a SAD-over-arc score, strongest first.
+/// `margin` (>= 3) excludes a border band.
 inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
                                         int max_corners, int margin)
 {
@@ -80,13 +82,18 @@ inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
 }
 
 struct SmallMotionParams {
+    /// Max displacement, pixels.
     int search_radius = 32;
+    /// ZNCC patch is (2r+1)^2.
     int patch_r = 5;
     int coarse_step = 3;
     float zncc_min = 0.6f;
+    /// Best coarse SAD must be below ratio * runner-up outside the refinement window, or
+    /// repetitive texture yields aliased matches coherent enough to fake a parallax plane.
     float sad_ratio = 0.8f;
 };
 
+/// -1 on flat patches.
 inline float zncc_at(img::View<const uint8_t> a, int cx, int cy,
                      img::View<const uint8_t> b, int mx, int my, int r)
 {
@@ -106,6 +113,7 @@ inline float zncc_at(img::View<const uint8_t> a, int cx, int cy,
     return (float)((sab - sa * sb / n) / std::sqrt(ca * cb));
 }
 
+/// Integer-pixel correspondences: coarse SAD grid, then exhaustive ZNCC refinement.
 inline void small_motion_matches(img::View<const uint8_t> cur, img::View<const uint8_t> ref,
                                  const std::vector<Corner> &corners,
                                  const SmallMotionParams &p,
@@ -173,6 +181,7 @@ struct OrbParams {
 };
 
 struct OrbFeature {
+    /// Level-0 coordinates.
     float x = 0.f, y = 0.f;
     uint64_t desc[4] = {0, 0, 0, 0};
 };
@@ -201,6 +210,8 @@ inline img::Image<uint8_t> resize_bilinear(img::View<const uint8_t> src, int dw,
     return dst;
 }
 
+/// 256 BRIEF pairs in the 31x31 patch from a fixed-seed sampler, so descriptors are
+/// deterministic but differ bit-for-bit from cv::ORB's learned table.
 inline const int8_t *brief_pattern()
 {
     static const std::vector<int8_t> pat = [] {
@@ -224,6 +235,7 @@ inline const int8_t *brief_pattern()
     return pat.data();
 }
 
+/// Intensity-centroid orientation over the radius-15 disc (ORB moment method).
 inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
                             float &cosA, float &sinA)
 {
@@ -245,6 +257,7 @@ inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
 
 inline std::vector<OrbFeature> orb_detect(img::View<const uint8_t> im, const OrbParams &p)
 {
+    /// Rotated BRIEF reach is <= 15, +1 for rounding; the FAST ring needs no more.
     const int margin = 17;
     std::vector<OrbFeature> out;
     img::Image<uint8_t> level_store;

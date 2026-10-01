@@ -11,6 +11,7 @@ struct Rect {
     int x = 0, y = 0, w = 0, h = 0;
 };
 
+/// Non-owning strided single-channel view; `stride` is in elements, not bytes.
 template <typename T>
 struct View {
     T *data = nullptr;
@@ -24,6 +25,8 @@ struct View {
     T *row(int y) const { return data + (std::ptrdiff_t)y * stride; }
     T &at(int y, int x) const { return row(y)[x]; }
 
+    /// U is pinned to T via is_same: otherwise U deduces from the conversion target and
+    /// View<uint8_t> converts to any View<const X>, an ambiguous overload under C++20.
     template <typename U = T,
               typename std::enable_if<std::is_same<U, T>::value &&
                                       !std::is_const<U>::value, int>::type = 0>

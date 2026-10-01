@@ -10,6 +10,8 @@ namespace nvmm {
 
 namespace {
 
+/// NvBufSurfTransform rejects a CUDA-memory dst for some source memtypes here, so
+/// write a VIC-native surface-array RGBA and reach it from CUDA via EGL.
 NvBufSurface *create_rgba(int w, int h, std::string &err) {
     NvBufSurfaceCreateParams p{};
     p.width       = (uint32_t)w;
@@ -67,6 +69,7 @@ bool Preprocessor::configure(int net_w, int net_h, int frame_w, int frame_h,
 
     nppSetStream(stream);
 
+    /// Letterbox gray is filled once: each frame copies only the image rect, so the pad survives.
     const Npp8u pad[4] = {114, 114, 114, 255};
     const NppiSize full = {net_w, net_h};
     if (nppiSet_8u_C4R(pad, rgba_lin_, net_w * 4, full) != NPP_SUCCESS) {

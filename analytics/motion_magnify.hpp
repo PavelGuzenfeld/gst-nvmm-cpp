@@ -9,19 +9,26 @@ namespace nvmm {
 namespace motion {
 
 struct MagnifyParams {
+    /// Frames per second; sets the cutoffs in Hz.
     float fps = 30.f;
     float low_hz = 0.5f;
+    /// Must exceed low_hz.
     float high_hz = 3.f;
     float alpha = 10.f;
+    /// Odd kernel, 0 disables; restricts magnification to coarse motion.
     int   blur = 0;
 };
 
+/// Linear Eulerian video magnification (Wu et al., SIGGRAPH 2012) with the streaming
+/// IIR bandpass: two first-order low-passes, O(1) state per pixel. Global camera
+/// motion passes as signal, so it does not survive panning.
 class MotionMagnifier {
 public:
     explicit MotionMagnifier(const MagnifyParams &p = {}) : p_(p) {
         const float two_pi = 6.28318530717958647692f;
         r_low_  = 1.f - std::exp(-two_pi * p_.low_hz  / p_.fps);
         r_high_ = 1.f - std::exp(-two_pi * p_.high_hz / p_.fps);
+    /// The first frame initialises the filters and is returned as is (blurred if enabled).
     }
 
     img::Image<float> process(img::View<const uint8_t> frame) { return run(frame); }

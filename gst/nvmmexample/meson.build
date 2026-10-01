@@ -2,5 +2,5 @@ gstnvmmdetlog = library('gstnvmmdetlog',
   files('gstnvmmdetlog.cpp'),
   include_directories : [config_inc, common_inc],
   dependencies : [nvmm_common_dep, gst_base_dep],
-  install : false,
+  install : false,  # kept compilable as the docs/extending.md example, never shipped
 )

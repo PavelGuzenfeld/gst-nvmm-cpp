@@ -104,9 +104,12 @@ gst_nvmm_drawdet_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
            gst_structure_get_int(s, "height", &self->height);
 }
 
+/// An NVMM gst-buffer's size is a surface handle, not pixels. Default unit-size
+/// scaling mis-sized the RGBA output when downstream offered no pool (fakesink) and
+/// the host copy corrupted the heap, so size from the RGBA caps.
 static gboolean
 gst_nvmm_drawdet_transform_size(GstBaseTransform *bt, GstPadDirection direction,
-                                GstCaps * , gsize ,
+                                GstCaps *, gsize,
                                 GstCaps *othercaps, gsize *othersize)
 {
     GstCaps *rgba_caps = othercaps;
@@ -254,6 +257,7 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
 
     GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(inbuf);
     if (self->draw_det && m && m->num_objects) {
+        /// Motion and class metas are index-aligned with the det meta.
         GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
         GstNvmmClassMeta *cm = gst_buffer_get_nvmm_class_meta(inbuf);
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
@@ -310,6 +314,7 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             int ty = (int)tm->top - FONT_H * ts - ts; if (ty < ts) ty = (int)tm->top + ts;
             draw_text((guint8 *)omap.data, W, H, (int)tm->left + ts, ty, tl, ts, 0, 255, 255);
         }
+        /// n_frames was incremented above, so it is >= 1.
         const double cov = 100.0 * self->n_valid / self->n_frames;
         char hud[64];
         g_snprintf(hud, sizeof hud, "FPS %.1f  TRACK %.0f%%", self->ema_fps, cov);

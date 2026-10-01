@@ -19,6 +19,7 @@ struct _GstNvmmFusion {
     GstAggregatorPad *flow_pad;
     gboolean          src_caps_set;
     gboolean          compute_motion;
+    /// Pixels per frame.
     gdouble           motion_threshold;
 };
 
@@ -36,6 +37,8 @@ annotate_motion(GstNvmmFusion *self, GstBuffer *out,
         return;
     }
     nvmm::MotionEntry entries[NVMM_META_MAX_OBJECTS];
+    /// Boxes are in infer space but the flow frame dims are passed: equal only while both
+    /// branches see the same tee'd frame. A scaler between them needs a rescale here.
     const guint32 n = MIN(dm->num_objects, (guint32)NVMM_META_MAX_OBJECTS);
     const uint32_t got = nvmm::compute_box_motion(
         reinterpret_cast<const int16_t *>(map.data), fm->mv_width, fm->mv_height,
@@ -57,7 +60,7 @@ static GstStaticPadTemplate src_tmpl = GST_STATIC_PAD_TEMPLATE(
     GST_STATIC_CAPS("video/x-raw(memory:NVMM), format=(string)NV12"));
 
 static GstFlowReturn
-gst_nvmm_fusion_aggregate(GstAggregator *agg, gboolean ) {
+gst_nvmm_fusion_aggregate(GstAggregator *agg, gboolean) {
     auto *self = GST_NVMM_FUSION(agg);
     GstAggregatorPad *dagg = self->det_pad;
     GstAggregatorPad *fagg = self->flow_pad;
@@ -73,6 +76,8 @@ gst_nvmm_fusion_aggregate(GstAggregator *agg, gboolean ) {
         goto done;
 
     {
+        /// PTS is the join key. On a mismatch drop the older head and retry, so a dropped
+        /// frame self-heals instead of pairing N with N-1 forever. NONE timestamps pair as is.
         const GstClockTime dp = GST_BUFFER_PTS(det), fp = GST_BUFFER_PTS(flow);
         if (GST_CLOCK_TIME_IS_VALID(dp) && GST_CLOCK_TIME_IS_VALID(fp) && dp != fp) {
             GST_WARNING_OBJECT(self,
@@ -93,6 +98,8 @@ gst_nvmm_fusion_aggregate(GstAggregator *agg, gboolean ) {
     }
 
     {
+        /// Drop both pads' refs first so make_writable is a no-op: a deep copy through the
+        /// default mem_copy corrupts the opaque NO_SHARE NVMM surface from nvvidconv.
         NvmmOpticalFlowMeta *fm = gst_buffer_get_nvmm_optical_flow_meta(flow);
         gst_aggregator_pad_drop_buffer(dagg);
         gst_aggregator_pad_drop_buffer(fagg);
@@ -172,6 +179,8 @@ gst_nvmm_fusion_class_init(GstNvmmFusionClass *klass) {
                             "NVMM branch fusion");
 }
 
+/// ALWAYS pads are not auto-created from templates; instantiate them so
+/// `f.detection` / `f.flow` can be linked.
 static GstAggregatorPad *
 add_sink_pad(GstNvmmFusion *self, const char *name) {
     GstPadTemplate *tmpl =

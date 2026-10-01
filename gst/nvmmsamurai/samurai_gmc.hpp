@@ -8,6 +8,8 @@ namespace nvmm {
 
 struct GmcShift { float dx = 0.f, dy = 0.f, conf = 0.f; };
 
+/// Integer-px shift in patch units with curr[y,x] ~= prev[y-dy, x-dx]. Zero-mean
+/// NCC; conf is the peak correlation in [-1,1].
 inline GmcShift estimate_shift(const uint8_t *prev, const uint8_t *curr,
                                int n, int search)
 {

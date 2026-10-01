@@ -6,6 +6,7 @@
 
 #include "image.hpp"
 
+/// Host/device qualifier so analytics_kernels.cu shares these helpers, not a copy.
 #if defined(__CUDACC__)
 #define NVMM_ANALYTICS_HD __host__ __device__
 #else
@@ -15,6 +16,8 @@
 namespace nvmm {
 namespace img {
 
+/// OpenCV BORDER_REFLECT_101 fold (gfedcb|abcdefgh|gfedcba). Valid for n > 1 and
+/// at most one kernel radius out of range.
 NVMM_ANALYTICS_HD inline int reflect101(int i, int n)
 {
     if (i < 0) return -i;
@@ -22,6 +25,8 @@ NVMM_ANALYTICS_HD inline int reflect101(int i, int n)
     return i;
 }
 
+/// cv::getGaussianKernel(k, 0): OpenCV 4.x bit-exact tables for odd k <= 9, else
+/// sigma = 0.3*((k-1)*0.5-1) + 0.8. The golden-comparison tests rely on the match.
 inline std::vector<float> gaussian_kernel(int k)
 {
     std::vector<float> w((size_t)k);
@@ -48,6 +53,7 @@ inline std::vector<float> gaussian_kernel(int k)
     return w;
 }
 
+/// dst must not alias src.
 template <typename SrcT>
 inline void convolve_rows(View<const SrcT> src, View<float> dst, const std::vector<float> &k)
 {
@@ -75,6 +81,7 @@ inline void convolve_rows(View<const SrcT> src, View<float> dst, const std::vect
     }
 }
 
+/// emit(y, row, width) gets each finished row in a scratch buffer valid only during the call.
 template <typename Emit>
 inline void convolve_cols(View<const float> src, const std::vector<float> &k, Emit &&emit)
 {
@@ -91,6 +98,7 @@ inline void convolve_cols(View<const float> src, const std::vector<float> &k, Em
     }
 }
 
+/// Matches cv::GaussianBlur(src, dst, {k,k}, 0). dst may alias src.
 template <typename SrcT>
 inline void gaussian_blur(View<const SrcT> src, Image<float> &tmp, View<float> dst, int ksize)
 {
@@ -118,6 +126,7 @@ inline void zero_border(View<float> m, int mb)
     }
 }
 
+/// Max over [cx-r, cx+r) x [cy-r, cy+r) clipped to the image; 0 for an empty window.
 inline float window_max(View<const float> m, float cx, float cy, int r)
 {
     if (m.empty()) return 0.f;

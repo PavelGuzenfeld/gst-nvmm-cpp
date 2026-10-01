@@ -102,6 +102,7 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
     *buffer = gst_buffer_new();
     gst_buffer_append_memory(*buffer, mem);
 
+    /// Hardware alignment can make surface strides differ from GstVideoInfo.
     guint n_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
     gsize offsets[GST_VIDEO_MAX_PLANES] = {};
     gint strides[GST_VIDEO_MAX_PLANES] = {};

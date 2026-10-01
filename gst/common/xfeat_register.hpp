@@ -20,6 +20,8 @@ inline double logsigmoid(double x) { return -softplus(-x); }
 
 struct Match { int i, j; };
 
+/// kornia sigmoid_log_double_softmax + filter_matches, fused over the m x n
+/// core. Returns mutual matches with mscore0 > th.
 inline std::vector<Match> filter_matches(const float* sim, const float* z0, const float* z1,
                                          int m, int n, double th = 0.1) {
     std::vector<double> lse_row(m), lse_col(n, 0.0), colmax(n, -1e300);
@@ -57,6 +59,7 @@ inline std::vector<Match> filter_matches(const float* sim, const float* z0, cons
     return out;
 }
 
+/// Same set as np.argpartition(d, k)[:k]; order is not part of the contract.
 inline std::vector<int> k_nearest(const std::vector<Pt2>& pts, Pt2 p, int k) {
     const int n = (int)pts.size();
     std::vector<int> idx(n);
@@ -111,6 +114,8 @@ inline bool affine_from_3pts(const std::array<Pt2,3>& src, const std::array<Pt2,
     return true;
 }
 
+/// Port of XFeat registration.py PointToPointProjector: affine from the
+/// max-area triplet of the 9 matches nearest `point`. False under 9 matches.
 inline bool project_point(const std::vector<Pt2>& mref, const std::vector<Pt2>& mqry,
                           Pt2 point, Pt2& out) {
     if (mref.size() < 9) return false;
@@ -130,6 +135,8 @@ inline bool project_point(const std::vector<Pt2>& mref, const std::vector<Pt2>& 
 struct BBox { long x, y, w, h; };
 enum RegMode { REG_FREEZE_VL, REG_FLIP };
 
+/// Port of tracker_engine.py registration(): casts truncate like Python int().
+/// False (keep the prior box) when projection fails.
 inline bool registration_bbox(const std::vector<Pt2>& mref, const std::vector<Pt2>& mqry,
                               BBox in, double scale, RegMode mode, BBox& out) {
     long cx = (long)((double)in.x + (double)in.w / 2.0);

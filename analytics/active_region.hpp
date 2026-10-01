@@ -9,9 +9,12 @@ namespace nvmm {
 namespace video {
 
 struct ActiveRegionParams {
+    /// Gray-level span below which a row or column counts as a uniform bar.
     int bar_range = 15;
 };
 
+/// Bars are found by per-row/column intensity range, not mean, so a dark but textured
+/// frame (thermal sky) is not cropped. Full frame if nothing is a bar.
 inline img::Rect active_region(img::View<const uint8_t> gray, const ActiveRegionParams &p = {})
 {
     if (gray.empty()) return img::Rect();

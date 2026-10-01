@@ -13,6 +13,7 @@ struct Pt {
 };
 
 struct Mat3 {
+    /// Row-major.
     double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 
     static Mat3 identity() { return Mat3(); }
@@ -48,6 +49,7 @@ struct Mat3 {
         return r;
     }
 
+    /// False when the point maps to infinity.
     bool project(double x, double y, double &u, double &v) const {
         const double w = m[6] * x + m[7] * y + m[8];
         if (std::abs(w) < 1e-12) return false;
@@ -57,6 +59,7 @@ struct Mat3 {
     }
 };
 
+/// Cyclic Jacobi on the 9x9 normal matrix AtA; no general SVD needed at this size.
 inline void min_eigenvector9(double a[9][9], double v_out[9])
 {
     double v[9][9] = {};
@@ -96,6 +99,7 @@ inline void min_eigenvector9(double a[9][9], double v_out[9])
     for (int i = 0; i < 9; i++) v_out[i] = v[i][best];
 }
 
+/// Hartley normalisation: centroid to origin, mean distance sqrt(2).
 inline Mat3 normalize_points(const std::vector<Pt> &pts, const std::vector<int> &idx,
                              std::vector<Pt> &out)
 {
@@ -176,6 +180,8 @@ private:
     uint32_t s_;
 };
 
+/// Fixed-seed RANSAC with the adaptive bound (confidence 0.995, <= 2000 iterations), so
+/// tests can assert exact behaviour. Final H is a least-squares DLT refit on the inliers.
 inline bool find_homography_ransac(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
                                    double thresh, Mat3 &H, std::vector<uint8_t> &inliers,
                                    uint32_t seed = 0x5A17u)

@@ -6,6 +6,8 @@
 
 G_BEGIN_DECLS
 
+/// GstAggregator, not GstVideoAggregator: its GstVideoFrame mapping does not
+/// understand NVMM memory.
 #define GST_TYPE_NVMM_COMPOSITOR (gst_nvmm_compositor_get_type())
 G_DECLARE_FINAL_TYPE(GstNvmmCompositor, gst_nvmm_compositor,
                      GST, NVMM_COMPOSITOR, GstAggregator)

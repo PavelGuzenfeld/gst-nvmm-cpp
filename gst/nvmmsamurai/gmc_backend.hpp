@@ -25,6 +25,9 @@ inline GmcBackend gmc_backend_from_string(const char *s) {
     return GmcBackend::Auto;
 }
 
+/// auto walks fft-cuda -> pva -> fft-cpu -> ncc. An unavailable explicit request
+/// degrades to the CPU form of the same algorithm, never to a higher tier or to a
+/// different algorithm, so a CI build always lands on a CPU backend.
 inline GmcBackend resolve_gmc_backend(GmcBackend requested, bool have_cuda_fft,
                                       bool have_pva) {
     switch (requested) {
@@ -40,6 +43,8 @@ inline GmcBackend resolve_gmc_backend(GmcBackend requested, bool have_cuda_fft,
     }
 }
 
+/// FFT paths need a power of two (radix-2); NCC matches them at 128. VPI
+/// HarrisCorners on PVA needs at least 160x120, so pva uses 256.
 inline int gmc_patch_size(GmcBackend resolved) {
     return resolved == GmcBackend::Pva ? 256 : 128;
 }

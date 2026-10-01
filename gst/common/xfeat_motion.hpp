@@ -10,6 +10,8 @@ namespace nvmm { namespace motion {
 
 using nvmm::xfeat::Pt2;
 
+/// `a` is in the anchor (current) frame, `b` in a past reference; `idx` ties a
+/// keypoint across two reference match-sets.
 struct MatchPair { int idx; Pt2 a; Pt2 b; };
 
 struct Box {
@@ -23,6 +25,8 @@ inline Pt2 apply_affine(const double M[6], const Pt2& p) {
     return { M[0]*p.x + M[1]*p.y + M[2], M[3]*p.x + M[4]*p.y + M[5] };
 }
 
+/// Geometric displacement in registration-space pixels, not intensity absdiff:
+/// thresholds from the dense OpenCV path do not carry over.
 inline double residual(const double M[6], const MatchPair& mp) {
     Pt2 q = apply_affine(M, mp.a);
     double dx = q.x - mp.b.x, dy = q.y - mp.b.y;
@@ -36,6 +40,8 @@ struct GmcEstimate {
     bool   ok = false;
 };
 
+/// Skips matches inside `exclude` so the target cannot bias the camera
+/// estimate. `tol` only feeds inlier_frac.
 inline GmcEstimate global_translation_median(const std::vector<MatchPair>& m,
                                              const Box* exclude = nullptr,
                                              double tol = 2.0, int min_n = 8) {
@@ -83,6 +89,8 @@ struct Rng {
     int below(int n) { return n <= 0 ? 0 : (int)(next() % (uint32_t)n); }
 };
 
+/// Affine, not homography: sparse matches rarely support 8 DOF and a distant
+/// background moves close to affinely. `tol` is the inlier threshold in pixels.
 inline AffineFit ransac_affine(const std::vector<MatchPair>& m,
                                const Box* exclude = nullptr,
                                int iters = 200, double tol = 2.0,
@@ -138,6 +146,8 @@ inline RegionResidual region_max_residual(const double M[6],
     return r;
 }
 
+/// Takes each keypoint's min residual over the two references, so a static edge
+/// aligned under either is rejected. Keypoints missing from either set are skipped.
 inline RegionResidual region_max_residual_2ref(const double Ma[6],
                                                const std::vector<MatchPair>& ma,
                                                const double Mb[6],
@@ -191,6 +201,8 @@ struct MotionBlob {
     bool ok = false;
 };
 
+/// Union-find over 8-connected `cell`-sized grid cells, in place of connected
+/// components (NPP has no CCL).
 inline MotionBlob cluster_moving(const std::vector<MatchPair>& m, const double M[6],
                                  double resid_thresh, int min_pts = 4, double cell = 16.0) {
     MotionBlob out;

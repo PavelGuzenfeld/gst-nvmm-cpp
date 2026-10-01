@@ -31,6 +31,8 @@ public:
 
     NvBufSurface* raw() const noexcept { return surface_; }
 
+    /// The caller now owns the surface and must NvBufSurfaceDestroy it; use
+    /// this when wrapping a borrowed surface.
     NvBufSurface* release() noexcept {
         NvBufSurface* s = surface_;
         surface_ = nullptr;

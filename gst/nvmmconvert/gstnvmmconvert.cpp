@@ -41,6 +41,7 @@ gst_nvmm_interpolation_get_type(void)
 {
     static GType type = 0;
     if (g_once_init_enter(&type)) {
+        /// Must match nvmm::Interpolation: the property is cast straight to it.
         static const GEnumValue values[] = {
             {0, "Nearest neighbour", "nearest"},
             {1, "Bilinear", "bilinear"},
@@ -63,6 +64,7 @@ gst_nvmm_compute_mode_get_type(void)
 {
     static GType type = 0;
     if (g_once_init_enter(&type)) {
+        /// Must match nvmm::ComputeMode: the property is cast straight to it.
         static const GEnumValue values[] = {
             {0, "Default (driver picks; VIC on Tegra)", "default"},
             {1, "GPU", "gpu"},
@@ -313,6 +315,7 @@ gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
     return GST_FLOW_OK;
 }
 
+/// Works for our allocator and NVIDIA's, whose mapped data is the NvBufSurface*.
 static NvBufSurface*
 get_nvbuf_surface(GstBuffer* buf)
 {
@@ -345,6 +348,7 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
         return GST_FLOW_ERROR;
     }
 
+    /// Borrowed from the pipeline allocator: release() both after use.
     nvmm::NvmmBuffer src_buf{src_surface};
     nvmm::NvmmBuffer dst_buf{dst_surface};
 
@@ -559,6 +563,7 @@ static void gst_nvmm_convert_init(GstNvmmConvert* self) {
     self->priv->crop_w = 0;
     self->priv->crop_h = 0;
     self->priv->flip = 0;
+    /// 6 and 0 are NvBufSurfTransformInter_Default and NvBufSurfTransformCompute_Default.
     self->priv->interpolation = 6;
     self->priv->compute = 0;
     self->priv->pool = NULL;

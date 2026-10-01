@@ -10,6 +10,8 @@
 
 namespace {
 
+/// Only the owner holds `buffer`; a share has null and reaches the surface
+/// through its parent, which GStreamer keeps alive for the share's lifetime.
 struct GstNvmmMemory {
     GstMemory parent;
     std::unique_ptr<nvmm::NvmmBuffer> buffer;
@@ -38,6 +40,7 @@ static gpointer gst_nvmm_allocator_mem_map(GstMemory* memory, gsize maxsize,
                                              GstMapFlags flags) {
     (void)maxsize;
     (void)flags;
+    /// NVIDIA convention: the mapped data is the NvBufSurface*, not pixels.
     auto* mem = nvmm_owner(memory);
     if (!mem->buffer) return nullptr;
     return mem->buffer->raw();
@@ -47,6 +50,9 @@ static void gst_nvmm_allocator_mem_unmap(GstMemory* memory) {
     (void)memory;
 }
 
+/// READONLY share by reference, so one tee branch cannot mutate what the others
+/// see. offset/size only feed size accounting: zeroing them breaks buffer resize.
+/// No mem_copy override: the core fallback would copy the handle, not pixels.
 static GstMemory* gst_nvmm_allocator_mem_share(GstMemory* memory,
                                                gssize offset, gssize size) {
     GstNvmmMemory* owner = nvmm_owner(memory);
@@ -165,6 +171,8 @@ GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
     auto* mem = new GstNvmmMemory{};
     auto actual_size = static_cast<gsize>((*result).data_size());
 
+    /// Share-capable (no NO_SHARE), so tee fan-out and make_writable reference
+    /// the surface instead of deep-copying it.
     gst_memory_init(GST_MEMORY_CAST(mem),
                     static_cast<GstMemoryFlags>(0),
                     allocator, nullptr, actual_size, 0, 0, actual_size);

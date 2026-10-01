@@ -12,6 +12,8 @@
 namespace nvmm {
 namespace motion {
 
+/// small_motion: FAST + bounded ZNCC search, for near-consecutive frames.
+/// orb: pyramid ORB + Hamming KNN, tolerates rotation and scale at higher cost.
 enum class FeaturePipeline {
     small_motion,
     orb
@@ -19,8 +21,10 @@ enum class FeaturePipeline {
 
 struct DualHomographyParams {
     int    features = 4000;
+    /// Reprojection threshold, pixels.
     double ransac_thresh = 3.0;
     int    min_matches = 20;
+    /// Pixels a reference sample must keep from the reference edge; replaces the warp-mask erode.
     int    valid_margin = 15;
     int    blur = 3;
     int    border = 12;
@@ -28,14 +32,18 @@ struct DualHomographyParams {
     FeaturePipeline pipeline = FeaturePipeline::small_motion;
     int    fast_thresh = 20;
     int    max_corners = 800;
+    /// Max displacement, pixels.
     int    search_radius = 32;
     float  zncc_min = 0.6f;
+    /// The central 60% of H2's consensus must span this fraction of the frame in x or y:
+    /// a compact cluster is usually the independent mover, which H2 must not absorb.
     float  min_plane_extent = 0.15f;
 };
 
 namespace detail {
 
 struct Plane {
+    /// Maps cur to ref.
     Mat3 H;
     bool ok = false;
 };
@@ -48,6 +56,7 @@ inline OrbParams make_orb_params(const DualHomographyParams &p)
     return op;
 }
 
+/// H1 = dominant plane; H2 = plane re-fit on H1's RANSAC outliers (parallax).
 inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
                        const DualHomographyParams &p, int fw, int fh,
                        Plane &pl1, Plane &pl2)
@@ -80,6 +89,9 @@ inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
     }
 }
 
+/// One inverse-warp pass: bilinear sample through H, |diff|, valid only when the source
+/// point keeps `margin` px from the reference edge; invalid samples contribute 0.
+/// False when neither plane is available.
 inline bool plane_pair_residual(img::View<const uint8_t> cur,
                                 img::View<const uint8_t> ref_a, const Plane &pa,
                                 img::View<const uint8_t> ref_b, const Plane &pb,
@@ -89,6 +101,7 @@ inline bool plane_pair_residual(img::View<const uint8_t> cur,
     const int w = cur.width, h = cur.height;
     if (out.width() != w || out.height() != h) out = img::Image<float>(w, h);
 
+    /// At least 1 so the bilinear taps at ix+1 / iy+1 stay in bounds.
     const int mg = std::max(1, margin);
     const double lo = mg, hix = (double)w - 1 - mg, hiy = (double)h - 1 - mg;
     auto sample = [&](img::View<const uint8_t> ref, const Mat3 &H, int x, int y,
@@ -154,6 +167,8 @@ inline void pipeline_matches(img::View<const uint8_t> cur, img::View<const uint8
 
 }
 
+/// Plane+parallax residual: per pixel, what survives both the dominant and the parallax
+/// plane, min over two references. Inputs u8, same size. Empty means no homography fit.
 inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cur,
                                                      img::View<const uint8_t> ref_a,
                                                      img::View<const uint8_t> ref_b,
@@ -162,6 +177,7 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
     std::vector<detail::Corner> cur_corners;
     std::vector<detail::OrbFeature> cur_orb;
     if (p.pipeline == FeaturePipeline::small_motion) {
+        /// Margin 8 leaves patch room for the ZNCC window.
         cur_corners = detail::fast_corners(cur, p.fast_thresh, p.max_corners, 8);
     } else {
         cur_orb = detail::orb_detect(cur, detail::make_orb_params(p));

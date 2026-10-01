@@ -69,6 +69,7 @@ struct _GstNvmmOfa {
     VPIPayload payload;
     VPIImage mv;
     VPIImage prev;
+    /// The ref keeps prev's surface alive and unmodified.
     GstBuffer *prev_buf;
     gboolean configured;
 };
@@ -161,6 +162,7 @@ configure(GstNvmmOfa *self, VPIImage sample)
                          grid, self->width, self->height);
         return FALSE;
     }
+    /// OFA writes the flow; the CPU backend lets it be locked to host for the meta.
     if (vpiImageCreate(mvW, mvH, VPI_IMAGE_FORMAT_2S16_BL,
                        VPI_BACKEND_OFA | VPI_BACKEND_CPU, &self->mv) != VPI_SUCCESS) {
         GST_ERROR_OBJECT(self, "vpiImageCreate(mv) failed");
@@ -326,6 +328,7 @@ gst_nvmm_ofa_init(GstNvmmOfa *self)
     self->prev = nullptr;
     self->prev_buf = nullptr;
     self->configured = FALSE;
+    /// In place, not passthrough, so the buffer is writable for gst_buffer_add_meta.
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
 

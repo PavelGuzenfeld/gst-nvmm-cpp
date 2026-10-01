@@ -9,7 +9,7 @@
 #endif
 
 static gboolean
-nvmm_det_meta_init(GstMeta *meta, gpointer , GstBuffer * )
+nvmm_det_meta_init(GstMeta *meta, gpointer, GstBuffer *)
 {
     auto *m = reinterpret_cast<GstNvmmDetMeta *>(meta);
     m->frame_number = 0;
@@ -22,7 +22,7 @@ nvmm_det_meta_init(GstMeta *meta, gpointer , GstBuffer * )
 }
 
 static void
-nvmm_det_meta_free(GstMeta *meta, GstBuffer * )
+nvmm_det_meta_free(GstMeta *meta, GstBuffer *)
 {
     auto *m = reinterpret_cast<GstNvmmDetMeta *>(meta);
     g_free(m->objects);
@@ -30,6 +30,7 @@ nvmm_det_meta_free(GstMeta *meta, GstBuffer * )
     m->num_objects = 0;
 }
 
+/// `n` must already be clamped to NVMM_META_MAX_OBJECTS.
 static GstNvmmDetMeta *
 nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_width,
                      guint32 infer_height, guint32 flags, guint n,
@@ -55,9 +56,11 @@ nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_widt
 }
 
 static gboolean
-nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * ,
-                        GQuark type, gpointer )
+nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer *,
+                        GQuark type, gpointer)
 {
+    /// Scale/crop would need the boxes re-derived, so only a straight copy
+    /// keeps the meta.
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 
@@ -148,6 +151,7 @@ nvmm_frame_meta_from_nvds(void *batch, guint frame_index,
         d->height = obj->rect_params.height;
         d->class_id = obj->class_id;
         d->confidence = (float)obj->confidence;
+        /// DeepStream marks untracked objects all-Fs; the wire contract uses 0.
         d->tracker_id = (obj->object_id == 0xFFFFFFFFFFFFFFFFULL)
                             ? 0u : (uint64_t)obj->object_id;
         const char *lbl = obj->obj_label;

@@ -8,6 +8,8 @@ extern "C" {
 #include <stdlib.h>
 #include <string.h>
 
+/// Layouts and enum values mirror NVIDIA's nvbufsurface.h (NV12 = 6, RGBA = 19)
+/// so one implementation file builds against either header.
 #define NVBUF_MAX_PLANES 4
 #define STRUCTURE_PADDING 4
 
@@ -110,6 +112,7 @@ typedef enum {
 typedef struct {
     NvBufSurfTransform_Compute compute_mode;
     int32_t gpu_id;
+    /// cudaStream_t in the real header.
     void* cuda_stream;
 } NvBufSurfTransformConfigParams;
 
@@ -348,6 +351,7 @@ static inline int NvBufSurfaceFromFd(int fd, void** surf_ptr) {
     return -1;
 }
 
+/// The Import API exists in real L4T R35.3.1+ (JetPack 5.1.1) and JetPack 6.
 typedef struct NvBufSurfaceMapParams {
     int fd;
     uint32_t layout;

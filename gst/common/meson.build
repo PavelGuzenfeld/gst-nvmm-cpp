@@ -22,6 +22,8 @@ if have_deepstream_meta
   common_deps += [nvds_meta_dep]
 endif
 
+# Shared, not static: a static copy per plugin .so duplicates each meta GType
+# cache, and two plugins registering one meta on different threads deadlock.
 nvmm_common_lib = shared_library('nvmm_common',
   common_sources,
   include_directories : [config_inc, common_inc],

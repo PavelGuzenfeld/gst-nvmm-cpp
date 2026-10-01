@@ -16,6 +16,8 @@ public:
     bool configure(int net_w, int net_h, int frame_w, int frame_h,
                    bool color_rgb, float scale, cudaStream_t stream, std::string &err);
 
+    /// d_input is caller-owned, 3*net_w*net_h floats NCHW. Async on the configured
+    /// stream; the caller syncs after inference.
     bool run(NvBufSurface *src, float *d_input, LetterboxInfo &lb, std::string &err);
 
     bool configured() const { return rgba_ != nullptr; }

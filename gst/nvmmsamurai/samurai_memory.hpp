@@ -14,6 +14,7 @@ constexpr int kTotal = kMask * kTok + kObjTok;
 constexpr float kTdiffMax = kPtr - 1;
 }
 
+/// Exact clone of sam2_utils.get_1d_sine_pe for one scalar.
 inline void get_1d_sine_pe(float pos, int dim, float *out, float temp = 10000.f)
 {
     const int pe_dim = dim / 2;
@@ -25,6 +26,7 @@ inline void get_1d_sine_pe(float pos, int dim, float *out, float temp = 10000.f)
     }
 }
 
+/// cond_maskmem_pos is laid out c*1024+i; obj_ptr_tpos_proj_w is row-major [out,in].
 struct MemConsts {
     const float *cond_maskmem_pos;
     const float *maskmem_tpos_enc;
@@ -32,6 +34,9 @@ struct MemConsts {
     const float *obj_ptr_tpos_proj_b;
 };
 
+/// Rows: 7 maskmem frames (slot 0 = cond, 1..6 oldest..newest), then 16 obj_ptrs as
+/// 4x64 tokens (ptr p, token k -> row 4p+k). pos_list: cond = frame_idx, others
+/// t_diff. Golden-anchored against memattn_real.npz.
 inline void assemble_memory(const float *const *maskmem, const float *const *objptr,
                             const float *pos_list, const MemConsts &c,
                             float *memory, float *memory_pos)

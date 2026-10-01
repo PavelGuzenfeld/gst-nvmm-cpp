@@ -7,6 +7,7 @@ G_BEGIN_DECLS
 typedef struct _GstNvmmTrackMeta {
     GstMeta  meta;
     guint64  frame_number;
+    /// Coordinate space of the boxes.
     guint32  frame_width;
     guint32  frame_height;
 
@@ -14,6 +15,7 @@ typedef struct _GstNvmmTrackMeta {
     guint64  target_id;
 
     float    left, top, width, height;
+    /// SAM object-score logit.
     float    object_score;
 
     float    kf_left, kf_top, kf_width, kf_height;
@@ -30,6 +32,8 @@ const GstMetaInfo *gst_nvmm_track_meta_get_info(void);
 #define gst_buffer_get_nvmm_track_meta(b) \
     ((GstNvmmTrackMeta *)gst_buffer_get_meta((b), GST_NVMM_TRACK_META_API_TYPE))
 
+/// Returns the existing meta when the buffer already has one, so nvmmfusekf
+/// can overwrite the box in place.
 GstNvmmTrackMeta *gst_buffer_add_nvmm_track_meta(GstBuffer *buffer);
 
 G_END_DECLS

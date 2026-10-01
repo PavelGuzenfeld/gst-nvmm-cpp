@@ -11,6 +11,9 @@ struct GmcMaskBox {
     bool overlaps = false;
 };
 
+/// Box in frame px; the patch is an n x n downscale of a sq x sq crop centered in
+/// the frame, and margin 1.25 inflates the box 25%. A non-finite box returns
+/// overlaps=false: it would otherwise reach a double->int cast, which is UB.
 inline GmcMaskBox gmc_map_box_to_patch(double left, double top, double width, double height,
                                        int frame_w, int frame_h, int sq, int patch_n,
                                        double margin = 1.25)
@@ -32,6 +35,8 @@ inline GmcMaskBox gmc_map_box_to_patch(double left, double top, double width, do
     return out;
 }
 
+/// Filling the target with the patch mean in both frames makes its edges correlate
+/// at zero shift instead of adding a spurious peak.
 inline void gmc_mask_box_to_mean(uint8_t *patch, int n, int x0, int y0, int x1, int y1)
 {
     x0 = x0 < 0 ? 0 : x0; y0 = y0 < 0 ? 0 : y0;

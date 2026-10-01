@@ -19,15 +19,20 @@ struct MotionGateParams {
     float lowtex_thresh = 8.f;
     bool  use_dualh = true;
     bool  use_lowtex = true;
+    /// Half-window in pixels for sampling a motion map at a box centre.
     int   sample_radius = 4;
 };
 
+/// Detector boxes confirmed by independent motion: dual_homography for textured
+/// backgrounds, low_texture_motion for sky or water. Motion runs only while searching.
 class MovingObjectGate {
 public:
     explicit MovingObjectGate(const MotionGateParams &p = {}) : p_(p), gate_(p.persist) {}
 
     bool locked() const { return gate_.locked(); }
 
+    /// `cur`, `ref_a`, `ref_b` are single-channel u8 frames: current and two past.
+    /// Returns the index into `boxes` of the confirmed moving detection, or -1.
     int update(const std::vector<track::Detection> &boxes,
                img::View<const uint8_t> cur, img::View<const uint8_t> ref_a,
                img::View<const uint8_t> ref_b)

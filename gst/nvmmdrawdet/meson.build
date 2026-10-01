@@ -8,7 +8,7 @@ gstnvmmdrawdet = library('gstnvmmdrawdet',
   dependencies : [
     nvmm_common_dep, gstnvmmalloc_dep,
     gst_video_dep, gst_base_dep,
-    trt_dep, nvbufsurftransform_dep,
+    trt_dep, nvbufsurftransform_dep,  # trt_dep supplies cudart for EGL interop
   ],
   install : true,
   install_dir : get_option('libdir') / 'gstreamer-1.0',

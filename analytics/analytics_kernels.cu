@@ -10,6 +10,8 @@ namespace nvmm {
 namespace motion {
 
 constexpr int kMaxKernel = 31;
+/// Named-namespace scope on purpose: anonymous-namespace __constant__ symbols fail
+/// cudaMemcpyToSymbol registration ("invalid device symbol") on CUDA 12.
 __constant__ float c_blur[kMaxKernel];
 
 namespace {
@@ -71,6 +73,8 @@ __global__ void k_blur_cols_out(const float *src, float *dst, long dpitch, int w
     dst[(size_t)y * dpitch + x] = acc;
 }
 
+/// Window clipped to the frame: outside pixels never dilate and never block erosion
+/// (OpenCV's +-inf border).
 __global__ void k_morph_axis(const uint8_t *src, uint8_t *dst, int w, int h,
                              int r, bool horizontal, bool dilate)
 {
@@ -89,6 +93,8 @@ __global__ void k_morph_axis(const uint8_t *src, uint8_t *dst, int w, int h,
     dst[(size_t)y * w + x] = v;
 }
 
+/// Writes packed scratch (dpitch == w, border == 0) when a blur pass follows, else
+/// the pitched output with the border zeroed.
 __global__ void k_masked_min_diff(const uint8_t *cur, long cpitch, const uint8_t *ra,
                                   long apitch, const uint8_t *rb, long bpitch,
                                   const uint8_t *mask, float *out, long dpitch,

@@ -10,6 +10,8 @@ namespace nvmm {
 
 namespace {
 
+/// VIC-native surface-array dst, reached from CUDA via EGL: same reason as
+/// nvmminfer's Preprocessor.
 NvBufSurface *create_rgba(int w, int h, std::string &err) {
     NvBufSurfaceCreateParams p{};
     p.width       = (uint32_t)w;
@@ -65,6 +67,8 @@ bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scal
         return false;
     }
 
+    /// Per-call _Ctx stream instead of nppSetStream: the global NPP stream is
+    /// process-wide and nvmminfer sets it to its own stream.
     NppStatus st = nppGetStreamContext(&npp_ctx_);
     if (st != NPP_SUCCESS) {
         err = "nppGetStreamContext failed: " + std::to_string((int)st);
@@ -84,6 +88,7 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
     const int sw = (int)src->surfaceList[0].width;
     const int sh = (int)src->surfaceList[0].height;
 
+    /// NV12 chroma is 2x2 subsampled; VIC wants even crop coordinates and sizes.
     int x0 = std::max(0, (int)std::floor(left)) & ~1;
     int y0 = std::max(0, (int)std::floor(top)) & ~1;
     int x1 = std::min(sw, (int)std::ceil(left + width));

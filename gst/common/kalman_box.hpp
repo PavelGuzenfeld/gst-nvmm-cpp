@@ -4,6 +4,8 @@
 
 namespace nvmm {
 
+/// Port of SAMURAI's kalman_filter.py (the SORT/ByteTrack filter). State is
+/// (cx, cy, w, h, vx, vy, vw, vh); boxes are center-form in frame pixels.
 class KalmanBox {
 public:
     using Vec8 = std::array<double, 8>;
@@ -11,13 +13,16 @@ public:
 
     void initiate(double cx, double cy, double w, double h);
 
+    /// `dt` in frames or seconds.
     void predict(double dt);
 
     void update(double cx, double cy, double w, double h);
 
+    /// Squared Mahalanobis distance; gate against chi2inv95[4] = 9.4877.
     double gating_distance(double cx, double cy, double w, double h) const;
 
     bool   initiated() const { return initiated_; }
+    /// Camera-motion compensation: the target moved with the camera this frame.
     void   shift(double dx, double dy) { mean_[0] += dx; mean_[1] += dy; }
     void   box(double &cx, double &cy, double &w, double &h) const {
         cx = mean_[0]; cy = mean_[1]; w = mean_[2]; h = mean_[3];

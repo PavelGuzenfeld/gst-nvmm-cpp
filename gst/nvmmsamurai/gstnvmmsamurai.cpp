@@ -153,6 +153,8 @@ static gboolean gst_nvmm_samurai_stop(GstBaseTransform *bt)
     return TRUE;
 }
 
+/// Maps infer space to surface px. seed-prefer-center takes the det nearest the
+/// frame center over a higher-confidence background false positive.
 static gboolean best_seed_box(GstNvmmSamurai *self, GstBuffer *buf, NvBufSurface *surf,
                               nvmm::TrackBox *out)
 {
@@ -184,6 +186,8 @@ static gboolean best_seed_box(GstNvmmSamurai *self, GstBuffer *buf, NvBufSurface
     return TRUE;
 }
 
+/// nvmmfusekf sends a CUSTOM_UPSTREAM "nvmm-reseed" box in surface coords on track
+/// loss. It is applied on the next frame, where the surface is available.
 static gboolean gst_nvmm_samurai_src_event(GstBaseTransform *bt, GstEvent *ev)
 {
     auto *self = GST_NVMM_SAMURAI(bt);

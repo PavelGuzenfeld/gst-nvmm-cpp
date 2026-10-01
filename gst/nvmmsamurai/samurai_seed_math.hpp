@@ -10,6 +10,7 @@ struct MaskBox {
     bool valid = false;
 };
 
+/// torch interpolate with align_corners=False: src = (dst+0.5)*scale - 0.5, edge-clamped.
 inline std::vector<float> bilinear_upsample(const float *src, int hi, int wi,
                                             int ho, int wo)
 {
@@ -34,6 +35,7 @@ inline std::vector<float> bilinear_upsample(const float *src, int hi, int wi,
     return dst;
 }
 
+/// Matches sam2_base BoundingBox: w = xmax - xmin, h = ymax - ymin.
 inline MaskBox mask_to_box(const float *mask, int h, int w, float thresh = 0.f)
 {
     int xmin = w, ymin = h, xmax = -1, ymax = -1;
@@ -53,6 +55,7 @@ inline MaskBox mask_to_box(const float *mask, int h, int w, float thresh = 0.f)
     return b;
 }
 
+/// SAM2 MLP: ReLU between layers, none after the last. Weights row-major [out,in].
 inline std::vector<float> mlp3_relu(const float *x, int dim,
                                     const float *w0, const float *b0,
                                     const float *w1, const float *b1,

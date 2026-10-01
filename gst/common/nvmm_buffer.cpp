@@ -116,6 +116,8 @@ Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
                          "NvBufSurfaceCreate returned " + std::to_string(ret)};
     }
 
+    /// NvBufSurfaceCreate leaves numFilled at 0, and Map/Transform reject
+    /// index 0 until it is set.
     surface->numFilled = surface->batchSize;
 
     return NvmmBuffer{surface};
@@ -196,6 +198,7 @@ Result<int> NvmmBuffer::export_fd() const {
         return NvmmError{ErrorCode::kInvalidParam, "null surface"};
     }
 
+    /// For SURFACE_ARRAY/HANDLE memory, bufferDesc is the DMA-buf fd.
     int fd = static_cast<int>(surface_->surfaceList[0].bufferDesc);
     if (fd < 0) {
         return NvmmError{ErrorCode::kDmaBufFailed, "no DMA-buf fd available"};

@@ -21,12 +21,16 @@ struct XfeatFrame {
     bool empty() const { return kpts.empty(); }
 };
 
+/// Stretches the full frame to 480x256 with no letterbox: bars give false
+/// zero-displacement matches that bias GMC. Keypoints come back in 480x270
+/// registration space (y scaled by 270/256).
 class XfeatMatcher {
 public:
     static constexpr int    kXH = 256, kXW = 480;
     static constexpr int    kXHC = 32, kXWC = 60;
     static constexpr double kRW = 480.0, kRH = 270.0;
     static constexpr double kRegScale = 0.25;
+    /// Bounds LightGlue's O(N0*N1) cost and its kTopK^2-float sim buffer (4 MB).
     static constexpr int    kTopK = 1024;
 
     XfeatMatcher() = default;
@@ -38,6 +42,7 @@ public:
 
     bool extract(NvBufSurface* src, XfeatFrame& out, std::string& err);
 
+    /// Too few keypoints returns true with `out` empty: no verdict, not an error.
     bool match(const XfeatFrame& a, const XfeatFrame& b,
                std::vector<nvmm::motion::MatchPair>& out, std::string& err);
 

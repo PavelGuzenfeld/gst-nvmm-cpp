@@ -37,6 +37,7 @@ static GstStaticPadTemplate src_tmpl = GST_STATIC_PAD_TEMPLATE(
                     "width=(int)[32,8192], height=(int)[32,8192], "
                     "framerate=(fraction)[0/1, 240/1]"));
 
+/// Returns GST_FLOW_OK with no metadata too: a passthrough must not stall.
 static GstFlowReturn
 gst_nvmm_detlog_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {

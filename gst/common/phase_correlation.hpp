@@ -11,6 +11,8 @@ namespace nvmm {
 
 struct PhaseShift { double x = 0.0, y = 0.0, response = 0.0; };
 
+/// `surf` is not yet fft-shifted and is shifted in place; even dims only.
+/// Shared with the VPI FFT GMC backend so both refine the peak identically.
 inline PhaseShift refine_correlation_peak(std::vector<double> &surf, int w, int h) {
     const int hw = w / 2, hh = h / 2;
     for (int y = 0; y < hh; y++)
@@ -39,10 +41,14 @@ inline PhaseShift refine_correlation_peak(std::vector<double> &surf, int w, int 
     return out;
 }
 
+/// Matches cv::phaseCorrelate with cv::createHanningWindow. Power-of-two dims
+/// only, so OpenCV pads to the same grid and the parity test is exact.
 class PhaseCorrelator {
 public:
     struct Shift { double x = 0.0, y = 0.0, response = 0.0; };
 
+    /// Aborts unconditionally on non-pow2 dims: radix-2 FFT gives silently wrong
+    /// shifts otherwise, and this code base uses no exceptions.
     PhaseCorrelator(int w, int h) : w_(w), h_(h) {
         if (w_ <= 1 || h_ <= 1 || (w_ & (w_ - 1)) != 0 || (h_ & (h_ - 1)) != 0) {
             std::fprintf(stderr, "PhaseCorrelator: w=%d h=%d must be powers of two > 1\n", w_, h_);
@@ -62,6 +68,7 @@ public:
     int width()  const { return w_; }
     int height() const { return h_; }
 
+    /// a(x) ~= b(x + shift), same sign as cv::phaseCorrelate(a, b, hann).
     Shift correlate(const float *prev, const float *curr) {
         for (int y = 0; y < h_; y++)
             for (int x = 0; x < w_; x++) {
@@ -88,6 +95,7 @@ private:
     using cd = std::complex<double>;
     static constexpr double kPi = 3.14159265358979323846;
 
+    /// Inverse is unscaled, like cv::idft without DFT_SCALE.
     static void fft1d(cd *a, int n, bool inverse) {
         for (int i = 1, j = 0; i < n; i++) {
             int bit = n >> 1;

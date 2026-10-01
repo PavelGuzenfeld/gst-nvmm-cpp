@@ -39,6 +39,7 @@ gst_nvmm_flowstats_render(GstBaseSink *sink, GstBuffer *buf)
     if (!gst_memory_map(m->mv, &map, GST_MAP_READ))
         return GST_FLOW_OK;
 
+    /// Tightly packed mv_width*mv_height cells of int16 (dx, dy) in S10.5 fixed point.
     const int16_t *v = reinterpret_cast<const int16_t *>(map.data);
     const gsize cells = (gsize)m->mv_width * m->mv_height;
     double sum = 0.0, maxmag = 0.0;

@@ -8,13 +8,18 @@
 
 namespace nvmm {
 
+/// Surface (full-res) px; src_index points back into GstNvmmDetMeta objects[].
 struct GateDet {
     float cx, cy, w, h, conf;
     int   src_index;
 };
 
+/// Surface coords; resid is the two-reference minimum residual in registration-space px.
 struct MotionSample { float x, y, resid; };
 
+/// Distances are surface px. rmin and motion_rmin are geometric displacement in
+/// registration space, not intensity absdiff. borderfrac rejects near the full
+/// frame edge and is not letterbox-aware.
 struct GateCfg {
     int   dlt      = 5;
     float rmin     = 12.f;
@@ -31,10 +36,14 @@ struct GateCfg {
     int   motion_minpts  = 4;
     float motion_cell    = 48.f;
 
+    /// Unused since the sky-diff path was dropped; kept for property compatibility.
     float ds = 2.f, rminsky = 8.f, confsky = 0.55f, cleanconf = 0.6f, skydom = 0.95f;
     int   cleanmax = 2; float motion_minarea = 4.f; int stride = 3;
 };
 
+/// Keeps only the YOLO det that moves independently of the background transform.
+/// A track must clear the gate for ksup consecutive frames; the gate then latches
+/// and only associates dets to the lock until it is lost.
 class DetGate {
 public:
     explicit DetGate(const GateCfg &c) : cfg_(c) {
@@ -50,6 +59,8 @@ public:
     static constexpr int kMotionSentinel = -100;
     static constexpr int kSynthConfirm   = -2;
 
+    /// Returns the confirmed det's src_index, -1 for none, or kSynthConfirm for a
+    /// confirmed motion blob.
     int update(const std::vector<MotionSample> &motion, const std::vector<GateDet> &dets,
                int frameW, int frameH)
     {
@@ -177,6 +188,8 @@ private:
         return best;
     }
 
+    /// Greedy union-find over 8-neighbour motion_cell cells on the sparse points;
+    /// replaces connectedComponentsWithStats, which NPP lacks.
     bool motion_blob(const std::vector<MotionSample> &m, GateDet &out) {
         std::vector<int> ix;
         for (int i = 0; i < (int)m.size(); ++i) if (m[i].resid >= cfg_.motion_rmin) ix.push_back(i);

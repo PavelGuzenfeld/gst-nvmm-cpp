@@ -128,6 +128,7 @@ surface_of(GstBuffer *buf)
 
 static gboolean gst_nvmm_secondary_infer_stop(GstBaseTransform *bt);
 
+/// Empty or NULL returns FALSE with ok=TRUE; malformed returns FALSE with ok=FALSE.
 static gboolean
 parse_triplet(const gchar *str, float out[3], gboolean *ok)
 {
@@ -249,6 +250,7 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
+    /// A flat score vector: [1,C], [1,C,1,1] or [C]. A detection head or multi-batch is rejected.
     bool head_ok = false;
     switch (out->dims.nbDims) {
         case 1: head_ok = true; break;
@@ -387,6 +389,8 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         const NvmmDetObject &o = m->objects[i];
         NvmmClassEntry &e = entries[i];
 
+        /// lookup() marks the track seen, so skipped or failed inference cannot expire it.
+        /// Untracked objects (tracker_id 0) cannot be cached and re-infer every frame.
         const nvmm::ClassResult *cached =
             o.tracker_id ? self->cache->lookup(o.tracker_id, fno) : nullptr;
         if (cached) {

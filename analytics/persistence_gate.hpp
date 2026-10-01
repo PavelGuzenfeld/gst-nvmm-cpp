@@ -14,12 +14,16 @@ struct Detection {
 };
 
 struct PersistenceParams {
+    /// Max centre distance in pixels to associate a detection with a track.
     float assoc_dist = 45.f;
     int   min_age = 6;
+    /// Consecutive supported frames, on top of min_age.
     int   min_support = 4;
     int   max_lost = 2;
 };
 
+/// Track-before-detect: confirm a detection that persists with caller-supplied support
+/// for consecutive frames, then latch onto it until it is lost.
 class PersistenceGate {
 public:
     explicit PersistenceGate(const PersistenceParams &p = {}) : p_(p) {}
@@ -28,6 +32,7 @@ public:
     float lock_x() const { return lx_; }
     float lock_y() const { return ly_; }
 
+    /// Index into `dets` of the confirmed or locked target, or -1.
     int update(const std::vector<Detection> &dets)
     {
         if (locked_) return update_locked(dets);

@@ -13,13 +13,16 @@ namespace motion {
 struct LowTextureMotionParams {
     float grad_thresh = 14.f;
     int   grad_blur = 7;
+    /// Closing kernel; fills the hole the object cuts in the low-texture mask.
     int   close_k = 15;
+    /// Odd; 0 disables.
     int   diff_blur = 3;
     int   border = 12;
 };
 
 namespace detail {
 
+/// 3x3 Sobel, REFLECT_101 border.
 inline void sobel_magnitude(img::View<const uint8_t> src, img::View<float> mag)
 {
     const int w = src.width, h = src.height;
@@ -46,6 +49,7 @@ inline void sobel_magnitude(img::View<const uint8_t> src, img::View<float> mag)
     }
 }
 
+/// Integral image, (w+1)*(h+1) row-major, first row and column zero.
 class BoxSum {
 public:
     BoxSum(int w, int h) : w_(w), h_(h), integ_((size_t)(w + 1) * (h + 1), 0u) {}
@@ -62,6 +66,7 @@ public:
         }
     }
 
+    /// Sum over [x-r, x+r] x [y-r, y+r] clipped to the image; `area` is the clipped area.
     uint32_t window(int x, int y, int r, int &area) const {
         const int x0 = std::max(0, x - r), y0 = std::max(0, y - r);
         const int x1 = std::min(w_ - 1, x + r), y1 = std::min(h_ - 1, y + r);
@@ -77,6 +82,8 @@ private:
     std::vector<uint32_t> integ_;
 };
 
+/// Close via box sums on integral images: exact on a binary mask, O(1) per pixel,
+/// border like OpenCV's +-inf morphology border. Returns 0/1 per pixel.
 inline img::Image<uint8_t> low_texture_mask(img::View<const uint8_t> cur,
                                             const LowTextureMotionParams &p)
 {
@@ -113,6 +120,8 @@ inline img::Image<uint8_t> low_texture_mask(img::View<const uint8_t> cur,
 
 }
 
+/// Frame diff kept to low-gradient regions (sky, water), min-combined over two
+/// references so a transient against one of them drops out. Inputs u8, same size.
 inline img::Image<float> low_texture_motion(img::View<const uint8_t> cur,
                                             img::View<const uint8_t> ref_a,
                                             img::View<const uint8_t> ref_b,

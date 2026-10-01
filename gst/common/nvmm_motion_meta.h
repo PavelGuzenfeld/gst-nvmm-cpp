@@ -5,6 +5,7 @@
 
 G_BEGIN_DECLS
 
+/// Entry i belongs to GstNvmmDetMeta object i on the same buffer.
 typedef struct _GstNvmmMotionMeta {
     GstMeta            meta;
     guint32            num_objects;

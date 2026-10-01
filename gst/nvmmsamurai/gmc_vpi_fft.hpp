@@ -23,6 +23,7 @@ public:
     GmcVpiFft(const GmcVpiFft &) = delete;
     GmcVpiFft &operator=(const GmcVpiFft &) = delete;
 
+    /// Creates a CUDA FFT payload: VPI FFT dlopens cuFFT at run time.
     static bool available() {
         VPIStream s = nullptr;
         if (vpiStreamCreate(VPI_BACKEND_CUDA, &s) != VPI_SUCCESS) return false;
@@ -62,6 +63,8 @@ public:
         return true;
     }
 
+    /// prev/curr are host uint8 n*n. Same sign as PhaseCorrelator::correlate: content
+    /// motion prev -> curr. Any CUDA/VPI failure returns {}, gated out by the caller.
     PhaseShift estimate(const uint8_t *prev, const uint8_t *curr) {
         const int n = n_;
         const size_t n2 = (size_t)n * n;
@@ -79,6 +82,8 @@ public:
             vpiStreamSync(stream_) != VPI_SUCCESS) return {};
         if (cudaMemcpyAsync(h_corr_.data(), d_corr_, n2 * sizeof(float2), cudaMemcpyDeviceToHost, cs_) != cudaSuccess ||
             cudaStreamSynchronize(cs_) != cudaSuccess) return {};
+        /// VPI's inverse FFT is 1/N-scaled and PhaseCorrelator's is not; rescale by N so
+        /// one confidence gate fits both FFT backends. The shift is scale-invariant.
         const double nrm = (double)n2;
         for (size_t i = 0; i < n2; i++) real_[i] = (double)h_corr_[2 * i] * nrm;
         return refine_correlation_peak(real_, n, n);
@@ -112,6 +117,8 @@ private:
     }
 
     int n_ = 0;
+    /// Stream-scoped syncs only: a device-wide sync would stall the concurrent SAM2.1
+    /// TRT stream.
     cudaStream_t cs_ = nullptr;
     VPIStream stream_ = nullptr;
     VPIPayload fft_ = nullptr, ifft_ = nullptr;

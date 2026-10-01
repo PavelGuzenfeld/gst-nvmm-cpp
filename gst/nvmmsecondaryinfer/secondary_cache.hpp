@@ -26,6 +26,7 @@ public:
 
     void store(uint64_t tracker_id, const ClassResult& result, uint64_t frame_no);
 
+    /// Marks the track seen, so expiry follows detector visibility, not inference cadence.
     const ClassResult* lookup(uint64_t tracker_id, uint64_t frame_no);
 
     void expire(uint64_t frame_no);

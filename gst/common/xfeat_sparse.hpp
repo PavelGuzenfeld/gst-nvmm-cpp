@@ -7,6 +7,8 @@
 
 namespace nvmm { namespace xfeat {
 
+/// Port of XFeat xfeat.py. `kpts` is (65, Hc, Wc) channel-major: softmax over
+/// 65 channels, keep 64, pixel-shuffle to (Hc*8, Wc*8).
 inline std::vector<float> get_kpts_heatmap(const float* kpts, int Hc, int Wc,
                                            float softmax_temp = 1.0f) {
     const int C = 65;
@@ -32,6 +34,7 @@ inline std::vector<float> get_kpts_heatmap(const float* kpts, int Hc, int Wc,
     return out;
 }
 
+/// nms() returns (x, y) in raster order, like torch nonzero().flip(-1).
 struct KptI { int x, y; };
 inline std::vector<KptI> nms(const float* x, int H, int W,
                              float threshold = 0.05f, int kernel = 5) {
@@ -55,6 +58,7 @@ inline std::vector<KptI> nms(const float* x, int H, int W,
     return kpts;
 }
 
+/// torch grid_sample with align_corners=False and zero padding.
 inline void gs_coord(int px, int py, int Ht, int Wt, int normH, int normW,
                      double& ix, double& iy) {
     ix = (double)px * Wt / (normW - 1) - 0.5;
@@ -121,6 +125,8 @@ inline void grid_sample_bicubic(const float* t, int C, int Ht, int Wt,
     }
 }
 
+/// Sorted stably by descending score; torch.argsort is not stable, but float
+/// ties are rare.
 struct ScoredKpt { int x, y; float score; };
 inline std::vector<ScoredKpt> score_and_sort(
         const std::vector<KptI>& kpts,
