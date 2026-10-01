@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
@@ -18,11 +20,20 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "test_harness.h"
 
 namespace {
+
+/// libnvbufsurftransform's fini deletes pthread key 0, which it never created. Under TSan key 0 is
+/// the thread-finalize key, so the fini's join of its own worker spins forever (#99).
+#if defined(__SANITIZE_THREAD__) && HAVE_NVBUFSURFTRANSFORM
+constexpr bool exit_hangs_in_nvbufsurftransform_fini = true;
+#else
+constexpr bool exit_hangs_in_nvbufsurftransform_fini = false;
+#endif
 
 /// Declared first: within one TU, static objects initialize in declaration order.
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
@@ -456,5 +467,10 @@ TEST(class_meta_copy_owns_its_entries) {
 
 int main() {
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    const int rc = tests_failed > 0 ? 1 : 0;
+    if (exit_hangs_in_nvbufsurftransform_fini) {
+        std::fflush(nullptr);
+        std::_Exit(rc);
+    }
+    return rc;
 }
