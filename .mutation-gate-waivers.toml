@@ -1,0 +1,23 @@
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 233
+column = 16
+old = """x0 * x0 + y0 * y0"""
+new = """x0 * x0 - y0 * y0"""
+reason = "Equivalent for the fixed seed 0xB51EF: no first-end draw ever lands outside the radius-15 disc, so this side of the rejection never fires. Rebuild-and-diff of all 256 pairs is bit-identical to the original; the second-end check, whose mutants are killed, does all the rejecting."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 233
+column = 16
+old = """x0 * x0"""
+new = """x0 / x0"""
+reason = "Equivalent for the fixed seed 0xB51EF: no first-end draw ever lands outside the radius-15 disc, so this side of the rejection never fires. Rebuild-and-diff of all 256 pairs is bit-identical to the original."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 233
+column = 26
+old = """y0 * y0"""
+new = """y0 / y0"""
+reason = "Equivalent for the fixed seed 0xB51EF: no first-end draw ever lands outside the radius-15 disc, so this side of the rejection never fires. Rebuild-and-diff of all 256 pairs is bit-identical to the original."

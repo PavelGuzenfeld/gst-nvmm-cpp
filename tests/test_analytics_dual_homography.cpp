@@ -112,6 +112,73 @@ TEST(textureless_input_returns_empty) {
     ASSERT_TRUE(res.empty());
 }
 
+constexpr int lone_corner_w = 64, lone_corner_h = 48, patch_radius = 15;
+
+std::vector<nvmm::motion::detail::OrbFeature> orb_on_lone_bright_pixel(int x, int y) {
+    Image<uint8_t> im(lone_corner_w, lone_corner_h, 0);
+    im.at(y, x) = 255;
+    nvmm::motion::detail::OrbParams p;
+    p.nlevels = 1;
+    return nvmm::motion::detail::orb_detect(im.view(), p);
+}
+
+void assert_single_keypoint_at(int x, int y) {
+    const std::vector<nvmm::motion::detail::OrbFeature> f = orb_on_lone_bright_pixel(x, y);
+    ASSERT_EQ(f.size(), (size_t)1);
+    ASSERT_EQ(f[0].x, (float)x);
+    ASSERT_EQ(f[0].y, (float)y);
+}
+
+TEST(orb_keeps_corner_exactly_patch_radius_from_left_edge) {
+    assert_single_keypoint_at(patch_radius, lone_corner_h / 2);
+}
+
+TEST(orb_keeps_corner_exactly_patch_radius_from_right_edge) {
+    assert_single_keypoint_at(lone_corner_w - 1 - patch_radius, lone_corner_h / 2);
+}
+
+TEST(orb_keeps_corner_exactly_patch_radius_from_top_edge) {
+    assert_single_keypoint_at(lone_corner_w / 2, patch_radius);
+}
+
+TEST(orb_keeps_corner_exactly_patch_radius_from_bottom_edge) {
+    assert_single_keypoint_at(lone_corner_w / 2, lone_corner_h - 1 - patch_radius);
+}
+
+TEST(orb_drops_corner_whose_patch_crosses_left_edge) {
+    ASSERT_TRUE(orb_on_lone_bright_pixel(patch_radius - 1, lone_corner_h / 2).empty());
+}
+
+TEST(orb_drops_corner_whose_patch_crosses_right_edge) {
+    ASSERT_TRUE(orb_on_lone_bright_pixel(lone_corner_w - patch_radius, lone_corner_h / 2).empty());
+}
+
+TEST(orb_drops_corner_whose_patch_crosses_top_edge) {
+    ASSERT_TRUE(orb_on_lone_bright_pixel(lone_corner_w / 2, patch_radius - 1).empty());
+}
+
+TEST(orb_drops_corner_whose_patch_crosses_bottom_edge) {
+    ASSERT_TRUE(orb_on_lone_bright_pixel(lone_corner_w / 2, lone_corner_h - patch_radius).empty());
+}
+
+int brief_pair_end_max_squared_radius(int end) {
+    const int8_t *pat = nvmm::motion::detail::brief_pattern();
+    int max_r2 = 0;
+    for (int bit = 0; bit < 256; bit++) {
+        const int8_t *q = pat + bit * 4 + end * 2;
+        max_r2 = std::max(max_r2, q[0] * q[0] + q[1] * q[1]);
+    }
+    return max_r2;
+}
+
+TEST(brief_pair_first_ends_reach_exactly_the_patch_radius) {
+    ASSERT_EQ(brief_pair_end_max_squared_radius(0), patch_radius * patch_radius);
+}
+
+TEST(brief_pair_second_ends_reach_exactly_the_patch_radius) {
+    ASSERT_EQ(brief_pair_end_max_squared_radius(1), patch_radius * patch_radius);
+}
+
 }  // namespace
 
 int main() {
