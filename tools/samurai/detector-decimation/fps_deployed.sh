@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Throughput at the DEPLOYED pipeline shape -- the denominator the sweep was missing.
-#
-# interval_sweep.sh measures the simplified chain. This adds the elements deployment
-# actually runs (seed gate, kf-vel-noise, fusekf teardown) on the SAME clip with the
-# same forced seed, so the two are directly comparable and the gains can be checked
-# for survival against the extra elements.
+# interval_sweep.sh plus the deployed elements (seed gate, kf-vel-noise, fusekf teardown), same
+# clip and seed: checks the sweep's gains survive the full deployed chain.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR DEPLOY_SRC

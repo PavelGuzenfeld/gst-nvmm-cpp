@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Why do frames where yolo_fused AGREES still fall below the IoU floor?"""
+"""Why do frames where yolo_fused agrees still fall below the IoU floor?
+
+Frames invalid in both runs are skipped: with seed-delay they are pre-seed, and IoU 0 there would swamp the stats."""
 import csv
 import statistics as st
 import sys
@@ -29,9 +31,6 @@ def iou(a, c):
 
 
 b, t = rd(sys.argv[1]), rd(sys.argv[2])
-# Skip frames invalid in BOTH runs -- with seed-delay these are the pre-seed frames,
-# which have no box at all. Scoring them gives IoU 0.0 and swamps the statistics
-# (they are not disagreements, they are "tracking has not started").
 common = [f for f in sorted(b)
           if f in t and not (b[f]["valid"] == 0 and t[f]["valid"] == 0)]
 print(f"comparable frames: {len(common)} "

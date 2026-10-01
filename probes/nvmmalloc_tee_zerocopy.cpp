@@ -1,23 +1,13 @@
-// E2E proof that share-capable nvmmalloc keeps tee fan-out + make_writable
-// zero-copy. Run ON the Jetson (real NvBufSurface). Pipeline:
-//
-//   videotestsrc ! nvvidconv ! NVMM NV12 ! nvmmconvert ! tee
-//        ├─ queue ! fakesink   (branch A: simulates per-branch meta attach)
-//        └─ queue ! fakesink   (branch B: read-only consumer)
-//
-// nvmmconvert emits buffers from OUR allocator; tee refs the same buffer into
-// both branches. Branch A's probe does gst_buffer_make_writable (what attaching
-// a per-branch GstMeta triggers). With share-capable memory the surface pointer
-// is unchanged (shallow copy, same NvBufSurface); with the old NO_SHARE flag it
-// would deep-copy to a different surface (and, for opaque NVMM, garbage).
-//
-// The NvBufSurface* is read via the standard NVMM convention: mapped data ptr.
+/// On-Jetson E2E proof that share-capable nvmmalloc keeps tee fan-out + make_writable zero-copy:
+/// the old NO_SHARE flag deep-copied to a different (for opaque NVMM, garbage) surface.
+/// nvmmconvert forces NV12->RGBA so its output comes from our pool, not a passthrough.
 #include <gst/gst.h>
 
 #include <cstdio>
 
 static int frames = 0, zero_copy = 0, deep_copied = 0;
 
+/// NVMM convention: the mapped data pointer is the NvBufSurface*.
 static void* surface_of(GstBuffer* buf) {
     GstMemory* m = gst_buffer_peek_memory(buf, 0);
     GstMapInfo mi;
@@ -27,8 +17,7 @@ static void* surface_of(GstBuffer* buf) {
     return p;
 }
 
-// Branch A: make the buffer writable (as a per-branch meta attach would) and
-// check the surface survives unchanged — i.e. the copy was shallow (shared).
+/// make_writable is what a per-branch GstMeta attach triggers; zero-copy means the surface survives.
 static GstPadProbeReturn branch_a(GstPad*, GstPadProbeInfo* info, gpointer) {
     GstBuffer* buf = GST_PAD_PROBE_INFO_BUFFER(info);
     if (frames == 0) {
@@ -56,8 +45,6 @@ int main(int argc, char** argv) {
     GstElement* pipe = gst_parse_launch(
         "videotestsrc num-buffers=8 ! video/x-raw,width=640,height=480,format=I420 "
         "! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 "
-        // Force a real transform (NV12->RGBA) so nvmmconvert produces output
-        // from OUR pool, rather than passing the upstream buffer through.
         "! nvmmconvert ! video/x-raw(memory:NVMM),format=RGBA,width=640,height=480 "
         "! tee name=t "
         "t. ! queue ! fakesink name=a sync=false "

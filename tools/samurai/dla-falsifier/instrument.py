@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Insert SAMURAI_TIMING probes into samurai_tracker.cpp (env-gated, throwaway).
-
-Measures, per full-inference frame:
-  enc         = run_encoder() wall (image_encoder + its sync)
-  prebox      = track_frame steps 1-7 wall (up to box-ready)
-  tail        = track_frame steps 8-9 wall (deferrable by Phase B)
-  memenc_gpu  = cudaEvent-timed memory_encoder infer (GPU compute in the tail)
-  tail_bubble = tail - memenc_gpu  (GPU-idle in the tail = cleanly hideable)
-Prints one line/frame to stderr. Idempotent-guarded by a marker.
-"""
+"""Insert env-gated SAMURAI_TIMING probes into samurai_tracker.cpp; throwaway, idempotent via a marker.
+Per frame: enc, prebox (steps 1-7), tail (8-9), cudaEvent-timed memenc_gpu, tail_bubble = tail - memenc_gpu.
+The memenc anchor includes k_sigmoid_scale so it skips the identical seed-path block."""
 import sys, re
 
 p = sys.argv[1]
@@ -43,9 +36,6 @@ s = rep("    out.target_id = 1;\n",
         "    out.target_id = 1;\n"
         "    if (_tmg) _tbox = std::chrono::steady_clock::now();\n", s)
 
-# E) event-wrap memory_encoder infer + capture GPU time after the existing sync.
-#    Anchor on the track_frame-only k_sigmoid_scale + #endif to avoid matching
-#    the identical seed-path memenc block (which uses k_threshold_scale).
 s = rep(
     "    k_sigmoid_scale(d_high, d_mem_mask, HI * HI, 20.f, -10.f, stream);\n"
     "#endif\n"

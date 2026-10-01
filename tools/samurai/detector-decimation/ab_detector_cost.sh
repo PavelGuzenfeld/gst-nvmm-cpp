@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# Bound the convertible GPU headroom held by the per-frame detector.
-#
-# Arm A = deployed shape (detector on GPU every frame). Arm B = detector removed.
-# Both arms force the tracker seed, so the TRACKER WORKLOAD IS IDENTICAL and the
-# detector is the only variable. Without the forced seed, arm B never seeds, does no
-# inference at all, and its fps is an artifact rather than a measurement.
-#
-# max-kf=2 is the deployed config (tracker coasts 2 of 3 frames); max-kf=0 is full
-# inference every frame, i.e. worst-case GPU contention. The A->B delta bounds what
-# decimation could ever convert into throughput.
-#
-# Runs on the HOST: the plugins load natively and the host has python3-gi.
+# Host-side upper bound on what decimation can buy: detector present (A) vs removed (B).
+# The seed is forced so tracker work is identical; unseeded, arm B never infers at all.
+# max-kf=2 is the deployed config; max-kf=0 is worst-case GPU contention.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR DEPLOY_SRC

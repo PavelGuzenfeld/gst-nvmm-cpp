@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# Render overlay videos (fused track box + HUD via nvmmdrawdet) for the decimation A/B,
-# so the GT numbers can be eyeballed rather than only read.
-#
-# Two pairs, each baseline vs acquisition-gated N=3:
-#   clip1      -- the clip every fps figure uses; forced seed, so the only variable is
-#               decimation.
-#   seq-F   -- seq-F, the GT sequence the gate did NOT fully protect
-#               (success 0.213 -> 0.137, miss 0.015 -> 0.501, seed latency 16 -> 75).
-#               Auto-seed, matching how the GT runs were scored. This is the one worth
-#               watching: it should show the gate opening on a spurious detection while
-#               the real target is still unacquired.
-#
-# Encoding runs in the container -- the host lacks h264parse (plugins-bad).
+# Overlay videos, baseline vs gated N=3, for clip1 (forced seed) and seq-F, the GT sequence the
+# gate did not protect (auto-seed, as scored). Encoding runs in the container: the host lacks
+# h264parse.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR DEPLOY_SRC EVALSET_ZIP
@@ -22,9 +12,6 @@ IMG=${DOCKER_IMAGE:-gst-nvmm-infer:jp6}
 OUT=$O/overlays
 mkdir -p "$OUT"
 
-# Encode tail, not the fakesink the measuring harnesses use, so this cannot share
-# nvmm_fusekf()'s sink. h264parse lives in plugins-bad, which the host lacks -- hence
-# the container.
 DRAW="nvmmdrawdet draw-track=true draw-det=false thickness=2 ! queue \
 ! nvvidconv ! 'video/x-raw(memory:NVMM),format=NV12' \
 ! nvv4l2h264enc bitrate=8000000 ! h264parse ! qtmux"
@@ -33,7 +20,7 @@ TRK_SEEDED="max-kf=2 seed-roi=910,490,120,120 kf-vel-noise=0.1"
 TRK_AUTO="max-kf=2 seed-prefer-center=true kf-vel-noise=0.1"
 FUSE="nvmmfusekf target-class=0 teardown=true teardown-border-frac=0.05 teardown-border-frames=20"
 
-render() { # <label> <source-chain> <tracker> <interval> <gate>
+render() {
   local L=$1 SRCCHAIN=$2 TRK=$3 IV=$4 GATE=$5
   echo "=== render $L (interval=$IV gate=$GATE) ==="
   docker run --rm --runtime nvidia --network host -v "$SRC":/src -v "$O":/o "$IMG" \

@@ -1,30 +1,14 @@
 #!/usr/bin/env bash
-# Leak guard for a public repo: no private names, site paths or ticket ids in tracked
-# files or commit messages.
-# Two halves, deliberately:
-#
-#   DENYLIST ($FORBIDDEN)  specific names no pattern could infer -- internal org and
-#                          project names, the mission-domain term, dataset id prefixes.
-#                          Always lagging; it only knows leaks we already found.
-#
-#   SHAPES                 fail-closed patterns for the CLASSES of thing that leak --
-#                          absolute home paths, user@host, ticket ids, bare IPv4.
-#                          Catches identifiers nobody has thought of yet, which is the
-#                          case the denylist structurally cannot cover.
-#
+# Public-repo leak guard. $FORBIDDEN only knows leaks already found; SHAPES fail closed on
+# the classes that leak (home paths, user@host, ticket ids, bare IPv4), catching new ones too.
 set -euo pipefail
 
 : "${FORBIDDEN:=rocx|thebandofficial|fire_arrow|mission-control|BZM-[0-9]|bzm-[0-9]|/home/nvidia|antiuav|anti-uav|wg2022|3700000000002|10\.0\.0\.41|drone}"
 
-# Shape patterns. Keep each one narrow enough not to fire on legitimate prose.
-#   /home/<user>/         a real developer's tree, never valid in committed code
-#   user@host / user@ip   ssh targets
-#   ABC-1234              ticket ids (>=2 letters so it misses e.g. "NV12-1")
-#   bare IPv4             excluding 0.0.0.0 and 127.0.0.1, which are legitimate
+# Ticket ids need >= 2 letters so "NV12-1" passes. Keep every shape narrow enough for prose.
 SHAPES='(^|[^A-Za-z0-9_])/home/[a-z][a-z0-9_-]+/|[a-z][a-z0-9_.-]*@([a-z][a-z0-9.-]*\.[a-z]{2,}|([0-9]{1,3}\.){3}[0-9]{1,3})|\b[A-Z]{2,}-[0-9]{2,}\b|\b(([0-9]{1,3})\.){3}[0-9]{1,3}\b'
 
-# Files worth scanning. meson.build has no extension and carries subdir names, which
-# is how a directory named after a private term slips past an extension-only filter.
+# meson.build has no extension yet names subdirs: an extension-only filter misses a leaked dir name.
 list_files() {
   git ls-files \
     | grep -E '\.(cpp|hpp|h|cu|md|sh|py|yml|yaml|txt|build|json|cmake)$|(^|/)meson\.build$' \
@@ -32,12 +16,8 @@ list_files() {
     | grep -v '^tools/check_forbidden\.sh$'   # this file names the terms it forbids
 }
 
-# Known-good matches that the shapes cannot distinguish structurally:
-#   - four-part VERSION numbers are indistinguishable from IPv4 (TensorRT 10.3.0.30),
-#     so exclude them by the product name that precedes them;
-#   - loopback / unspecified / netmask literals are fine to commit;
-#   - dataset and standard names collide with the ticket-id shape (COCO-80, VOC-2012).
-# Keep this list specific. Widening it to silence a real hit defeats the guard.
+# Product names before four-part versions, loopback/netmask literals, and dataset or standard
+# ids (COCO-80) that the shapes cannot tell apart. Widening this to silence a real hit defeats it.
 drop_benign() {
   grep -viE 'version|tensorrt|cuda|jetpack|l4t|cudnn|driver|0\.0\.0\.0|127\.0\.0\.1|255\.255|\b(COCO|IMAGENET|VOC|MNIST|CIFAR|KITTI|NUSCENES|UTF|ISO|RFC|SHA|AES|ITU|IEC)-[0-9]+' || true
 }
@@ -53,9 +33,7 @@ scan_files() {
     fail=1
   fi
 
-  # Case-SENSITIVE, unlike the denylist: the ticket-id shape is uppercase by
-  # convention, and matching case-insensitively turns it into "any word-dash-number",
-  # which fires on rotate-90, batch-30, radius-15 and every similar identifier.
+  # Case-sensitive: case-folded, the uppercase ticket-id shape fires on rotate-90 and batch-30.
   hits=$(list_files | xargs -r grep -nE "$SHAPES" 2>/dev/null | drop_benign)
   if [ -n "$hits" ]; then
     echo "ERROR: forbidden SHAPE (home path, user@host, ticket id, or IP) in tracked files:"
@@ -68,8 +46,7 @@ scan_files() {
   return "$fail"
 }
 
-# Range selection is the part that was silently broken: on push, base_ref is empty and
-# origin/main..HEAD is empty too, so the check passed without reading anything.
+# On push base_ref is empty and origin/main..HEAD is too, which once passed without reading a commit.
 commit_range() {
   if [ -n "${BASE_REF:-}" ]; then
     git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null || true
@@ -78,7 +55,7 @@ commit_range() {
        && git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
     echo "${BEFORE_SHA}..HEAD"
   else
-    echo "HEAD~20..HEAD"   # first push / unknown base: scan a bounded recent window
+    echo "HEAD~20..HEAD"
   fi
 }
 
@@ -98,8 +75,6 @@ scan_messages() {
   echo "OK: no forbidden references in commit messages"
 }
 
-# The guard is only worth anything if it actually rejects. Prove both halves on
-# synthetic input rather than trusting that they would.
 selftest() {
   local tmp rc=0
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' RETURN

@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Golden-reference validation for nvmminfer. Run ON the Jetson.
-# Manual hardware gate — NOT in CI: needs the nvidia runtime, a prebuilt TRT
-# engine and the ~/yolo assets, none of which exist on the GitHub runners.
-#
-# Produces an independent CPU reference (onnxruntime on the SAME onnx the TRT
-# engine was built from) and compares it, box-by-box, to nvmminfer's TRT output
-# on the same image — guarding against silent preprocess/parser regressions.
+# On a Jetson: compare nvmminfer's TRT boxes against onnxruntime on the same onnx, box by box.
+# Manual gate, not CI: it needs the nvidia runtime, a prebuilt engine and the ~/yolo assets.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

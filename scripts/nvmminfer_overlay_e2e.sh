@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end test + demo for the nvmminfer detector and the nvmmdrawdet overlay.
-# Run ON the Jetson (needs /dev/nvmap, TensorRT, CUDA). Produces:
-#   - $OUT/bus_annotated.jpg : a single annotated frame (visual proof)
-#   - $OUT/annotated.mp4      : a short annotated H.264 clip
-# and verifies the detector emits detections and the encoded clip is non-trivial.
+# On a Jetson: nvmminfer must emit detections, then nvmmdrawdet writes
+# $OUT/bus_annotated.jpg and a non-trivial $OUT/annotated.mp4.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

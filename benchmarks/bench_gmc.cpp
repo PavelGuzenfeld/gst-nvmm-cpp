@@ -1,15 +1,6 @@
-/// bench_gmc — GMC (camera-motion) estimator micro-benchmark: compute us/frame and
-/// shift error vs known shifts for each backend, on the same synthetic broadband
-/// patches. Isolates the estimator from the pipeline (no VIC/engines), so the
-/// numbers compare the backends' compute directly. Also doubles as a numeric gate:
-/// exits non-zero if any backend mis-recovers a known shift.
-///
-///   ncc      — CPU zero-mean NCC brute-force (samurai_gmc.hpp)
-///   fft-cpu  — CPU FFT phase correlation (gst/common/phase_correlation.hpp)
-///   fft-cuda — VPI FFT (CUDA) phase correlation (gmc_vpi_fft.hpp)  [NVMM_HAVE_VPI]
-///   pva      — VPI Harris+PyrLK (PVA) (gmc_vpi_pva.hpp)            [NVMM_HAVE_VPI]
-///
-/// CSV to stdout (two sections): timing (matches bench_nvmm convention) + accuracy.
+/// GMC estimator micro-bench, isolated from the pipeline: min us/frame and shift error per
+/// backend on synthetic known-shift patches; exits non-zero if a backend mis-recovers a shift.
+/// pva runs on 256 px (Harris needs >= 160) at 1 px tolerance: a feature median is coarser.
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -69,6 +60,7 @@ Acc accuracy(int n, double tol, Fn fn) {
     return a;
 }
 
+/// Min, not mean: the least-noisy estimate of compute cost.
 template <typename Fn>
 double timing(int n, Fn fn) {
     std::vector<uint8_t> p, c; make_pair(n, 5, -4, p, c);
@@ -81,7 +73,7 @@ double timing(int n, Fn fn) {
         const double us = Us(Clock::now() - t0).count();
         if (us < best) best = us;
     }
-    return best;  // min = least-noisy estimate of compute cost
+    return best;
 }
 }
 
@@ -125,7 +117,6 @@ int main() {
         } else std::fprintf(stderr, "fft-cuda init failed: %s\n", e.c_str());
     } else std::fprintf(stderr, "fft-cuda unavailable on this box\n");
 
-    // --- pva (256; Harris needs >=160) ---
     if (nvmm::GmcVpiPva::available()) {
         nvmm::GmcVpiPva pva; std::string e;
         if (pva.init(256, e)) {
@@ -134,7 +125,7 @@ int main() {
                 dx = s.dx; dy = s.dy; r = s.conf;
             };
             std::printf("pva,256,%.2f\n", timing(256, fn));
-            accs.emplace_back("pva", accuracy(256, 1.0, fn));  // feature-median: coarser
+            accs.emplace_back("pva", accuracy(256, 1.0, fn));
         } else std::fprintf(stderr, "pva init failed: %s\n", e.c_str());
     } else std::fprintf(stderr, "pva unavailable on this box\n");
 #endif

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-# Rasterize a monospace font into a compact 1-bpp bitmap table (ASCII 32..126)
-# for the nvmmdrawdet overlay. Emits a C array: W columns x H rows per glyph,
-# stored row-major as bytes (one byte per row, LSB = leftmost column).
-# Cell chosen so W<=8 (fits one byte per row).
+"""Rasterize DejaVuSansMono 8px, ASCII 32..126, into the 1-bpp C table nvmmdrawdet includes.
+
+One byte per glyph row with LSB = leftmost column, so the cell width must stay <= 8."""
 import sys
 try:
     from PIL import Image, ImageFont, ImageDraw
 except Exception as e:
     print("NO_PIL:%s" % e); sys.exit(2)
 
-CW, CH = 6, 8          # glyph cell: 6 wide (fits a byte), 8 tall
+CW, CH = 6, 8
 candidates = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",

@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
-"""Falsifier step 0 — inspect memory_encoder.onnx op graph + DLA core count.
-
-Prints:
-  - TensorRT DLA core count (confirms 2 on Orin NX 16GB)
-  - op-type histogram of the ONNX
-  - I/O tensor names + shapes
-  - a linearized node list flagging DLA-hostile ops (LayerNorm/GELU/etc.)
-    so we can see where the conv chunks are and where the cuts must land.
-"""
+"""Print TRT's DLA core count (2 on Orin NX 16GB), then an ONNX graph's I/O, op histogram and a
+node walk that flags DLA-hostile ops, which force GPU fallback and mark where cuts must land."""
 import sys
 import onnx
 from collections import Counter, OrderedDict
@@ -42,12 +35,11 @@ print(f"\n[op histogram] {len(g.node)} nodes")
 for op, c in hist.most_common():
     print(f"  {op:24s} {c}")
 
-# DLA-hostile op types (TRT DLA can't take these; they force GPU / cut points).
-HOSTILE = {"LayerNormalization", "InstanceNormalization", "Gelu", "Erf",
+DLA_HOSTILE_OPS = {"LayerNormalization", "InstanceNormalization", "Gelu", "Erf",
            "ReduceMean", "Softmax", "Pow", "Sqrt", "Div", "Sub", "Where",
            "Cast", "Tanh", "Reciprocal"}
 print("\n[linear node walk — * = DLA-hostile / likely cut boundary]")
 for idx, n in enumerate(g.node):
-    flag = " *" if n.op_type in HOSTILE else ""
+    flag = " *" if n.op_type in DLA_HOSTILE_OPS else ""
     if flag or n.op_type in ("Conv", "Resize", "Add", "Mul", "Concat"):
         print(f"  {idx:3d} {n.op_type:22s}{flag}")

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Find the highest-confidence detections per clip WITH frame numbers, so a seed ROI
-# can be visually verified instead of taken from whatever the detector emitted first
-# (which on clip2/clip3 turned out to be false positives on cloud/terrain texture).
+# Top detections per clip with frame numbers, so a seed ROI gets visually verified:
+# the first detections on clip2/clip3 were false positives on cloud and terrain.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC

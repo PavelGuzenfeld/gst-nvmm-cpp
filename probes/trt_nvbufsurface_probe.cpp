@@ -1,38 +1,6 @@
-// Phase-0 go/no-go probe for B5 (nvmminfer — DLA/GPU inference via TensorRT).
-//
-// THE GATE: does an NvBufSurface's device pointer flow into NPP and TensorRT
-// with NO host (CPU) round-trip? "Zero-copy" for inference honestly means
-// no host bounce — NOT binding the camera surface directly (TRT wants NCHW
-// planar float at network res; the surface is RGBA/NV12 at camera res, so a
-// device-side preprocess always produces a new input tensor). This probe
-// proves the *honest* claim end to end:
-//
-//   NvBufSurface.dataPtr  --(NPP, device->device)-->  d_input (NCHW f32)
-//                         --(TRT enqueueV3 on a CUDA stream)-->  d_output
-//   ...with every buffer in device memory and not one cudaMemcpy to host.
-//
-// Steps (each prints [ OK ] / [FAIL]):
-//   1. Alloc a PITCH-LINEAR RGBA surface (the VIC-preprocess *output* layout
-//      that NPP/TRT consume). Confirm CUDA sees dataPtr as DEVICE memory
-//      (cudaPointerGetAttributes) — the core zero-copy proof.
-//   2. Run an NPP op on dataPtr (device->device) — proves NPP reads the surface
-//      pointer in place, no copy.
-//   3. Build a trivial TRT engine at runtime, bind device input/output addresses
-//      (setInputTensorAddress on a pointer WE own), enqueueV3 + sync — proves
-//      TRT binds raw device pointers we control (the model the element relies on).
-//   4. (informational) Alloc a BLOCK-LINEAR surface (the nvv4l2decoder default)
-//      and check whether its dataPtr is CUDA-addressable or needs an EGL bounce.
-//      Documents the input-layout reality that drives the preprocess design.
-//
-// Build (Orin / JP6, TensorRT 10.3, CUDA 12.x):
-//   g++ -std=c++17 -O2 trt_nvbufsurface_probe.cpp -o trt_nvbufsurface_probe \
-//     -I/usr/src/jetson_multimedia_api/include -I/usr/local/cuda/include \
-//     -L/usr/lib/aarch64-linux-gnu/tegra -L/usr/local/cuda/lib64 \
-//     -L/usr/lib/aarch64-linux-gnu \
-//     -lnvbufsurface -lnvinfer -lcudart -lnppc -lnppidei -lnppig
-//
-// Run on the HOST (not a container): the NVMM/NvBufSurface path needs /dev/nvmap.
-
+/// Phase-0 go/no-go for nvmminfer: an NvBufSurface device pointer must reach NPP and TensorRT
+/// with no host round-trip. The D2D copy stands in for the real NPP preprocess: it proves addressing.
+/// Build and run per docs/B5_NVMMINFER_DESIGN.md, on the host (needs /dev/nvmap), not in a container.
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -84,13 +52,14 @@ static NvBufSurface* make_surface(uint32_t w, uint32_t h,
     return surf;
 }
 
+/// A failed attribute query leaves CUDA's sticky error set; clear it so later steps still run.
 static bool is_cuda_device_ptr(const char* what, void* ptr) {
     cudaPointerAttributes attr;
     cudaError_t e = cudaPointerGetAttributes(&attr, ptr);
     if (e != cudaSuccess) {
         printf("  [FAIL] %s: cudaPointerGetAttributes -> %s (likely needs EGL bounce)\n",
                what, cudaGetErrorString(e));
-        cudaGetLastError();  // clear sticky error
+        cudaGetLastError();
         return false;
     }
     bool dev = (attr.type == cudaMemoryTypeDevice || attr.type == cudaMemoryTypeManaged);
@@ -157,9 +126,6 @@ int main() {
                 cudaStream_t stream = nullptr;
                 mem &= cuda_ok("cudaStreamCreate", cudaStreamCreate(&stream));
 
-                // The honest preprocess hop: surface(device) -> d_input(device),
-                // device-to-device, NO host. (A real element does NPP convert/
-                // normalize/planarize here; D2D copy proves the addressing.)
                 mem &= cuda_ok("cudaMemcpy surface->d_input (D2D, no host)",
                                cudaMemcpy(d_in, surf_ptr,
                                           std::min(elems * sizeof(float),

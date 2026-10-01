@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
-"""Compare nvmminfer's detections against the independent ONNX reference.
+"""Compare nvmminfer's GST_LOG detections, e.g. "[0] bus 0.92  box=(20,230 480x520)", to the ONNX reference.
 
-Greedy-matches each reference box to an actual box of the SAME class with the
-best IoU. PASS iff, for all detections at/above --conf: counts match, every
-reference box has a match with IoU >= --iou, and each matched pair's confidence
-agrees within --conf-tol (fp16-TRT vs fp32-ONNX numeric slack).
-
-    golden_compare.py --reference ref.json --actual-log nvmminfer.log
-                      [--conf 0.3] [--iou 0.5] [--conf-tol 0.15]
-
-Exit 0 on PASS, 1 on FAIL.
-"""
+PASS (exit 0) iff counts match and every reference box has a same-class match within --iou and --conf-tol."""
 import argparse
 import json
 import re
 import sys
 
-# nvmminfer GST_LOG line: "  [0] bus 0.92  box=(20,230 480x520)"
-LINE = re.compile(
+DET_LOG_LINE = re.compile(
     r"\[\d+\]\s+(?P<label>.+?)\s+(?P<conf>[01]?\.\d+)\s+box=\("
     r"(?P<x>-?[\d.]+),(?P<y>-?[\d.]+)\s+(?P<w>[\d.]+)x(?P<h>[\d.]+)\)"
 )
@@ -27,7 +17,7 @@ def parse_log(path):
     dets = []
     with open(path) as f:
         for line in f:
-            m = LINE.search(line)
+            m = DET_LOG_LINE.search(line)
             if m:
                 dets.append({
                     "label": m["label"].strip(),
@@ -55,7 +45,8 @@ def main():
     ap.add_argument("--actual-log", required=True)
     ap.add_argument("--conf", type=float, default=0.3)
     ap.add_argument("--iou", type=float, default=0.5)
-    ap.add_argument("--conf-tol", type=float, default=0.15)
+    ap.add_argument("--conf-tol", type=float, default=0.15,
+                    help="fp16-TRT vs fp32-ONNX confidence slack")
     a = ap.parse_args()
 
     with open(a.reference) as f:

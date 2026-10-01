@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
-"""Independent YOLO11/v8 reference detector (onnxruntime + numpy + cv2).
+"""YOLO11/v8 reference on the ONNX the TRT engine was built from, with its own letterbox, decode and NMS.
 
-Runs the *same* ONNX the Jetson TRT engine was built from, but with a wholly
-independent preprocess (letterbox), decode and NMS, so comparing its output to
-nvmminfer's catches silent preprocess/parser bugs in the C++ path. Emits JSON
-detections in ORIGINAL-image pixel space (matching nvmminfer's box=left,top WxH):
-
-    {"image_w":W,"image_h":H,"detections":[
-        {"class_id":5,"label":"bus","conf":0.92,"x":..,"y":..,"w":..,"h":..}, ...]}
-
-Usage:
-    yolo_reference.py --onnx yolo11n.onnx --image bus.jpg [--imgsz 640]
-                      [--conf 0.25] [--iou 0.45]
-"""
+Prints {"image_w", "image_h", "detections": [{class_id, label, conf, x, y, w, h}]} in original-image pixels."""
 import argparse
 import json
 import sys
@@ -21,8 +10,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-# COCO-80 class names (YOLO default training set).
-COCO = [
+COCO_CLASS_NAMES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
     "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
     "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
@@ -92,7 +80,7 @@ def main():
         x, y, w, h = (float(v) for v in xywh[i])
         dets.append({
             "class_id": cid,
-            "label": COCO[cid] if cid < len(COCO) else str(cid),
+            "label": COCO_CLASS_NAMES[cid] if cid < len(COCO_CLASS_NAMES) else str(cid),
             "conf": round(float(confs[i]), 4),
             "x": round(x, 1), "y": round(y, 1),
             "w": round(w, 1), "h": round(h, 1),

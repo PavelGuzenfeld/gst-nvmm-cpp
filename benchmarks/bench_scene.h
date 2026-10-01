@@ -1,7 +1,5 @@
-/// Synthetic frame generator shared by the analytics benchmarks
-/// (bench_analytics.cpp, bench_analytics_cuda.cpp) — deterministic, no
-/// dependencies, so it's equally usable from the OpenCV-backed golden-lane
-/// benchmark and the OpenCV-free CUDA-lane benchmark.
+/// Deterministic synthetic frames with no dependencies, so the OpenCV-backed golden
+/// benchmark and the OpenCV-free CUDA benchmark share one scene.
 #pragma once
 #include <cstdint>
 

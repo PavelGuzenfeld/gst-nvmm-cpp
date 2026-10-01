@@ -1,10 +1,5 @@
-/// Benchmark framework for NVMM operations.
-/// Measures alloc/free, map/unmap, and transform throughput.
-/// On host: uses mock API (measures framework overhead).
-/// On Jetson: measures real VIC hardware performance.
-///
-/// Output: CSV to stdout for easy plotting.
-
+/// NVMM alloc/free, map/unmap and VIC transform timings as CSV on stdout.
+/// Under the mock API this measures framework overhead only; on a Jetson, real VIC.
 #include "nvmm_buffer.hpp"
 #include "nvmm_transform.hpp"
 #include "nvmm_types.hpp"

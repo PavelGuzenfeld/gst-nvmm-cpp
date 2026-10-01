@@ -1,6 +1,5 @@
 #!/bin/bash
-# Run the instrumented nvmmsamurai on a clip, full inference every frame,
-# capture per-frame SAMURAI_TIMING lines to /work/timing.log.
+# Full-inference nvmmsamurai run after instrument.py; per-frame SAMURAI_TIMING lines go to /work/timing.log.
 set -u
 D=$REPO_SRC
 export GST_PLUGIN_PATH=$D/builddir

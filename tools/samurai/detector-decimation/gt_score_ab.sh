@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# Score detector decimation against the labelled evaluation set ground truth: infer-interval=1 vs 3.
-#
-# WHY GT and not parity: decimation removes YOLO as the second measurement to the
-# master KF, so the fused box necessarily differs from an undecimated run. Parity
-# ("is it identical?") is unachievable by construction; the real question is "is it
-# worse?", which only GT answers. Metrics that matter here are success (IoU>0.5 on
-# exist==1 frames), state_acc (official the labelled evaluation set), miss and fp_absent_rate.
-#
-# Runs on the host with the repo-checkout build (the one carrying infer-interval).
-# NOTE: the deployed GT harness ($DEPLOY_HARNESS) inserts nvmmdetgate, which does not
-# exist in this checkout -- so absolute scores here are NOT comparable to
-# results/$DEPLOY_SCORECARD. Both arms are identical apart from infer-interval, so the
-# A/B is internally valid, which is all this needs to be.
+# Ground-truth score for infer-interval 1 vs 3 on the repo build: removing a Kalman measurement
+# makes parity unreachable, so the question is whether the track is worse. No nvmmdetgate here,
+# so absolute scores do not compare to the deployed scorecard; the A/B is internally valid.
 . "$(dirname "$0")/lib.sh"
 
 require_env ASSET_DIR REPO_SRC EVALSET_ZIP SCORER GT_LABEL
@@ -40,9 +30,7 @@ for N in 1 3; do
   echo "=== Phase 2: run infer-interval=$N ==="
   while IFS=$'\t' read -r seq stop; do
     [ -z "$seq" ] && continue
-    # NOTE: no kf-vel-noise= here -- that property exists only in the divergent deploy
-    # checkout, and gst-launch hard-rejects an unknown property, so copying the
-    # deployed harness's arg list verbatim silently produces zero output.
+    # No kf-vel-noise: only the deploy checkout has it, and gst-launch rejects an unknown property.
     export NVMMFUSEKF_CSV="$OUT/$seq.csv"
     # shellcheck disable=SC2086  # the pipeline must word-split into gst-launch args
     run_pipeline "N=$N $seq" "$NVMMFUSEKF_CSV" "$stop" \

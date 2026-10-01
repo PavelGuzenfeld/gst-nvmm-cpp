@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Reference KalmanFilter for KalmanBox (gst/common/kalman_box.hpp): reproduces
-SAMURAI's kalman_filter.py math (SORT/ByteTrack lineage, adapted to w,h in
-place of aspect ratio). Prints the mean/cov_diag values that
-tests/test_kalman_box.cpp checks against — rerun after touching the port.
-"""
+"""Reference for KalmanBox (gst/common/kalman_box.hpp): SAMURAI's kalman_filter.py math (SORT/ByteTrack
+lineage, w,h in place of aspect ratio). Prints the mean/cov_diag values tests/test_kalman_box.cpp checks;
+rerun after touching the port."""
 import numpy as np
 
 STD_WEIGHT_POSITION = 1.0 / 20

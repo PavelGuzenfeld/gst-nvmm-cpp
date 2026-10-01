@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Per-op DLA eligibility for the three graphs the DLA verdict never measured.
-# Closes the generalization it made from memory_encoder ("Hiera is attention ->
-# categorically worse") with actual layer counts.
+# Per-op DLA eligibility for graphs the DLA verdict generalised from memory_encoder without measuring.
 set -u
 T=/usr/src/tensorrt/bin/trtexec
 OUT=/o/dla_inv; mkdir -p $OUT

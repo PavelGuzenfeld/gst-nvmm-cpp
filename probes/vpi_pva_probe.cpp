@@ -1,23 +1,6 @@
-// Phase-0 go/no-go probe for B4 (nvmmcv — PVA vision ops via VPI).
-//
-// VERDICT (2026-06-09): B4 is PARKED (no puller). This probe is the primary
-// evidence behind the (algo, format, backend, chip) matrix and the NO-GO — kept
-// so the finding is reproducible, not just claimed. See the B4 verdict in
-// docs/HW_ACCEL_EXPLORATION.md before reopening.
-//
-// The real unknown is the (algo, format, backend, chip) triple: does VPI accept a
-// ZERO-COPY-wrapped NvBufSurface on the PVA backend, in a format the PVA algo
-// supports, on BOTH Xavier and Orin? PVA morphology supports only single-channel
-// U8/S8/U16/S16 (NOT NV12), so a PVA element operates on GRAY8 NVMM, not the
-// suite's NV12 frames — this probe uses GRAY8.
-//
-// Build (Jetson):
-//   g++ -std=c++17 -O2 vpi_pva_probe.cpp -o vpi_pva_probe \
-//     -I/usr/src/jetson_multimedia_api/include -I/opt/nvidia/vpi3/include \
-//     -L/usr/lib/aarch64-linux-gnu/tegra -L/opt/nvidia/vpi3/lib/aarch64-linux-gnu \
-//     -lnvbufsurface -lnvvpi
-// Run: ./vpi_pva_probe [block|pitch]
-
+/// Kept as the reproducible evidence for the parked nvmmcv NO-GO (docs/HW_ACCEL_EXPLORATION.md): does
+/// PVA erode a zero-copy-wrapped NvBufSurface? PVA morphology takes U8/S8/U16/S16 (not NV12), > 128x128.
+/// Build: g++ -std=c++17 -O2 vpi_pva_probe.cpp -o vpi_pva_probe -I/usr/src/jetson_multimedia_api/include -I/opt/nvidia/vpi3/include -L/usr/lib/aarch64-linux-gnu/tegra -L/opt/nvidia/vpi3/lib/aarch64-linux-gnu -lnvbufsurface -lnvvpi; run: ./vpi_pva_probe [block|pitch]
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -68,7 +51,7 @@ int main(int argc, char** argv) {
     const char* layout_name = "BLOCK_LINEAR";
     if (argc > 1 && strcmp(argv[1], "pitch") == 0) { layout = NVBUF_LAYOUT_PITCH; layout_name = "PITCH_LINEAR"; }
 
-    const uint32_t W = 256, H = 256;  // PVA morphology requires > 128x128
+    const uint32_t W = 256, H = 256;
     printf("== B4 PVA probe: GRAY8 %ux%u, layout=%s ==\n", W, H, layout_name);
 
     NvBufSurface* in_surf  = make_gray8(W, H, layout);
@@ -83,7 +66,6 @@ int main(int argc, char** argv) {
     VPIStream stream = nullptr;
     if (!vpi_ok("vpiStreamCreate(PVA|CUDA)", vpiStreamCreate(backends, &stream))) return 4;
 
-    // CUDA baseline: proves the zero-copy wrap itself feeds a real backend.
     bool cuda_ok = vpi_ok("vpiSubmitErode(CUDA) on wrapped NVMM",
         vpiSubmitErode(stream, VPI_BACKEND_CUDA, in, out, nullptr, 3, 3, VPI_BORDER_ZERO))
         && vpi_ok("vpiStreamSync after CUDA", vpiStreamSync(stream));

@@ -1,7 +1,6 @@
-/// Benchmark: hand-rolled (fused) analytics vs the OpenCV reference chains.
-/// Output: CSV to stdout (same convention as bench_nvmm), one row per
-/// (component, implementation, frame size). avg over `iters` runs after one
-/// warm-up. Lives behind -Danalytics_golden (needs OpenCV as the baseline).
+/// Hand-rolled (fused) analytics vs the pre-port OpenCV chains they replaced.
+/// CSV to stdout in bench_nvmm's convention, one row per (component, implementation,
+/// frame size), averaged over `iters` runs after one untimed warm-up.
 #include <opencv2/opencv.hpp>
 
 #include <chrono>

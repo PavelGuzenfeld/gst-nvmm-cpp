@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
-# Port infer-interval + infer-gate-frames into a deploy checkout of nvmminfer.
-#
-#   DEPLOY_SRC=/path/to/checkout port_to_deploy.sh [--revert|--check]
-#
-# Replaces two hand-written Python patchers that matched nine literal source anchors
-# and exited on any drift. Worse, the second depended on text the first had inserted
-# -- including re-opening a comment block the first one closed -- so they had a hidden
-# ordering coupling and could only ever run in one sequence.
-#
-# A real unified diff has none of that: `patch` locates hunks by context with fuzz,
-# reports precisely which hunk failed, and reverses cleanly. The deploy checkout is
-# not a git repo, which is why the porters existed at all -- but `patch` never needed
-# one, only `git apply` would have.
-#
-# Idempotent: a dry-run reverse check detects an already-patched tree and exits 0.
+# Idempotent port of infer-props.patch into a deploy checkout that is not a git repo:
+# patch(1) matches hunks by context with fuzz and reverses cleanly, where literal anchors drifted.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -39,7 +26,6 @@ case "$MODE" in
     ;;
   apply)
     if already_applied; then echo "already patched, nothing to do"; exit 0; fi
-    # Backup only on the first apply, so re-running never clobbers the pristine copy.
     [ -f "$TARGET.orig-props" ] || cp "$TARGET" "$TARGET.orig-props"
     if ! patch -p0 --dry-run -f "$TARGET" < "$PATCH" >/dev/null 2>&1; then
       echo "ERROR: patch does not apply cleanly. Failing hunks:" >&2
