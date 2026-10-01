@@ -38,9 +38,6 @@ static gboolean
 nvmm_optical_flow_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer *,
                                  GQuark type, gpointer)
 {
-    /* Only honor a straight copy — the flow field belongs to the frame it was
-       computed for; on any transform that isn't a pure copy, drop it rather
-       than mis-associate vectors with a changed frame. */
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 

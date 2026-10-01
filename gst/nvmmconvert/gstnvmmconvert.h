@@ -1,5 +1,3 @@
-/// GstNvmmConvert — GStreamer element for NVMM crop/scale/format conversion.
-/// Wraps NvBufSurfTransform (Tegra VIC hardware engine).
 #pragma once
 
 #include <gst/gst.h>

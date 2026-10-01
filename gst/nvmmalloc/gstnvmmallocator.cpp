@@ -10,24 +10,19 @@
 
 namespace {
 
-/// Internal memory subclass that wraps an NvmmBuffer.
-///
-/// Only the *owner* memory holds the NvmmBuffer; a shared memory (created by
-/// mem_share for zero-copy tee fan-out) carries a null `buffer` and reaches the
-/// surface through its parent. The owner is kept alive by GStreamer ref-counting
-/// the parent for the share's lifetime.
+/// Only the owner holds `buffer`; a share has null and reaches the surface
+/// through its parent, which GStreamer keeps alive for the share's lifetime.
 struct GstNvmmMemory {
     GstMemory parent;
     std::unique_ptr<nvmm::NvmmBuffer> buffer;
 };
 
-/// Walk to the root memory that actually owns the NvmmBuffer.
 GstNvmmMemory* nvmm_owner(GstMemory* mem) {
     while (mem->parent) mem = mem->parent;
     return reinterpret_cast<GstNvmmMemory*>(mem);
 }
 
-}  // namespace
+}
 
 struct _GstNvmmAllocatorPrivate {
     nvmm::MemoryType mem_type;
@@ -35,26 +30,17 @@ struct _GstNvmmAllocatorPrivate {
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmAllocator, gst_nvmm_allocator, GST_TYPE_ALLOCATOR)
 
-/* No GstAllocator::alloc(size) override — video allocators use a custom
-   alloc function with explicit format/dimensions instead. See GstGLMemory,
-   GstVulkanImageMemory for the upstream pattern. Use
-   gst_nvmm_allocator_alloc_video() or the buffer pool. */
-
 static void gst_nvmm_allocator_free(GstAllocator* allocator, GstMemory* memory) {
     (void)allocator;
     auto* mem = reinterpret_cast<GstNvmmMemory*>(memory);
     delete mem;
 }
 
+/// NVIDIA convention: the mapped data is the NvBufSurface*, not pixels.
 static gpointer gst_nvmm_allocator_mem_map(GstMemory* memory, gsize maxsize,
                                              GstMapFlags flags) {
     (void)maxsize;
     (void)flags;
-    /* NVIDIA convention: mapped data = NvBufSurface*.
-       This is NOT a CPU-accessible pixel pointer. NVIDIA elements
-       (nvvidconv, nvv4l2decoder etc.) cast this back to NvBufSurface*
-       to access the hardware buffer.
-       For actual CPU pixel access, use gst_nvmm_memory_map_plane(). */
     auto* mem = nvmm_owner(memory);
     if (!mem->buffer) return nullptr;
     return mem->buffer->raw();
@@ -64,29 +50,16 @@ static void gst_nvmm_allocator_mem_unmap(GstMemory* memory) {
     (void)memory;
 }
 
+/// READONLY share by reference, so one tee branch cannot mutate what the others
+/// see. offset/size only feed size accounting: zeroing them breaks buffer resize.
+/// No mem_copy override: the core fallback would copy the handle, not pixels.
 static GstMemory* gst_nvmm_allocator_mem_share(GstMemory* memory,
                                                gssize offset, gssize size) {
-    /* Share by reference. NVMM memory is an opaque NvBufSurface: surface access
-       always goes through the owner (nvmm_owner) and returns the whole surface,
-       so byte sub-regions don't sub-divide pixels. offset/size are still threaded
-       into gst_memory_init below purely for GstMemory size accounting (keep them
-       — don't "simplify" to 0/maxsize, or gst_buffer_resize math breaks).
-       This keeps tee fan-out and make_writable zero-copy; safe because consumers
-       read device pixels only. The owner is kept alive: gst_memory_init refs the
-       parent for the share's lifetime, and the core unrefs it on free.
-       The share is READONLY so a write through one branch can't silently mutate
-       the surface every other branch sees.
-
-       No mem_copy override on purpose: a real writable copy needs a device-side
-       NvBufSurface copy (NvBufSurfaceCopy/NPP), out of this phase's scope. The
-       core's fallback mem_copy would copy the NvBufSurface* handle (what mem_map
-       returns), not pixels — so do NOT rely on gst_memory_copy for NVMM memory.
-       It's unreachable today: shares are READONLY and nothing copies NVMM. */
     GstNvmmMemory* owner = nvmm_owner(memory);
     GstMemory* parent = GST_MEMORY_CAST(owner);
     if (size == -1) size = static_cast<gssize>(memory->size) - offset;
 
-    auto* shared = new GstNvmmMemory{};  /* null buffer: references the owner */
+    auto* shared = new GstNvmmMemory{};
     auto flags = static_cast<GstMemoryFlags>(
         GST_MINI_OBJECT_FLAGS(parent) | GST_MEMORY_FLAG_READONLY);
     gst_memory_init(GST_MEMORY_CAST(shared), flags, memory->allocator, parent,
@@ -97,7 +70,7 @@ static GstMemory* gst_nvmm_allocator_mem_share(GstMemory* memory,
 
 static void gst_nvmm_allocator_class_init(GstNvmmAllocatorClass* klass) {
     auto* allocator_class = GST_ALLOCATOR_CLASS(klass);
-    allocator_class->alloc = nullptr;  /* use gst_nvmm_allocator_alloc_video() */
+    allocator_class->alloc = nullptr;
     allocator_class->free = gst_nvmm_allocator_free;
 }
 
@@ -114,8 +87,6 @@ static void gst_nvmm_allocator_init(GstNvmmAllocator* self) {
 
     GST_OBJECT_FLAG_SET(alloc, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
 }
-
-/* Public API */
 
 GstAllocator* gst_nvmm_allocator_new(int mem_type) {
     auto* alloc = GST_NVMM_ALLOCATOR(g_object_new(GST_TYPE_NVMM_ALLOCATOR, nullptr));
@@ -168,6 +139,8 @@ void gst_nvmm_memory_unmap_plane(GstMemory* mem) {
     }
 }
 
+/// Share-capable (no NO_SHARE), so tee fan-out and make_writable reference
+/// the surface instead of deep-copying it.
 GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
                                            int format,
                                            guint width, guint height) {
@@ -200,9 +173,6 @@ GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
     auto* mem = new GstNvmmMemory{};
     auto actual_size = static_cast<gsize>((*result).data_size());
 
-    /* No NO_SHARE: the memory is share-capable (mem_share above), so tee
-       fan-out + make_writable reference the same NvBufSurface instead of
-       triggering a (broken/expensive) deep copy. */
     gst_memory_init(GST_MEMORY_CAST(mem),
                     static_cast<GstMemoryFlags>(0),
                     allocator, nullptr, actual_size, 0, 0, actual_size);

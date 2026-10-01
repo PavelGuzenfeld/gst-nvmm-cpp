@@ -52,13 +52,11 @@ gst_nvmm_buffer_pool_set_config(GstBufferPool* pool, GstStructure* config)
         return FALSE;
     }
 
-    /* Create our NVMM allocator */
     if (self->priv->allocator) {
         gst_object_unref(self->priv->allocator);
     }
-    self->priv->allocator = gst_nvmm_allocator_new(0 /* default */);
+    self->priv->allocator = gst_nvmm_allocator_new(0 );
 
-    /* Update config with actual NVMM buffer size */
     gsize nvmm_size = GST_VIDEO_INFO_SIZE(&self->priv->video_info);
     gst_buffer_pool_config_set_params(config, caps, nvmm_size,
                                        min_buffers, max_buffers);
@@ -76,6 +74,7 @@ gst_nvmm_buffer_pool_set_config(GstBufferPool* pool, GstStructure* config)
         ->set_config(pool, config);
 }
 
+/// Hardware alignment can make surface strides differ from GstVideoInfo.
 static GstFlowReturn
 gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
                             GstBufferPoolAcquireParams* params)
@@ -92,7 +91,6 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
     gint h = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
     GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&self->priv->video_info);
 
-    /* Allocate with exact format/dimensions — NOT the byte-size heuristic */
     GstMemory* mem = gst_nvmm_allocator_alloc_video(self->priv->allocator,
                                                       static_cast<int>(fmt),
                                                       static_cast<guint>(w),
@@ -102,12 +100,9 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
         return GST_FLOW_ERROR;
     }
 
-    /* Build the GstBuffer */
     *buffer = gst_buffer_new();
     gst_buffer_append_memory(*buffer, mem);
 
-    /* Read actual strides/offsets from the NVMM surface — these may
-       differ from GstVideoInfo due to hardware alignment requirements */
     guint n_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
     gsize offsets[GST_VIDEO_MAX_PLANES] = {};
     gint strides[GST_VIDEO_MAX_PLANES] = {};
@@ -121,7 +116,6 @@ gst_nvmm_buffer_pool_alloc(GstBufferPool* pool, GstBuffer** buffer,
             strides[i] = static_cast<gint>(pp.pitch[i]);
         }
     } else {
-        /* Fallback to GstVideoInfo values */
         for (guint i = 0; i < n_planes; i++) {
             offsets[i] = self->priv->video_info.offset[i];
             strides[i] = self->priv->video_info.stride[i];
@@ -166,8 +160,6 @@ gst_nvmm_buffer_pool_init(GstNvmmBufferPool* self)
     self->priv->allocator = NULL;
     self->priv->configured = FALSE;
 }
-
-/* Public API */
 
 GstBufferPool*
 gst_nvmm_buffer_pool_new(void)

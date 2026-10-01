@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmofa.h"
 #include "gstnvmmflowstats.h"
@@ -20,8 +20,6 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_ofa_debug);
 #ifndef PACKAGE
 #define PACKAGE "gst-nvmm-cpp"
 #endif
-
-/* ---- grid-size and quality enums ---- */
 
 #define GST_TYPE_NVMM_OFA_GRID (gst_nvmm_ofa_grid_get_type())
 static GType
@@ -60,21 +58,19 @@ gst_nvmm_ofa_quality_get_type(void)
     return t;
 }
 
-/* ---- element ---- */
-
 struct _GstNvmmOfa {
     GstBaseTransform parent;
 
-    gint grid_size;                 /* property: 1/2/4/8 */
-    VPIOpticalFlowQuality quality;  /* property */
+    gint grid_size;
+    VPIOpticalFlowQuality quality;
 
-    /* runtime state */
     gint width, height;
     VPIStream stream;
     VPIPayload payload;
-    VPIImage mv;                    /* OFA|CPU 2S16_BL output, reused per frame */
-    VPIImage prev;                  /* wraps the previous frame's NVMM surface */
-    GstBuffer *prev_buf;            /* ref keeps prev's surface alive/unmodified */
+    VPIImage mv;
+    VPIImage prev;
+    /// The ref keeps prev's surface alive and unmodified.
+    GstBuffer *prev_buf;
     gboolean configured;
 };
 
@@ -142,13 +138,11 @@ gst_nvmm_ofa_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
         GST_ERROR_OBJECT(self, "caps missing width/height");
         return FALSE;
     }
-    /* dims changed — drop any previously-built OFA state */
     release_state(self);
     return TRUE;
 }
 
-/* Build the OFA payload, stream and reusable MV image once we know the input
-   format (queried from the first wrapped frame) and dimensions. */
+/// OFA writes the flow; the CPU backend lets it be locked to host for the meta.
 static gboolean
 configure(GstNvmmOfa *self, VPIImage sample)
 {
@@ -169,7 +163,6 @@ configure(GstNvmmOfa *self, VPIImage sample)
                          grid, self->width, self->height);
         return FALSE;
     }
-    /* OFA writes the flow; CPU backend lets us lock it to host for the meta. */
     if (vpiImageCreate(mvW, mvH, VPI_IMAGE_FORMAT_2S16_BL,
                        VPI_BACKEND_OFA | VPI_BACKEND_CPU, &self->mv) != VPI_SUCCESS) {
         GST_ERROR_OBJECT(self, "vpiImageCreate(mv) failed");
@@ -181,7 +174,6 @@ configure(GstNvmmOfa *self, VPIImage sample)
     return TRUE;
 }
 
-/* Lock the OFA output to host and copy it tightly-packed into a host GstMemory. */
 static GstMemory *
 flow_to_host_memory(GstNvmmOfa *self, gint *out_w, gint *out_h)
 {
@@ -190,7 +182,7 @@ flow_to_host_memory(GstNvmmOfa *self, gint *out_w, gint *out_h)
         return nullptr;
     const VPIImagePlanePitchLinear &pl = d.buffer.pitch.planes[0];
     const gint w = pl.width, h = pl.height;
-    const gsize row = (gsize)w * 4;  /* 2 x int16 per cell */
+    const gsize row = (gsize)w * 4;
 
     GstMemory *mem = gst_allocator_alloc(nullptr, row * h, nullptr);
     GstMapInfo map;
@@ -227,7 +219,6 @@ gst_nvmm_ofa_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         return GST_FLOW_OK;
     }
 
-    /* First frame: no predecessor — just remember it. */
     if (!self->prev) {
         self->prev = cur;
         self->prev_buf = gst_buffer_ref(buf);
@@ -250,11 +241,10 @@ gst_nvmm_ofa_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         if (flow) {
             gst_buffer_add_nvmm_optical_flow_meta(buf, flow, mvW, mvH,
                                                   self->grid_size, self->width, self->height);
-            gst_memory_unref(flow);  /* meta took its own ref */
+            gst_memory_unref(flow);
         }
     }
 
-    /* current frame becomes the predecessor for the next pair */
     vpiImageDestroy(self->prev);
     gst_buffer_unref(self->prev_buf);
     self->prev = cur;
@@ -327,6 +317,7 @@ gst_nvmm_ofa_class_init(GstNvmmOfaClass *klass)
     GST_DEBUG_CATEGORY_INIT(gst_nvmm_ofa_debug, "nvmmofa", 0, "NVMM OFA optical flow");
 }
 
+/// In place, not passthrough, so the buffer is writable for gst_buffer_add_meta.
 static void
 gst_nvmm_ofa_init(GstNvmmOfa *self)
 {
@@ -338,13 +329,8 @@ gst_nvmm_ofa_init(GstNvmmOfa *self)
     self->prev = nullptr;
     self->prev_buf = nullptr;
     self->configured = FALSE;
-    /* In-place: same caps in/out, the frame's data is never copied — transform_ip
-       gets the (writable) buffer and only attaches the flow meta. Not full
-       passthrough, so the buffer is guaranteed writable for gst_buffer_add_meta. */
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
-
-/* ---- plugin ---- */
 
 static gboolean
 plugin_init(GstPlugin *plugin)

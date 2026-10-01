@@ -2,26 +2,12 @@ common_sources = []
 common_deps = [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep]
 common_cpp_args = []
 
-# Single source for both targets: nvmm_buffer.cpp / nvmm_transform.cpp pick the
-# mock vs real NvBufSurface header via NVMM_MOCK_API (see their #include guards).
 common_sources += files('nvmm_buffer.cpp', 'nvmm_transform.cpp')
-# Optical-flow metadata — pure GStreamer (no NVMM/VPI), so it builds and is
-# unit-tested everywhere, including the x86 mock/CI build. Consumed by nvmmofa.
 common_sources += files('nvmm_optical_flow_meta.cpp')
-# nvmm_det_meta.cpp is the DeepStream-free GstNvmmDetMeta carrying detections
-# across the IPC boundary (the optional NvDs bridge inside it is #ifdef-gated).
 common_sources += files('nvmm_det_meta.cpp')
-# Phase-3 motion annotation: per-box flow compute (pure host, unit-tested on
-# x86) + the fusion-result sibling meta produced by nvmmfusion.
 common_sources += files('nvmm_motion.cpp', 'nvmm_motion_meta.cpp')
-# Phase-3.2 cascade: the classifier-result sibling meta produced by
-# nvmmsecondaryinfer (pure GstMeta, unit-tested on x86).
 common_sources += files('nvmm_class_meta.cpp')
-# Phase-B: single-target SAMURAI track meta produced by nvmmsamurai and
-# overwritten by nvmmfusekf (pure GstMeta, unit-tested on x86).
 common_sources += files('nvmm_track_meta.cpp')
-# Phase-B: 8D constant-velocity Kalman filter (pure C++ port of SAMURAI's
-# kalman_filter.py) shared by nvmmsamurai (kf_score) and nvmmfusekf (master KF).
 common_sources += files('kalman_box.cpp')
 if build_mock
   mock_inc = include_directories('.')
@@ -36,12 +22,8 @@ if have_deepstream_meta
   common_deps += [nvds_meta_dep]
 endif
 
-# Shared (not static) so the GstMeta registrations live in ONE copy per process.
-# A static lib is linked into every plugin .so, so each gets its own copy of the
-# meta api_get_type() + its static GType cache; two plugins first-touching the
-# same meta concurrently (e.g. nvmmofa producing + nvmmfusion consuming the flow
-# meta on different threads) then race the process-global type registration and
-# deadlock. One shared copy removes the duplication.
+# Shared, not static: a static copy per plugin .so duplicates each meta GType
+# cache, and two plugins registering one meta on different threads deadlock.
 nvmm_common_lib = shared_library('nvmm_common',
   common_sources,
   include_directories : [config_inc, common_inc],

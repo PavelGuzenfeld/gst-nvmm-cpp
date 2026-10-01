@@ -1,44 +1,38 @@
-/// Multi-object tracker (pure host, no CUDA/GStreamer).
-///
-/// Assigns a stable `tracker_id` to each detection across frames by greedy IOU
-/// matching against the previous frames' tracks (per class). Unmatched
-/// detections start new tracks; tracks unseen for `max_age` frames expire. This
-/// is the algorithm core behind the `nvmmtracker` element, kept dependency-free
-/// so it is unit-tested on the host CI build.
 #pragma once
 
 #include <cstdint>
 #include <vector>
 
-#include "shm_protocol.h"  // NvmmDetObject
+#include "shm_protocol.h"
 
 namespace nvmm {
 
 struct TrackerParams {
-    float iou_threshold = 0.3f;  // min IOU (same class) to continue a track
-    int   max_age       = 30;    // frames a track survives with no match
+    float iou_threshold = 0.3f;
+    /// Frames a track survives with no match.
+    int   max_age       = 30;
 };
 
+/// Greedy per-class IOU matching against prior-frame tracks.
 class Tracker {
 public:
     explicit Tracker(const TrackerParams& params = {}) : params_(params) {}
 
-    /// Assign `objects[i].tracker_id` in place (1-based; stable across frames).
-    /// Call once per frame in arrival order.
+    /// Writes `objects[i].tracker_id` in place: 1-based, stable across frames. Call once
+    /// per frame in arrival order.
     void update(NvmmDetObject* objects, uint32_t num_objects);
 
-    /// Forget all tracks (e.g. on stream restart / flush).
     void reset();
 
-    /// Number of currently-live tracks (for tests/diagnostics).
     std::size_t live_tracks() const { return tracks_.size(); }
 
 private:
     struct Track {
         uint64_t id;
-        float    left, top, width, height;  // last matched box
+        float    left, top, width, height;
         int32_t  class_id;
-        int      age;  // frames since last match (0 = matched this frame)
+        /// Frames since last match; 0 means matched this frame.
+        int      age;
     };
 
     TrackerParams       params_;
@@ -46,4 +40,4 @@ private:
     uint64_t            next_id_ = 1;
 };
 
-}  // namespace nvmm
+}

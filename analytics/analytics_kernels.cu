@@ -1,32 +1,14 @@
-/// analytics_kernels.cu — fused CUDA implementation of low_texture_motion.
-/// Stage-for-stage mirror of the fused host pipeline (low_texture_motion.hpp):
-///   1. Sobel-x/y + gradient magnitude, one kernel (REFLECT_101 border);
-///   2. separable Gaussian blur, threshold fused into the column pass -> 0/1 mask;
-///   3. morphological close as separable window-OR (dilate) then window-AND
-///      (erode) — exact on a binary mask with a square SE, and the clipped
-///      window matches OpenCV's +-inf morphology border semantics;
-///   4. min(|cur-ref_a|, |cur-ref_b|) * mask -> float, one kernel;
-///   5. optional separable blur of the output; border zeroing fused into the
-///      last kernel that touches the frame.
-/// Weights match img::gaussian_kernel (OpenCV's tables/formula), so parity with
-/// the host path is tight; the probe test asserts it. All kernels take pitched
-/// inputs/outputs so mapped NvBufSurface planes work in place (zero-copy);
-/// internal scratch is packed.
-
 #include "analytics_kernels.hpp"
 #include "image_ops.hpp"
 
 #include <cuda_runtime.h>
-#ifdef ANALYTICS_KERNELS_DEBUG
-#include <cstdio>
-#endif
 
 namespace nvmm {
 namespace motion {
 
 constexpr int kMaxKernel = 31;
-// named-namespace scope on purpose: anonymous-namespace __constant__ symbols
-// fail cudaMemcpyToSymbol registration ("invalid device symbol") on CUDA 12
+/// Named-namespace scope on purpose: anonymous-namespace __constant__ symbols fail
+/// cudaMemcpyToSymbol registration ("invalid device symbol") on CUDA 12.
 __constant__ float c_blur[kMaxKernel];
 
 namespace {
@@ -59,7 +41,6 @@ __global__ void k_blur_rows(const float *src, float *dst, int w, int h, int k)
     dst[(size_t)y * w + x] = acc;
 }
 
-/// Column blur into a 0/1 mask (threshold fused).
 __global__ void k_blur_cols_mask(const float *src, uint8_t *dst, int w, int h, int k,
                                  float thresh)
 {
@@ -73,7 +54,6 @@ __global__ void k_blur_cols_mask(const float *src, uint8_t *dst, int w, int h, i
     dst[(size_t)y * w + x] = acc < thresh ? 1 : 0;
 }
 
-/// Column blur into the pitched float output, border zeroed (final pass).
 __global__ void k_blur_cols_out(const float *src, float *dst, long dpitch, int w, int h,
                                 int k, int border)
 {
@@ -90,9 +70,8 @@ __global__ void k_blur_cols_out(const float *src, float *dst, long dpitch, int w
     dst[(size_t)y * dpitch + x] = acc;
 }
 
-/// Separable binary morphology: OR (dilate) / AND (erode) over a 2r+1 window
-/// along one axis. Window clipped to the frame: outside pixels never dilate
-/// and never block erosion (OpenCV's +-inf border).
+/// Window clipped to the frame: outside pixels never dilate and never block erosion
+/// (OpenCV's +-inf border).
 __global__ void k_morph_axis(const uint8_t *src, uint8_t *dst, int w, int h,
                              int r, bool horizontal, bool dilate)
 {
@@ -111,9 +90,8 @@ __global__ void k_morph_axis(const uint8_t *src, uint8_t *dst, int w, int h,
     dst[(size_t)y * w + x] = v;
 }
 
-/// out = mask ? min(|cur-ref_a|, |cur-ref_b|) : 0. Writes packed scratch when a
-/// blur pass follows (dpitch == w, border == 0) or the pitched output with the
-/// border zeroed when it is the final pass.
+/// Writes packed scratch (dpitch == w, border == 0) when a blur pass follows, else
+/// the pitched output with the border zeroed.
 __global__ void k_masked_min_diff(const uint8_t *cur, long cpitch, const uint8_t *ra,
                                   long apitch, const uint8_t *rb, long bpitch,
                                   const uint8_t *mask, float *out, long dpitch,
@@ -133,21 +111,17 @@ __global__ void k_masked_min_diff(const uint8_t *cur, long cpitch, const uint8_t
     out[(size_t)y * dpitch + x] = v;
 }
 
-}  // namespace
+}
 
 struct LowTextureMotionCuda::Impl {
     int w = 0, h = 0;
     uint8_t *d_mask = nullptr, *d_morph = nullptr;
     float *d_a = nullptr, *d_b = nullptr;
-    // host-wrapper staging (allocated only by run())
     uint8_t *d_cur = nullptr, *d_ra = nullptr, *d_rb = nullptr;
     float *d_out = nullptr;
     cudaError_t err = cudaSuccess;
 
     bool ok(cudaError_t e) {
-#ifdef ANALYTICS_KERNELS_DEBUG
-        if (e != cudaSuccess) fprintf(stderr, "cuda err: %s\n", cudaGetErrorString(e));
-#endif
         if (e != cudaSuccess && err == cudaSuccess) err = e;
         return e == cudaSuccess;
     }
@@ -209,10 +183,8 @@ bool LowTextureMotionCuda::run_device(DevicePlane<const uint8_t> cur,
     const dim3 blk(32, 8);
     const dim3 grd((unsigned)(w + 31) / 32, (unsigned)(h + 7) / 8);
 
-    // 1. gradient magnitude
     k_sobel_mag<<<grd, blk, 0, stream>>>(cur.data, (long)cur.stride, impl_->d_a, w, h);
 
-    // 2. blur + fused threshold -> binary mask
     const std::vector<float> kg = img::gaussian_kernel(p.grad_blur);
     if (!impl_->ok(cudaMemcpyToSymbolAsync(c_blur, kg.data(), kg.size() * sizeof(float), 0,
                                            cudaMemcpyHostToDevice, stream)))
@@ -221,21 +193,18 @@ bool LowTextureMotionCuda::run_device(DevicePlane<const uint8_t> cur,
     k_blur_cols_mask<<<grd, blk, 0, stream>>>(impl_->d_b, impl_->d_mask, w, h, p.grad_blur,
                                               p.grad_thresh);
 
-    // 3. close = separable dilate then separable erode
     const int r = p.close_k / 2;
     k_morph_axis<<<grd, blk, 0, stream>>>(impl_->d_mask, impl_->d_morph, w, h, r, true, true);
     k_morph_axis<<<grd, blk, 0, stream>>>(impl_->d_morph, impl_->d_mask, w, h, r, false, true);
     k_morph_axis<<<grd, blk, 0, stream>>>(impl_->d_mask, impl_->d_morph, w, h, r, true, false);
     k_morph_axis<<<grd, blk, 0, stream>>>(impl_->d_morph, impl_->d_mask, w, h, r, false, false);
 
-    // 4. masked min-diff (final pass when no output blur follows)
     const bool blur_out = p.diff_blur > 0;
     k_masked_min_diff<<<grd, blk, 0, stream>>>(
         cur.data, (long)cur.stride, ref_a.data, (long)ref_a.stride, ref_b.data,
         (long)ref_b.stride, impl_->d_mask, blur_out ? impl_->d_a : out.data,
         blur_out ? (long)w : (long)out.stride, w, h, blur_out ? 0 : p.border);
 
-    // 5. optional output blur, border zero fused into its column pass
     if (blur_out) {
         const std::vector<float> kd = img::gaussian_kernel(p.diff_blur);
         if (!impl_->ok(cudaMemcpyToSymbolAsync(c_blur, kd.data(), kd.size() * sizeof(float),
@@ -278,5 +247,5 @@ bool LowTextureMotionCuda::run(img::View<const uint8_t> cur, img::View<const uin
     return impl_->ok(cudaStreamSynchronize(stream));
 }
 
-}  // namespace motion
-}  // namespace nvmm
+}
+}

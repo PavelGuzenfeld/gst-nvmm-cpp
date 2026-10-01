@@ -1,14 +1,3 @@
-/// Shared building blocks for the fused analytics passes.
-///
-/// The separable Gaussian blur is written so a component can FUSE its next step
-/// into the final (vertical) pass via an emit functor — thresholding, IIR
-/// updates, masking — instead of materialising an intermediate and sweeping the
-/// frame again. Kernel weights and borders reproduce OpenCV's defaults
-/// (getGaussianKernel's fixed small-size tables / sigma formula, and
-/// BORDER_REFLECT_101) so the golden-comparison tests can hold tight
-/// tolerances; the tables are the only OpenCV-derived numerics here.
-///
-/// Pure C++14, header-only, no dependencies.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -17,9 +6,7 @@
 
 #include "image.hpp"
 
-// Lets analytics_kernels.cu call this file's border/kernel helpers directly
-// from CUDA device code instead of keeping a second copy in sync by hand.
-// A no-op qualifier outside nvcc, so plain C++14 TUs are unaffected.
+/// Host/device qualifier so analytics_kernels.cu shares these helpers, not a copy.
 #if defined(__CUDACC__)
 #define NVMM_ANALYTICS_HD __host__ __device__
 #else
@@ -29,9 +16,8 @@
 namespace nvmm {
 namespace img {
 
-/// BORDER_REFLECT_101 index fold: gfedcb|abcdefgh|gfedcba. Valid for n > 1 and
-/// any index one kernel-radius out of range (the analytics kernels are far
-/// smaller than the frames).
+/// OpenCV BORDER_REFLECT_101 fold (gfedcb|abcdefgh|gfedcba). Valid for n > 1 and
+/// at most one kernel radius out of range.
 NVMM_ANALYTICS_HD inline int reflect101(int i, int n)
 {
     if (i < 0) return -i;
@@ -39,8 +25,8 @@ NVMM_ANALYTICS_HD inline int reflect101(int i, int n)
     return i;
 }
 
-/// Weights of cv::getGaussianKernel(k, sigma = 0): fixed bit-exact tables for
-/// odd k <= 9 (OpenCV 4.x, n/256 values), otherwise sigma = 0.3*((k-1)*0.5-1) + 0.8.
+/// cv::getGaussianKernel(k, 0): OpenCV 4.x bit-exact tables for odd k <= 9, else
+/// sigma = 0.3*((k-1)*0.5-1) + 0.8. The golden-comparison tests rely on the match.
 inline std::vector<float> gaussian_kernel(int k)
 {
     std::vector<float> w((size_t)k);
@@ -67,8 +53,7 @@ inline std::vector<float> gaussian_kernel(int k)
     return w;
 }
 
-/// Horizontal pass of a separable convolution: src (u8 or float) -> float dst.
-/// dst may not alias src.
+/// dst must not alias src.
 template <typename SrcT>
 inline void convolve_rows(View<const SrcT> src, View<float> dst, const std::vector<float> &k)
 {
@@ -86,7 +71,7 @@ inline void convolve_rows(View<const SrcT> src, View<float> dst, const std::vect
         int x = 0;
         const int interior_end = w - r;
         for (; x < r && x < w; x++) edge(x);
-        for (; x < interior_end; x++) {   // no border folding on the hot path
+        for (; x < interior_end; x++) {
             float acc = 0.f;
             const SrcT *sp = s + x - r;
             for (int i = 0; i < (int)k.size(); i++) acc += kp[i] * (float)sp[i];
@@ -96,9 +81,7 @@ inline void convolve_rows(View<const SrcT> src, View<float> dst, const std::vect
     }
 }
 
-/// Vertical pass of a separable convolution, fused with the caller's next step:
-/// emit(y, row_ptr, width) receives each finished output row (a scratch buffer,
-/// valid only during the call). Row-major accumulation keeps this cache-friendly.
+/// emit(y, row, width) gets each finished row in a scratch buffer valid only during the call.
 template <typename Emit>
 inline void convolve_cols(View<const float> src, const std::vector<float> &k, Emit &&emit)
 {
@@ -115,8 +98,7 @@ inline void convolve_cols(View<const float> src, const std::vector<float> &k, Em
     }
 }
 
-/// Gaussian blur matching cv::GaussianBlur(src, dst, {k,k}, 0) on float data.
-/// `tmp` is resized as needed; dst may alias src.
+/// Matches cv::GaussianBlur(src, dst, {k,k}, 0). dst may alias src.
 template <typename SrcT>
 inline void gaussian_blur(View<const SrcT> src, Image<float> &tmp, View<float> dst, int ksize)
 {
@@ -129,7 +111,6 @@ inline void gaussian_blur(View<const SrcT> src, Image<float> &tmp, View<float> d
     });
 }
 
-/// Zero `mb` pixels around the border (writes only the border, not a full pass).
 inline void zero_border(View<float> m, int mb)
 {
     if (m.empty() || mb <= 0) return;
@@ -145,8 +126,7 @@ inline void zero_border(View<float> m, int mb)
     }
 }
 
-/// Max over the window [cx-r, cx+r) x [cy-r, cy+r) clipped to the image
-/// (replaces cv::minMaxLoc on a sub-rect). 0 on an empty view/window.
+/// Max over [cx-r, cx+r) x [cy-r, cy+r) clipped to the image; 0 for an empty window.
 inline float window_max(View<const float> m, float cx, float cy, int r)
 {
     if (m.empty()) return 0.f;
@@ -161,5 +141,5 @@ inline float window_max(View<const float> m, float cx, float cy, int r)
     return mx;
 }
 
-}  // namespace img
-}  // namespace nvmm
+}
+}

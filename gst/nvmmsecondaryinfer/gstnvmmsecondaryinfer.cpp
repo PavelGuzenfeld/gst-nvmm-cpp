@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION, HAVE_TENSORRT
+#include "config.h"
 
 #include "gstnvmmsecondaryinfer.h"
 #include "roi_preprocess.hpp"
@@ -23,8 +23,6 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_secondary_infer_debug);
 #ifndef PACKAGE
 #define PACKAGE "gst-nvmm-cpp"
 #endif
-
-/* ---- enums ---- */
 
 enum { NVMM_SEC_RGB = 0, NVMM_SEC_BGR = 1 };
 
@@ -66,25 +64,21 @@ gst_nvmm_secondary_infer_activation_get_type(void)
     return t;
 }
 
-/* ---- element ---- */
-
 struct _GstNvmmSecondaryInfer {
     GstBaseTransform parent;
 
-    /* properties */
     gchar   *engine_file;
     gchar   *labels_file;
-    guint    infer_interval;  /* re-infer a track every N frames */
-    guint    max_track_age;   /* drop a cached track unseen this many frames */
-    guint    min_roi;         /* skip boxes smaller than this (surface px) */
-    gdouble  net_scale;       /* multiply pixels by this (e.g. 1/255) */
-    gchar   *offsets_str;     /* "v0,v1,v2" per-channel mean (engine order), or NULL */
-    gchar   *std_str;         /* "v0,v1,v2" per-channel std (engine order), or NULL */
-    gint     color_order;     /* NVMM_SEC_{RGB,BGR} */
-    gint     activation;      /* NVMM_SEC_ACT_* */
-    gdouble  conf_threshold;  /* min top-1 score to attach a result */
+    guint    infer_interval;
+    guint    max_track_age;
+    guint    min_roi;
+    gdouble  net_scale;
+    gchar   *offsets_str;
+    gchar   *std_str;
+    gint     color_order;
+    gint     activation;
+    gdouble  conf_threshold;
 
-    /* runtime state */
     nvmm::TrtEngine        *engine;
     nvmm::RoiPreprocessor  *pre;
     nvmm::SecondaryCache   *cache;
@@ -92,8 +86,8 @@ struct _GstNvmmSecondaryInfer {
 
     float  *d_input;
     float  *d_output;
-    std::vector<float>       *host_out;  /* output copied to host for argmax */
-    std::vector<std::string> *labels;    /* from labels-file (may be empty) */
+    std::vector<float>       *host_out;
+    std::vector<std::string> *labels;
     int     net_w, net_h;
     int     num_classes;
     guint64 frame_no;
@@ -106,9 +100,6 @@ enum { PROP_0, PROP_ENGINE_FILE, PROP_LABELS_FILE, PROP_INFER_INTERVAL,
        PROP_OFFSETS, PROP_STD_VALUES,
        PROP_COLOR_ORDER, PROP_OUTPUT_ACTIVATION, PROP_CONF_THRESHOLD };
 
-/* Cascade node: fed from the decoded NV12 NVMM stream that already carries
-   det meta (nvmminfer/nvmmtracker/nvmmfusion upstream). Frame travels through
-   unchanged; only classification meta is attached. */
 static GstStaticPadTemplate sink_tmpl = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS("video/x-raw(memory:NVMM), format=(string)NV12, "
@@ -135,10 +126,9 @@ surface_of(GstBuffer *buf)
     return nullptr;
 }
 
-static gboolean gst_nvmm_secondary_infer_stop(GstBaseTransform *bt);  /* unwind failed start */
+static gboolean gst_nvmm_secondary_infer_stop(GstBaseTransform *bt);
 
-/* Parse "v0,v1,v2" (or ';'-separated) into out[3]. Empty/NULL -> FALSE with
-   ok=TRUE; malformed -> FALSE with ok=FALSE. */
+/// Empty or NULL returns FALSE with ok=TRUE; malformed returns FALSE with ok=FALSE.
 static gboolean
 parse_triplet(const gchar *str, float out[3], gboolean *ok)
 {
@@ -190,6 +180,7 @@ load_labels(GstNvmmSecondaryInfer *self)
     return TRUE;
 }
 
+/// The engine must output a flat score vector: [1,C], [1,C,1,1] or [C].
 static gboolean
 gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
 {
@@ -231,7 +222,6 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
                         nvmm::dims_str(t.dims).c_str(), nvmm::dtype_str(t.dtype), t.bytes);
     }
 
-    /* Exactly one input + one output (same contract as nvmminfer). */
     size_t n_in = 0, n_out = 0;
     for (const auto &t : self->engine->tensors()) (t.is_input ? n_in : n_out)++;
     if (n_in != 1 || n_out != 1) {
@@ -251,7 +241,6 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
         gst_nvmm_secondary_infer_stop(bt);
         return FALSE;
     }
-    /* Classifier input must be 1x3xHxW (NCHW). */
     if (in->dims.nbDims != 4 || in->dims.d[0] != 1 || in->dims.d[1] != 3) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
                           ("input \"%s\" is %s, expected 1x3xHxW (NCHW)",
@@ -262,8 +251,6 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
-    /* Classification head: a flat per-class score vector — [1,C], [1,C,1,1] or
-       plain [C]. Anything else (a detection head, multi-batch) is rejected. */
     bool head_ok = false;
     switch (out->dims.nbDims) {
         case 1: head_ok = true; break;
@@ -345,8 +332,6 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
     return TRUE;
 }
 
-/* Top-1 over host_out (optionally softmaxed). Returns the class id, stores the
-   score. With activation=none the raw value is reported as-is. */
 static int
 top1(GstNvmmSecondaryInfer *self, float *score)
 {
@@ -355,8 +340,6 @@ top1(GstNvmmSecondaryInfer *self, float *score)
     for (int i = 1; i < self->num_classes; i++)
         if (v[i] > v[best]) best = i;
     if (self->activation == NVMM_SEC_ACT_SOFTMAX) {
-        /* exp-normalize against the max for stability; only the top-1
-           probability is needed, so sum once. */
         double sum = 0.0;
         for (int i = 0; i < self->num_classes; i++)
             sum += std::exp((double)v[i] - (double)v[best]);
@@ -376,6 +359,8 @@ label_of(GstNvmmSecondaryInfer *self, int class_id, char *out, size_t len)
         g_snprintf(out, len, "class%d", class_id);
 }
 
+/// lookup() marks the track seen, so skipped or failed inference cannot expire it.
+/// Untracked objects (tracker_id 0) cannot be cached and re-infer every frame.
 static GstFlowReturn
 gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
@@ -395,7 +380,6 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     }
     const int sw = (int)surf->surfaceList[0].width;
     const int sh = (int)surf->surfaceList[0].height;
-    /* det-meta boxes live in infer_width/height space; map to surface px. */
     const float sx = m->infer_width  ? (float)sw / m->infer_width  : 1.f;
     const float sy = m->infer_height ? (float)sh / m->infer_height : 1.f;
 
@@ -407,11 +391,6 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         const NvmmDetObject &o = m->objects[i];
         NvmmClassEntry &e = entries[i];
 
-        /* Baseline: the cached result (if any). lookup() also marks the track
-           seen, so a detection keeps its cache entry alive even on frames
-           where inference is skipped or fails — no label flicker, no
-           premature expiry. Untracked objects (tracker_id == 0) cannot be
-           cached and re-infer every frame. */
         const nvmm::ClassResult *cached =
             o.tracker_id ? self->cache->lookup(o.tracker_id, fno) : nullptr;
         if (cached) {
@@ -424,9 +403,9 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         const float L = o.left * sx, T = o.top * sy;
         const float Wd = o.width * sx, Hd = o.height * sy;
         if (Wd < (float)self->min_roi || Hd < (float)self->min_roi)
-            continue;  /* too small to classify usefully; cached result stands */
+            continue;
         if (cached && !self->cache->due(o.tracker_id, fno))
-            continue;  /* cache still valid for this track */
+            continue;
 
         std::string err;
         if (!self->pre->run(surf, L, T, Wd, Hd, self->d_input, err)) {
@@ -450,7 +429,7 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         float conf = 0.f;
         const int cls = top1(self, &conf);
         if (conf < (float)self->conf_threshold)
-            continue;  /* below threshold: cached result stands; retried next frame */
+            continue;
 
         e.class_id = cls;
         e.confidence = conf;
@@ -480,8 +459,8 @@ gst_nvmm_secondary_infer_stop(GstBaseTransform *bt)
     auto *self = GST_NVMM_SECONDARY_INFER(bt);
     delete self->engine;
     self->engine = nullptr;
-    delete self->pre;                          /* releases its RGBA surface + planes */
-    self->pre = new nvmm::RoiPreprocessor();   /* fresh, so a re-start reconfigures */
+    delete self->pre;
+    self->pre = new nvmm::RoiPreprocessor();
     delete self->cache;
     self->cache = nullptr;
     if (self->d_input)  { cudaFree(self->d_input);  self->d_input = nullptr; }
@@ -653,12 +632,8 @@ gst_nvmm_secondary_infer_init(GstNvmmSecondaryInfer *self)
     self->net_w = self->net_h = 0;
     self->num_classes = 0;
     self->frame_no = 0;
-    /* In-place: same caps in/out, the frame's pixels are never copied —
-       transform_ip gets the writable buffer and only attaches class meta. */
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
-
-/* ---- plugin ---- */
 
 static gboolean
 plugin_init(GstPlugin *plugin)

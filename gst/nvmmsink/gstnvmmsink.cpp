@@ -1,16 +1,4 @@
-/// nvmmsink — GPU-copy NVMM IPC sink.
-///
-/// Allocates a pool of NVMM buffers, copies incoming frames into them via
-/// NvBufSurfTransform (VIC, GPU-to-GPU, no CPU involvement; handles the
-/// BLOCK_LINEAR -> PITCH_LINEAR conversion upstream NVMM producers need), and
-/// shares the pool buffer DMA-buf fds with consumers via SCM_RIGHTS over a unix
-/// domain socket.
-///
-/// Consumers (nvmmappsrc) import the fds and read directly from GPU memory
-/// (zero-copy on the consumer side). Ref counts in shared memory manage buffer
-/// lifecycle.
-
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmsink.h"
 #include "gstnvmmallocator.h"
@@ -59,8 +47,8 @@ enum {
 
 struct PoolBuffer {
     NvBufSurface *surface;
-    int fd;  /* bufferDesc = DMA-buf fd */
-    NvBufSurfaceMapParams map_params;  /* serializable params for cross-process import */
+    int fd;
+    NvBufSurfaceMapParams map_params;
 };
 
 struct _GstNvmmSinkPrivate {
@@ -70,16 +58,14 @@ struct _GstNvmmSinkPrivate {
     gsize shm_size;
     std::atomic<uint64_t> frame_number;
     GstVideoInfo video_info;
-    gboolean export_metadata;  /* serialize NvDsBatchMeta into the side-channel */
-    gboolean meta_active;      /* export_metadata AND build supports it */
+    gboolean export_metadata;
+    gboolean meta_active;
 
-    /* Buffer pool */
     PoolBuffer pool[NVMM_POOL_SIZE];
     int pool_size;
     int write_idx;
     gboolean pool_allocated;
 
-    /* Socket server for fd passing */
     std::string socket_path;
     int listen_fd;
     std::thread accept_thread;
@@ -90,12 +76,9 @@ struct _GstNvmmSinkPrivate {
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmSink, gst_nvmm_sink, GST_TYPE_BASE_SINK)
 
-/* --- helpers --- */
-
 static NvBufSurface *
 get_nvbufsurface_from_buffer(GstBaseSink *sink, GstBuffer *buffer)
 {
-    /* Check caps for NVMM feature */
     GstCaps *caps = gst_pad_get_current_caps(GST_BASE_SINK_PAD(sink));
     if (!caps) return nullptr;
     GstCapsFeatures *feat = gst_caps_get_features(caps, 0);
@@ -103,7 +86,6 @@ get_nvbufsurface_from_buffer(GstBaseSink *sink, GstBuffer *buffer)
     gst_caps_unref(caps);
     if (!is_nvmm) return nullptr;
 
-    /* NVIDIA convention: mapped data = NvBufSurface* */
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ))
         return nullptr;
@@ -112,6 +94,7 @@ get_nvbufsurface_from_buffer(GstBaseSink *sink, GstBuffer *buffer)
     return surf;
 }
 
+/// Sets numFilled: NvBufSurfaceCreate leaves it at 0, which NvBufSurfTransform rejects.
 static gboolean
 allocate_pool(GstNvmmSink *self)
 {
@@ -129,7 +112,6 @@ allocate_pool(GstNvmmSink *self)
     params.layout = NVBUF_LAYOUT_PITCH;
     params.memType = NVBUF_MEM_SURFACE_ARRAY;
 
-    /* Map GstVideoFormat to NvBufSurfaceColorFormat */
     GstVideoFormat fmt = GST_VIDEO_INFO_FORMAT(&priv->video_info);
     switch (fmt) {
         case GST_VIDEO_FORMAT_NV12: params.colorFormat = NVBUF_COLOR_FORMAT_NV12; break;
@@ -148,9 +130,6 @@ allocate_pool(GstNvmmSink *self)
             GST_ERROR_OBJECT(self, "Failed to create pool buffer %d", i);
             return FALSE;
         }
-        /* NvBufSurfaceCreate leaves numFilled = 0; set it so NvBufSurfTransform
-           (render path) accepts buffer index 0 as a valid destination. Mirrors
-           nvmm_buffer.cpp. */
         surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->pool[i].surface = surf;
         priv->pool[i].fd = (int)surf->surfaceList[0].bufferDesc;
@@ -184,7 +163,6 @@ send_fds_to_client(GstNvmmSink *self, int client_fd)
 {
     auto *priv = self->priv;
 
-    /* Send pool_size first */
     int ps = priv->pool_size;
     if (send(client_fd, &ps, sizeof(ps), 0) != sizeof(ps)) {
         fprintf(stderr, "[nvmmsink] Failed to send pool_size to client\n");
@@ -192,7 +170,6 @@ send_fds_to_client(GstNvmmSink *self, int client_fd)
         return;
     }
 
-    /* Send NvBufSurfaceMapParams for each pool buffer (serializable metadata) */
     for (int i = 0; i < priv->pool_size; i++) {
         NvBufSurfaceMapParams params = priv->pool[i].map_params;
         if (send(client_fd, &params, sizeof(params), 0) != sizeof(params)) {
@@ -202,7 +179,6 @@ send_fds_to_client(GstNvmmSink *self, int client_fd)
         }
     }
 
-    /* Send fds via SCM_RIGHTS */
     int fds[NVMM_POOL_SIZE];
     for (int i = 0; i < priv->pool_size; i++)
         fds[i] = priv->pool[i].fd;
@@ -224,13 +200,12 @@ accept_loop(GstNvmmSink *self)
 
     while (priv->running.load()) {
         struct pollfd pfd = { priv->listen_fd, POLLIN, 0 };
-        int ret = poll(&pfd, 1, 200 /* ms */);
+        int ret = poll(&pfd, 1, 200 );
         if (ret <= 0) continue;
 
         int client = accept(priv->listen_fd, nullptr, nullptr);
         if (client < 0) continue;
 
-        /* Wait for pool to be allocated before sending fds */
         while (!priv->pool_allocated && priv->running.load())
             g_usleep(10000);
 
@@ -243,8 +218,6 @@ accept_loop(GstNvmmSink *self)
     }
 }
 
-/* --- GstBaseSink vfuncs --- */
-
 static void
 gst_nvmm_sink_set_property(GObject *object, guint prop_id,
                             const GValue *value, GParamSpec *pspec)
@@ -255,9 +228,6 @@ gst_nvmm_sink_set_property(GObject *object, guint prop_id,
             self->priv->shm_name = g_value_get_string(value) ? g_value_get_string(value) : "";
             break;
         case PROP_POOL_SIZE_PROP:
-            /* Min NVMM_MIN_POOL_SIZE: a consumer (nvmmappsrc) holds a ref on up
-               to RELEASE_DELAY (12) in-flight buffers, so a smaller pool lets a
-               steady consumer hold every slot and starve the producer. */
             self->priv->pool_size =
                 CLAMP(g_value_get_int(value), NVMM_MIN_POOL_SIZE, NVMM_POOL_SIZE);
             break;
@@ -301,21 +271,18 @@ gst_nvmm_sink_set_caps(GstBaseSink *sink, GstCaps *caps)
         return FALSE;
     }
 
-    /* Allocate the NVMM buffer pool now that we know the format */
     if (!self->priv->pool_allocated) {
         if (!allocate_pool(self)) {
             GST_ERROR_OBJECT(self, "Failed to allocate buffer pool");
             return FALSE;
         }
 
-        /* Update shm header with pool info */
         auto *header = static_cast<ShmHeader *>(self->priv->shm_ptr);
         header->width = GST_VIDEO_INFO_WIDTH(&self->priv->video_info);
         header->height = GST_VIDEO_INFO_HEIGHT(&self->priv->video_info);
         header->format = (uint32_t)GST_VIDEO_INFO_FORMAT(&self->priv->video_info);
         header->pool_size = self->priv->pool_size;
         header->num_planes = GST_VIDEO_INFO_N_PLANES(&self->priv->video_info);
-        /* Store the actual NVMM pitches from pool buffers */
         for (guint i = 0; i < header->num_planes && i < 4; i++) {
             header->pitches[i] = self->priv->pool[0].surface->surfaceList[0].planeParams.pitch[i];
             header->offsets[i] = self->priv->pool[0].surface->surfaceList[0].planeParams.offset[i];
@@ -343,9 +310,6 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     if (priv->shm_name.empty())
         priv->shm_name = "/nvmm_sink_0";
 
-    /* Resolve whether the metadata side-channel is actually usable: it requires
-       the optional DeepStream bridge to extract NvDsBatchMeta. Without it the
-       property is honored as a no-op (warn once) so pipelines stay portable. */
     priv->meta_active = priv->export_metadata;
 #ifndef NVMM_DEEPSTREAM_META
     if (priv->export_metadata) {
@@ -356,8 +320,6 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     }
 #endif
 
-    /* Shared memory: header (+ optional per-frame metadata region). The pixel
-       data never lives here — it stays in the GPU-copy pool. */
     priv->shm_size = nvmm_shm_segment_size(priv->meta_active);
     priv->shm_fd = shm_open(priv->shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (priv->shm_fd < 0) {
@@ -389,8 +351,6 @@ gst_nvmm_sink_start(GstBaseSink *sink)
     for (int i = 0; i < NVMM_POOL_SIZE; i++)
         header->ref_counts[i] = 0;
 
-    /* Unix socket for fd passing — path derived from shm name */
-    /* Socket path: /tmp/nvmm_<name>.sock (flatten the shm name to avoid subdirectories) */
     std::string flat_name = priv->shm_name;
     for (auto &c : flat_name) { if (c == '/') c = '_'; }
     priv->socket_path = std::string("/tmp/nvmm") + flat_name + ".sock";
@@ -399,7 +359,6 @@ gst_nvmm_sink_start(GstBaseSink *sink)
         fprintf(stderr, "[nvmmsink] socket listen FAILED: %s\n", strerror(errno));
         return FALSE;
     }
-    /* Start accept thread */
     priv->running = true;
     priv->accept_thread = std::thread(accept_loop, self);
 
@@ -417,12 +376,10 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
     auto *self = GST_NVMM_SINK(sink);
     auto *priv = self->priv;
 
-    /* Stop accept thread */
     priv->running = false;
     if (priv->accept_thread.joinable())
         priv->accept_thread.join();
 
-    /* Close client connections */
     {
         std::lock_guard<std::mutex> lock(priv->clients_mutex);
         for (int fd : priv->client_fds)
@@ -430,7 +387,6 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
         priv->client_fds.clear();
     }
 
-    /* Close listen socket */
     if (priv->listen_fd >= 0) {
         close(priv->listen_fd);
         priv->listen_fd = -1;
@@ -440,10 +396,8 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
         priv->socket_path.clear();
     }
 
-    /* Destroy pool */
     destroy_pool(self);
 
-    /* Clean up shm */
     if (priv->shm_ptr && priv->shm_ptr != MAP_FAILED) {
         munmap(priv->shm_ptr, priv->shm_size);
         priv->shm_ptr = nullptr;
@@ -458,6 +412,9 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
     return TRUE;
 }
 
+/// ref_counts -1 is the writer lock (CAS 0 -> -1). NvBufSurfTransform, not NvBufSurfaceCopy:
+/// upstream is BLOCK_LINEAR, the pool PITCH_LINEAR, and NvBufSurfaceCopy does not de-tile.
+/// Meta is written before frame_number is published and shares ref_counts[target].
 static GstFlowReturn
 gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
 {
@@ -468,17 +425,12 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     if (!priv->shm_ptr || !priv->pool_allocated)
         return GST_FLOW_ERROR;
 
-    /* Get NvBufSurface from incoming buffer */
     NvBufSurface *src_surf = get_nvbufsurface_from_buffer(sink, buffer);
     if (!src_surf) {
         GST_WARNING_OBJECT(self, "Buffer is not NVMM — GPU-copy requires NVMM input");
         return GST_FLOW_ERROR;
     }
 
-    /* Find and claim next free pool buffer.
-       Use CAS to atomically set ref_count from 0 to -1 (writer lock).
-       -1 means "being written" — consumers will skip this buffer.
-       After writing, set ref_count back to 0 and update write_idx. */
     int target = -1;
     for (int i = 0; i < priv->pool_size; i++) {
         int idx = (priv->write_idx + 1 + i) % priv->pool_size;
@@ -493,41 +445,26 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
         return GST_FLOW_OK;
     }
 
-    /* GPU copy: incoming → pool[target].
-     *
-     * Use NvBufSurfTransform (VIC), NOT NvBufSurfaceCopy. Upstream NVMM
-     * producers (e.g. nvvidconv, nvv4l2decoder) hand us BLOCK_LINEAR tiled
-     * surfaces, while the pool is allocated PITCH_LINEAR. NvBufSurfaceCopy is a
-     * raw memory copy that does not de-tile, so a block-linear -> pitch-linear
-     * copy scrambles the image. NvBufSurfTransform runs through VIC and converts
-     * layout (and, if ever needed, format/size) correctly. */
     NvBufSurfTransformParams xform;
     memset(&xform, 0, sizeof(xform));
-    xform.transform_flag = 0;  /* full-surface convert; no crop/flip/scale */
+    xform.transform_flag = 0;
     if (NvBufSurfTransform(src_surf, priv->pool[target].surface, &xform)
             != NvBufSurfTransformError_Success) {
         fprintf(stderr, "[nvmmsink] NvBufSurfTransform failed for pool buffer %d\n", target);
-        /* Release writer lock on failure */
         __sync_lock_test_and_set(&header->ref_counts[target], 0);
         return GST_FLOW_ERROR;
     }
 
-    /* Release writer lock (set ref_count from -1 back to 0) and publish */
     __sync_lock_test_and_set(&header->ref_counts[target], 0);
     __sync_synchronize();
 
-    /* Serialize this frame's detections into the metadata slot for `target`
-       BEFORE publishing write_idx/frame_number, so a consumer that observes the
-       new frame_number (past the barrier below) also sees the metadata. Slot
-       `target` is protected by the same ref_counts[target] as the pixels, so the
-       producer won't overwrite it while a consumer is still reading. */
 #ifdef NVMM_DEEPSTREAM_META
     if (priv->meta_active) {
         uint64_t fn = priv->frame_number.load(std::memory_order_relaxed);
         NvmmFrameMeta *slot = nvmm_shm_meta(priv->shm_ptr, (uint32_t)target);
         NvDsBatchMeta *bmeta = gst_buffer_get_nvds_batch_meta(buffer);
         nvmm_frame_meta_from_nvds(
-            bmeta, /*frame_index=*/0,
+            bmeta, 0,
             (uint32_t)GST_VIDEO_INFO_WIDTH(&priv->video_info),
             (uint32_t)GST_VIDEO_INFO_HEIGHT(&priv->video_info),
             fn, slot);
@@ -536,7 +473,7 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
 
     header->write_idx = target;
     header->timestamp_ns = GST_BUFFER_PTS(buffer);
-    header->frame_number = priv->frame_number.fetch_add(1);  /* publishes fn */
+    header->frame_number = priv->frame_number.fetch_add(1);
     __sync_synchronize();
     header->ready = 1;
 
@@ -624,7 +561,6 @@ gst_nvmm_sink_init(GstNvmmSink *self)
     }
 }
 
-/* Plugin registration */
 static gboolean
 plugin_init(GstPlugin *plugin)
 {

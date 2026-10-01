@@ -1,6 +1,3 @@
-/// GstNvmmBufferPool — GStreamer buffer pool for NVMM memory.
-/// Pre-allocates NvBufSurface buffers and recycles them to avoid
-/// per-frame allocation overhead.
 #pragma once
 
 #include <gst/gst.h>
@@ -29,7 +26,6 @@ struct _GstNvmmBufferPoolClass {
 
 GType gst_nvmm_buffer_pool_get_type(void);
 
-/// Create a new NVMM buffer pool.
 GstBufferPool* gst_nvmm_buffer_pool_new(void);
 
 G_END_DECLS

@@ -30,7 +30,7 @@ size_t dtype_size(nvinfer1::DataType t) {
     }
 }
 
-}  // namespace
+}
 
 const char *dtype_str(nvinfer1::DataType t) {
     switch (t) {
@@ -130,4 +130,4 @@ bool TrtEngine::infer(cudaStream_t stream) {
 
 TrtEngine::~TrtEngine() = default;
 
-}  // namespace nvmm
+}

@@ -1,29 +1,5 @@
-/// xfeat_motion.hpp — sparse independent-motion analytics over XFeat matches.
-///
-/// The OpenCV-free replacement for common/dual_homography.hpp. Where the OpenCV
-/// path built a DENSE per-pixel residual map (ORB + dual-homography + warp), this
-/// works on SPARSE matched keypoint pairs from the XFeat/LightGlue matcher:
-///
-///   - GMC: dominant camera translation = MEDIAN of match displacements, with the
-///     tracked box EXCLUDED (so the target's own motion never biases the camera
-///     estimate). Analog of the phaseCorrelate background-dominated peak.
-///   - Independent motion: fit a robust background transform (RANSAC affine) from
-///     matches OUTSIDE a region, then measure the reprojection residual of matches
-///     INSIDE it. Low residual => the region moves with the scene (static); high =>
-///     it moves independently. Analog of the dual-homography residual + minMaxLoc.
-///   - Two references (cur vs -dlt and cur vs -2*dlt) are combined by per-keypoint
-///     MIN residual — a static edge that aligns under one reference but not the
-///     other is rejected. This mirrors the OpenCV cv::min over two warped residuals.
-///   - Motion blob: cluster the independently-moving keypoints (no connected-
-///     components / NPP CCL needed) into a bbox for detector-independent seeding.
-///
-/// IMPORTANT: residuals here are GEOMETRIC pixel displacement (in registration
-/// space, e.g. 480x270), NOT intensity absdiff. The OpenCV thresholds (val_rmin=12,
-/// rmin=12, ...) do NOT transfer — every gate must be re-derived empirically.
-///
-/// Pure host, std-only, OpenCV-free. Header-only, unit-testable off-device.
 #pragma once
-#include "xfeat_register.hpp"   // nvmm::xfeat::Pt2, affine_from_3pts
+#include "xfeat_register.hpp"
 #include <vector>
 #include <array>
 #include <cmath>
@@ -34,13 +10,10 @@ namespace nvmm { namespace motion {
 
 using nvmm::xfeat::Pt2;
 
-/// A matched keypoint pair. `a` is the point in the anchor frame (current), `b` in
-/// the other frame (a past reference). `idx` is the anchor-frame keypoint index, so
-/// the same keypoint can be tied across two reference match-sets (two-ref combine).
+/// `a` is in the anchor (current) frame, `b` in a past reference; `idx` ties a
+/// keypoint across two reference match-sets.
 struct MatchPair { int idx; Pt2 a; Pt2 b; };
 
-/// Axis-aligned box in the same coordinate space as the match points (registration
-/// space). Top-left + dims.
 struct Box {
     double x = 0, y = 0, w = 0, h = 0;
     bool contains(const Pt2& p) const {
@@ -48,31 +21,27 @@ struct Box {
     }
 };
 
-// ---- small helpers ----------------------------------------------------------
-
 inline Pt2 apply_affine(const double M[6], const Pt2& p) {
     return { M[0]*p.x + M[1]*p.y + M[2], M[3]*p.x + M[4]*p.y + M[5] };
 }
 
-/// reprojection residual of a match under a candidate transform M (anchor->ref).
+/// Geometric displacement in registration-space pixels, not intensity absdiff:
+/// thresholds from the dense OpenCV path do not carry over.
 inline double residual(const double M[6], const MatchPair& mp) {
     Pt2 q = apply_affine(M, mp.a);
     double dx = q.x - mp.b.x, dy = q.y - mp.b.y;
     return std::sqrt(dx*dx + dy*dy);
 }
 
-// ---- GMC: median global translation (box excluded) --------------------------
-
 struct GmcEstimate {
-    double dx = 0, dy = 0;   // dominant camera translation (anchor->ref units)
-    double inlier_frac = 0;  // fraction of used matches within `tol` of the median
-    int    n = 0;            // number of matches used (outside the excluded box)
-    bool   ok = false;       // n >= min_n
+    double dx = 0, dy = 0;
+    double inlier_frac = 0;
+    int    n = 0;
+    bool   ok = false;
 };
 
-/// Dominant translation = componentwise median of match displacements, ignoring
-/// matches whose anchor point falls in `exclude` (the tracked target). `tol` is the
-/// displacement agreement radius used only to report an inlier fraction / confidence.
+/// Skips matches inside `exclude` so the target cannot bias the camera
+/// estimate. `tol` only feeds inlier_frac.
 inline GmcEstimate global_translation_median(const std::vector<MatchPair>& m,
                                              const Box* exclude = nullptr,
                                              double tol = 2.0, int min_n = 8) {
@@ -106,16 +75,13 @@ inline GmcEstimate global_translation_median(const std::vector<MatchPair>& m,
     return e;
 }
 
-// ---- RANSAC affine (background model, region excluded) ----------------------
-
 struct AffineFit {
-    double M[6] = {1,0,0, 0,1,0};  // identity default
+    double M[6] = {1,0,0, 0,1,0};
     int    inliers = 0;
-    int    n = 0;                  // candidate matches (outside excluded box)
+    int    n = 0;
     bool   ok = false;
 };
 
-/// deterministic xorshift PRNG (no <random> global state; reproducible for tests).
 struct Rng {
     uint32_t s;
     explicit Rng(uint32_t seed = 0x9e3779b9u) : s(seed ? seed : 0x9e3779b9u) {}
@@ -123,10 +89,8 @@ struct Rng {
     int below(int n) { return n <= 0 ? 0 : (int)(next() % (uint32_t)n); }
 };
 
-/// Robust background transform fit from matches OUTSIDE `exclude`, mirroring
-/// findHomography(..., RANSAC) on the background. Affine (6-DOF): sparse matches
-/// rarely justify an 8-DOF homography, and camera motion on a distant background is
-/// well-approximated by affine. `tol` = inlier reprojection threshold (px).
+/// Affine, not homography: sparse matches rarely support 8 DOF and a distant
+/// background moves close to affinely. `tol` is the inlier threshold in pixels.
 inline AffineFit ransac_affine(const std::vector<MatchPair>& m,
                                const Box* exclude = nullptr,
                                int iters = 200, double tol = 2.0,
@@ -143,7 +107,6 @@ inline AffineFit ransac_affine(const std::vector<MatchPair>& m,
     int best_inl = -1;
     double bestM[6];
     for (int it = 0; it < iters; ++it) {
-        // sample 3 distinct candidates
         int i0 = cand[rng.below(fit.n)];
         int i1 = cand[rng.below(fit.n)];
         int i2 = cand[rng.below(fit.n)];
@@ -164,17 +127,12 @@ inline AffineFit ransac_affine(const std::vector<MatchPair>& m,
     return fit;
 }
 
-// ---- region residual (independent-motion test) ------------------------------
-
 struct RegionResidual {
-    double max_resid = 0;  // largest reprojection residual among in-box matches
-    int    n = 0;          // number of in-box matches contributing
-    bool   ok = false;     // n >= min_in_box (else "no verdict")
+    double max_resid = 0;
+    int    n = 0;
+    bool   ok = false;
 };
 
-/// Max reprojection residual of matches whose anchor point lies in `box`, under the
-/// background transform `M`. Analog of cv::minMaxLoc max over the rad-4 ROI. High =>
-/// the region moves independently of the background.
 inline RegionResidual region_max_residual(const double M[6],
                                           const std::vector<MatchPair>& m,
                                           const Box& box, int min_in_box = 3) {
@@ -188,17 +146,13 @@ inline RegionResidual region_max_residual(const double M[6],
     return r;
 }
 
-/// Two-reference combine: for each ANCHOR keypoint present in BOTH match-sets, take
-/// MIN of its residual under the two background transforms; then report the MAX over
-/// in-box keypoints of that per-keypoint min. Mirrors OpenCV cv::min over the two
-/// warped residuals then minMaxLoc. A keypoint present in only one set is skipped
-/// (it did not survive both references — cannot corroborate independent motion).
+/// Takes each keypoint's min residual over the two references, so a static edge
+/// aligned under either is rejected. Keypoints missing from either set are skipped.
 inline RegionResidual region_max_residual_2ref(const double Ma[6],
                                                const std::vector<MatchPair>& ma,
                                                const double Mb[6],
                                                const std::vector<MatchPair>& mb,
                                                const Box& box, int min_in_box = 3) {
-    // residual-by-anchor-index for the second set
     std::vector<std::pair<int,double>> rb;
     rb.reserve(mb.size());
     for (const auto& mp : mb) if (box.contains(mp.a)) rb.push_back({mp.idx, residual(Mb, mp)});
@@ -206,13 +160,13 @@ inline RegionResidual region_max_residual_2ref(const double Ma[6],
     auto find_b = [&](int idx) -> double {
         auto lo = std::lower_bound(rb.begin(), rb.end(), std::make_pair(idx, -1e300));
         if (lo != rb.end() && lo->first == idx) return lo->second;
-        return -1.0;  // absent
+        return -1.0;
     };
     RegionResidual r;
     for (const auto& mp : ma) {
         if (!box.contains(mp.a)) continue;
         double rbv = find_b(mp.idx);
-        if (rbv < 0) continue;                       // must survive both references
+        if (rbv < 0) continue;
         double comb = std::min(residual(Ma, mp), rbv);
         r.max_resid = std::max(r.max_resid, comb);
         r.n++;
@@ -221,14 +175,8 @@ inline RegionResidual region_max_residual_2ref(const double Ma[6],
     return r;
 }
 
-// ---- combined two-reference residual list (for the target gate) --------------
+struct ResidPt { Pt2 pt; double resid; };
 
-struct ResidPt { Pt2 pt; double resid; };  // anchor point + combined 2-ref residual
-
-/// Per-anchor combined residual over the WHOLE frame (not a single box): for each
-/// anchor keypoint present in BOTH match-sets, the MIN of its residual under the two
-/// background transforms. `pt` is the anchor coordinate (registration space). The
-/// target gate samples this list near det centers and clusters it for motion blobs.
 inline std::vector<ResidPt> combined_residuals_2ref(const double Ma[6],
                                                     const std::vector<MatchPair>& ma,
                                                     const double Mb[6],
@@ -241,35 +189,29 @@ inline std::vector<ResidPt> combined_residuals_2ref(const double Ma[6],
     out.reserve(ma.size());
     for (const auto& mp : ma) {
         auto lo = std::lower_bound(rb.begin(), rb.end(), std::make_pair(mp.idx, -1e300));
-        if (lo == rb.end() || lo->first != mp.idx) continue;   // must survive both refs
+        if (lo == rb.end() || lo->first != mp.idx) continue;
         out.push_back({ mp.a, std::min(residual(Ma, mp), lo->second) });
     }
     return out;
 }
 
-// ---- motion blob (cluster of independently-moving keypoints) ----------------
-
 struct MotionBlob {
-    Box  box;         // bbox of the largest independently-moving cluster (anchor coords)
-    int  n = 0;       // keypoints in the cluster
+    Box  box;
+    int  n = 0;
     bool ok = false;
 };
 
-/// Cluster the ANCHOR points whose residual under `M` exceeds `resid_thresh` into
-/// grid cells of side `cell`, union-find over 8-connected occupied cells, and return
-/// the bbox of the largest cluster if it has >= `min_pts`. Replaces
-/// connectedComponentsWithStats (NPP has no CCL) on sparse points directly.
+/// Union-find over 8-connected `cell`-sized grid cells, in place of connected
+/// components (NPP has no CCL).
 inline MotionBlob cluster_moving(const std::vector<MatchPair>& m, const double M[6],
                                  double resid_thresh, int min_pts = 4, double cell = 16.0) {
     MotionBlob out;
-    // moving points (anchor coords) + their cell coords
     std::vector<Pt2> pts;
     for (const auto& mp : m)
         if (residual(M, mp) >= resid_thresh) pts.push_back(mp.a);
     const int n = (int)pts.size();
     if (n < min_pts) return out;
 
-    // union-find over points; connect points whose cells are within 1 (8-neighbourhood)
     std::vector<int> parent(n);
     for (int i = 0; i < n; ++i) parent[i] = i;
     auto find = [&](int i){ while (parent[i]!=i){ parent[i]=parent[parent[i]]; i=parent[i]; } return i; };
@@ -279,7 +221,6 @@ inline MotionBlob cluster_moving(const std::vector<MatchPair>& m, const double M
             if (std::fabs(pts[i].x - pts[j].x) <= cell && std::fabs(pts[i].y - pts[j].y) <= cell)
                 unite(i, j);
         }
-    // largest component
     std::vector<int> cnt(n, 0);
     for (int i = 0; i < n; ++i) cnt[find(i)]++;
     int root = -1, best = 0;
@@ -297,4 +238,4 @@ inline MotionBlob cluster_moving(const std::vector<MatchPair>& m, const double M
     return out;
 }
 
-}} // namespace nvmm::motion
+}}

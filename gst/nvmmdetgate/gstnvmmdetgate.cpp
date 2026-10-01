@@ -1,24 +1,9 @@
-/// nvmmdetgate — autonomous target-seed gate for the YOLO→SAMURAI pipeline.
-///
-/// Sits between nvmminfer and nvmmsamurai. The target-trained YOLO fires on the target
-/// AND on static terrain / sky haze, so SAMURAI's auto-seed cannot tell them apart on
-/// hard clips. This element FILTERS the GstNvmmDetMeta to the single detection that is
-/// independently MOVING — confirmed by dual-homography residual (terrain backgrounds)
-/// or high-confidence sky-diff motion (sky backgrounds), held for KSUP frames (see
-/// DetGate / scripts/yolo_dualh_seed.py). Until a target is confirmed it emits ZERO
-/// detections, so SAMURAI never seeds on terrain; once confirmed it passes exactly the
-/// target det, so SAMURAI's existing auto-seed (and fusekf reseed) lock the real target.
-/// SAMURAI and nvmmfusekf are unchanged.
-///
-/// The expensive ORB+homography runs only while SEARCHING; once locked the gate just
-/// associates YOLO dets to the lock (cheap). It maps the NVMM Y plane via a VIC
-/// downscale + CPU map (same pattern as nvmmsamurai's GMC).
 #include "config.h"
 #include "nvmm_det_meta.h"
 #include "gstnvmmallocator.h"
 #include "detgate.hpp"
-#include "xfeat_matcher.hpp"   // gst/common: nvmm::XfeatMatcher / XfeatFrame
-#include "xfeat_motion.hpp"    // gst/common: ransac_affine / combined_residuals_2ref
+#include "xfeat_matcher.hpp"
+#include "xfeat_motion.hpp"
 
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
@@ -38,24 +23,22 @@ G_DECLARE_FINAL_TYPE(GstNvmmDetGate, gst_nvmm_detgate, GST, NVMM_DETGATE, GstBas
 
 struct _GstNvmmDetGate {
     GstBaseTransform parent;
-    /* props */
-    gchar  *engine_dir;   /* dir holding xfeat.engine + lightglue.engine */
+    gchar  *engine_dir;
     gint   target_class;
     gdouble min_conf;
-    gint   ds_factor;     /* (v1 unused: matcher works in fixed registration space) */
+    gint   ds_factor;
     gint   dlt;
     gdouble rmin, rminsky, confsky, dist;
     gint   amin, ksup, maxlost;
-    gdouble borderfrac;   /* border reject (0 = off, reversible) */
-    gboolean enabled;     /* false = pure passthrough (no filtering) */
-    gboolean seed_on_motion; /* seed SAMURAI from a motion blob when YOLO is silent */
-    gint    motion_silent;   /* YOLO-silent frames before motion-seeding activates */
-    gdouble motion_rmin;     /* residual threshold for a motion blob */
-    /* state */
+    gdouble borderfrac;
+    gboolean enabled;
+    gboolean seed_on_motion;
+    gint    motion_silent;
+    gdouble motion_rmin;
     nvmm::DetGate *gate;
-    nvmm::XfeatMatcher *matcher;          /* XFeat+LightGlue (owns engines + stream) */
+    nvmm::XfeatMatcher *matcher;
     gboolean matcher_ready;
-    std::deque<nvmm::XfeatFrame> *hist;   /* rolling per-frame features (two past refs) */
+    std::deque<nvmm::XfeatFrame> *hist;
     guint64 frame_no;
     gboolean announced;
 };
@@ -78,13 +61,13 @@ static GstStaticPadTemplate src_tmpl = GST_STATIC_PAD_TEMPLATE(
                     "width=(int)[32,8192], height=(int)[32,8192], "
                     "framerate=(fraction)[0/1, 240/1]"));
 
+/// DeepStream-style NVMM buffers map to an NvBufSurface struct and lack this
+/// allocator's tag.
 static NvBufSurface *surface_of(GstBuffer *buf)
 {
     GstMemory *m = gst_buffer_peek_memory(buf, 0);
     if (m && gst_is_nvmm_memory(m))
         return static_cast<NvBufSurface *>(gst_nvmm_memory_get_surface(m));
-    /* Fallback (matches nvmmsamurai): DeepStream-style NVMM buffers map to an
-       NvBufSurface struct rather than carrying our allocator's nvmm tag. */
     GstMapInfo map;
     if (m && gst_buffer_map(buf, &map, GST_MAP_READ)) {
         auto *s = reinterpret_cast<NvBufSurface *>(map.data);
@@ -94,6 +77,9 @@ static NvBufSurface *surface_of(GstBuffer *buf)
     return nullptr;
 }
 
+/// Emits no dets until a target is confirmed, then exactly one, so SAMURAI never seeds
+/// on terrain. Motion strength is the per-anchor minimum residual over two RANSAC
+/// background affines. Det infer_w/h equal the frame size, so no rescale is needed.
 static GstFlowReturn
 gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
@@ -108,7 +94,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     const int surfW = (int)surf->surfaceList[0].width;
     const int surfH = (int)surf->surfaceList[0].height;
 
-    /* lazy-init the XFeat matcher + gate on the first frame */
     if (!self->matcher_ready) {
         if (!self->engine_dir || !*self->engine_dir) {
             GST_ERROR_OBJECT(self, "engine-dir not set; passthrough");
@@ -123,8 +108,8 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         }
         self->matcher_ready = TRUE;
         nvmm::GateCfg cfg;
-        cfg.dlt = self->dlt; cfg.rmin = (float)self->rmin;
-        cfg.rminsky = (float)self->rminsky; cfg.confsky = (float)self->confsky;
+        cfg.rmin = (float)self->rmin;
+        cfg.confsky = (float)self->confsky;
         cfg.dist = (float)self->dist; cfg.amin = self->amin; cfg.ksup = self->ksup;
         cfg.maxlost = self->maxlost; cfg.borderfrac = (float)self->borderfrac;
         cfg.seed_on_motion = self->seed_on_motion; cfg.motion_silent = self->motion_silent;
@@ -133,7 +118,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         GST_INFO_OBJECT(self, "init: surf %dx%d, XFeat matcher ready", surfW, surfH);
     }
 
-    /* extract this frame's features + keep a rolling history (two past references) */
     self->hist->emplace_back();
     nvmm::XfeatFrame &cur = self->hist->back();
     { std::string e; if (!self->matcher->extract(surf, cur, e))
@@ -141,7 +125,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     const size_t need = (size_t)2 * self->dlt + 1;
     while (self->hist->size() > need) self->hist->pop_front();
 
-    /* collect target-class detections in SURFACE coords (DetMeta is inference coords) */
     std::vector<nvmm::GateDet> dets;
     if (det && det->num_objects) {
         const float sx = det->infer_width  ? (float)surfW / det->infer_width  : 1.f;
@@ -156,9 +139,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         }
     }
 
-    /* independent-motion residuals: match cur against the two past references, fit a
-       background affine per reference (RANSAC rejects movers as outliers), take the
-       per-anchor MIN residual, and convert to surface coords -> MotionSample list. */
     int keep = -1;
     if ((int)self->hist->size() >= (int)need && self->matcher_ready && !cur.empty()) {
         const auto &h = *self->hist;
@@ -167,11 +147,11 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         std::vector<nvmm::motion::MatchPair> mA, mB; std::string me;
         std::vector<nvmm::MotionSample> motion;
         if (self->matcher->match(cur, refA, mA, me) && self->matcher->match(cur, refB, mB, me)) {
-            auto fA = nvmm::motion::ransac_affine(mA);   // global background (no exclusion)
+            auto fA = nvmm::motion::ransac_affine(mA);
             auto fB = nvmm::motion::ransac_affine(mB);
             if (fA.ok && fB.ok) {
                 auto rp = nvmm::motion::combined_residuals_2ref(fA.M, mA, fB.M, mB);
-                const double isx = (double)surfW / nvmm::XfeatMatcher::kRW;  // reg -> surface
+                const double isx = (double)surfW / nvmm::XfeatMatcher::kRW;
                 const double isy = (double)surfH / nvmm::XfeatMatcher::kRH;
                 motion.reserve(rp.size());
                 for (const auto &r : rp)
@@ -181,7 +161,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         keep = self->gate->update(motion, dets, surfW, surfH);
     }
 
-    /* FILTER DetMeta: until a target is confirmed, emit ZERO dets; then exactly one. */
     if (det) {
         float scx, scy, sw, sh;
         if (keep >= 0 && keep < (int)det->num_objects) {
@@ -193,9 +172,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
                 self->announced = TRUE;
             }
         } else if (keep == -2 && self->gate && self->gate->synth_seed(scx, scy, sw, sh)) {
-            /* SEED-ON-MOTION: YOLO was silent; synthesize one det from the confirmed
-               motion blob (surface coords; DetMeta infer_w/h == frame size, so scale 1)
-               so SAMURAI auto-seeds the big mover the detector can't name. */
             NvmmDetObject &o = det->objects[0];
             o.left = scx - sw / 2.f; o.top = scy - sh / 2.f; o.width = sw; o.height = sh;
             o.class_id = self->target_class; o.confidence = 0.90f; o.tracker_id = 0;
@@ -273,9 +249,7 @@ static void gst_nvmm_detgate_finalize(GObject *o) {
     G_OBJECT_CLASS(gst_nvmm_detgate_parent_class)->finalize(o);
 }
 
-/* Teardown: nvmmfusekf sends an upstream "nvmm-reset" when a track is torn down
-   (parked on edge clutter / target gone). Un-latch the gate so it re-acquires.
-   Do NOT consume — other elements upstream may also want it. */
+/// Never consume nvmm-reset: other upstream elements may want it too.
 static gboolean
 gst_nvmm_detgate_src_event(GstBaseTransform *bt, GstEvent *ev)
 {

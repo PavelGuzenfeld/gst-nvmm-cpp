@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmallocator.h"
 
@@ -10,7 +10,6 @@
 
 static gboolean plugin_init(GstPlugin* plugin) {
     (void)plugin;
-    /* Register the allocator type — this makes it discoverable */
     GstAllocator* alloc = gst_nvmm_allocator_new(0);
     gst_allocator_register(GST_NVMM_MEMORY_TYPE, alloc);
     return TRUE;

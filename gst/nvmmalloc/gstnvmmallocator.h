@@ -1,5 +1,3 @@
-/// GstNvmmAllocator — GStreamer allocator for NVMM (NvBufSurface) memory.
-/// C header for GObject type registration. Implementation is C++17.
 #pragma once
 
 #include <gst/gst.h>
@@ -18,7 +16,6 @@ G_BEGIN_DECLS
 typedef struct _GstNvmmAllocator GstNvmmAllocator;
 typedef struct _GstNvmmAllocatorClass GstNvmmAllocatorClass;
 
-/// Opaque C++ impl pointer
 typedef struct _GstNvmmAllocatorPrivate GstNvmmAllocatorPrivate;
 
 struct _GstNvmmAllocator {
@@ -32,42 +29,24 @@ struct _GstNvmmAllocatorClass {
 
 GType gst_nvmm_allocator_get_type(void);
 
-/// Create a new NVMM allocator with the specified memory type.
-/// mem_type: 0=default, 4=surface_array (Jetson), 6=system (mock/test)
+/// `mem_type`: 0 = default, 4 = surface array (Jetson), 6 = system (mock/test).
 GstAllocator* gst_nvmm_allocator_new(int mem_type);
 
-/// Allocate NVMM memory with explicit video format and dimensions.
-/// Preferred over gst_allocator_alloc() which guesses dimensions from size.
-/// @param allocator  GstNvmmAllocator
-/// @param format     GStreamer video format (e.g. GST_VIDEO_FORMAT_NV12)
-/// @param width      Frame width in pixels
-/// @param height     Frame height in pixels
-/// @return GstMemory or NULL on failure
+/// The allocator has no alloc(size) path; use this or the buffer pool.
 GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
                                            int format,
                                            guint width, guint height);
 
-/// Check if a GstMemory was allocated by the NVMM allocator.
 gboolean gst_is_nvmm_memory(GstMemory* mem);
 
-/// Get the NvBufSurface* from a GstMemory allocated by GstNvmmAllocator.
-/// Returns NULL if the memory is not NVMM.
 void* gst_nvmm_memory_get_surface(GstMemory* mem);
 
-/// Map a specific plane of NVMM memory for CPU access.
-/// NVMM memory is NOT directly mappable via gst_memory_map() because
-/// planes are not contiguous on Jetson SURFACE_ARRAY. Use this instead.
-/// @param mem    GstMemory allocated by GstNvmmAllocator
-/// @param plane  Plane index (0 for Y, 1 for UV in NV12, etc.)
-/// @param flags  GST_MAP_READ or GST_MAP_WRITE
-/// @param data   [out] Pointer to mapped plane data
-/// @param size   [out] Size of the mapped plane in bytes
-/// @return TRUE on success, FALSE on error
+/// For CPU access: gst_memory_map() returns the NvBufSurface*, and planes are
+/// not contiguous on SURFACE_ARRAY.
 gboolean gst_nvmm_memory_map_plane(GstMemory* mem, guint plane,
                                     GstMapFlags flags,
                                     guint8** data, gsize* size);
 
-/// Unmap previously mapped NVMM memory planes.
 void gst_nvmm_memory_unmap_plane(GstMemory* mem);
 
 G_END_DECLS

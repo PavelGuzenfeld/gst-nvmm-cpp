@@ -25,7 +25,7 @@ const char *const kCoco80[] = {
 constexpr int kCocoCount = (int)(sizeof(kCoco80) / sizeof(kCoco80[0]));
 
 struct Det {
-    float x1, y1, x2, y2;  // frame-pixel space
+    float x1, y1, x2, y2;
     float score;
     int   cls;
 };
@@ -39,7 +39,7 @@ float iou(const Det &a, const Det &b) {
     return ua > 0.f ? inter / ua : 0.f;
 }
 
-}  // namespace
+}
 
 const char *coco_label(int id) {
     return (id >= 0 && id < kCocoCount) ? kCoco80[id] : "";
@@ -55,7 +55,6 @@ uint32_t yolo_parse(const float *output, const YoloParams &p, const LetterboxInf
     cands.reserve(256);
 
     for (int i = 0; i < N; i++) {
-        // Best class for this proposal (channels-first: out[c*N + i]).
         int best = -1;
         float best_s = p.conf_threshold;
         for (int k = 0; k < C; k++) {
@@ -67,7 +66,6 @@ uint32_t yolo_parse(const float *output, const YoloParams &p, const LetterboxInf
         const float cx = output[0 * N + i], cy = output[1 * N + i];
         const float w  = output[2 * N + i], h  = output[3 * N + i];
 
-        // Network space -> frame pixels (undo letterbox), then clamp.
         float x1 = (cx - w * 0.5f - lb.pad_x) * inv_scale;
         float y1 = (cy - h * 0.5f - lb.pad_y) * inv_scale;
         float x2 = (cx + w * 0.5f - lb.pad_x) * inv_scale;
@@ -81,7 +79,6 @@ uint32_t yolo_parse(const float *output, const YoloParams &p, const LetterboxInf
         cands.push_back(Det{x1, y1, x2, y2, best_s, best});
     }
 
-    // Greedy per-class NMS: sort by score desc, suppress same-class overlaps.
     std::sort(cands.begin(), cands.end(),
               [](const Det &a, const Det &b) { return a.score > b.score; });
 
@@ -105,7 +102,7 @@ uint32_t yolo_parse(const float *output, const YoloParams &p, const LetterboxInf
         o.height = cands[a].y2 - cands[a].y1;
         o.class_id = cands[a].cls;
         o.confidence = cands[a].score;
-        o.tracker_id = 0;  // no tracker at the detector stage
+        o.tracker_id = 0;
         std::strncpy(o.label, coco_label(cands[a].cls), NVMM_META_LABEL_LEN - 1);
         o.label[NVMM_META_LABEL_LEN - 1] = '\0';
     }
@@ -114,4 +111,4 @@ uint32_t yolo_parse(const float *output, const YoloParams &p, const LetterboxInf
     return kept;
 }
 
-}  // namespace nvmm
+}

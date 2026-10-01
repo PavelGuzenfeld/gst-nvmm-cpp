@@ -1,11 +1,3 @@
-/// GstNvmmInfer — DeepStream-free TensorRT inference on NVMM frames.
-///
-/// Passthrough transform: the NV12 NVMM frame flows downstream unchanged
-/// (zero-copy); each frame is preprocessed (VIC resize/convert + NPP
-/// normalize/planarize), run through a TensorRT engine on DLA/GPU, and the
-/// parsed detections are attached as a GstNvmmDetMeta. No DeepStream dependency.
-///
-/// Phase 1: single detector engine -> det_meta. See docs/B5_NVMMINFER_DESIGN.md.
 #pragma once
 
 #include <gst/gst.h>

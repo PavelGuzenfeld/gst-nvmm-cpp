@@ -1,9 +1,3 @@
-/// samurai_consts.hpp — loader for the packed SAMURAI out-of-engine constants
-/// (samurai_consts.bin, produced by pack_consts.py). Header-only; host-side only.
-///
-/// .bin format (little-endian):
-///   u32 magic 0x5341434E ('SACN'), u32 count
-///   per tensor: u32 name_len, name bytes, u32 ndim, ndim*u32 dims, f32 data
 #pragma once
 
 #include <cstdint>
@@ -16,12 +10,14 @@ namespace nvmm {
 
 struct ConstTensor {
     std::vector<int>   shape;
-    std::vector<float> data;   // row-major
+    std::vector<float> data;
     size_t count() const { return data.size(); }
 };
 
 class SamuraiConsts {
 public:
+    /// Little-endian: u32 magic 0x5341434E (SACN), u32 count; per tensor u32 name_len,
+    /// name bytes, u32 ndim, ndim*u32 dims, row-major f32 data.
     bool load(const std::string &path, std::string &err)
     {
         std::FILE *f = std::fopen(path.c_str(), "rb");
@@ -72,4 +68,4 @@ private:
     std::map<std::string, ConstTensor> tensors_;
 };
 
-}  // namespace nvmm
+}

@@ -3,8 +3,6 @@ thread_dep = dependency('threads')
 
 nvmmsink_deps = [nvmm_common_dep, gstnvmmalloc_dep, gst_video_dep, rt_dep, thread_dep]
 if have_deepstream_meta
-  # Pulls the NVMM_DEEPSTREAM_META define + nvdsmeta/gstnvdsmeta headers + libs so
-  # the producer can read NvDsBatchMeta from incoming buffers.
   nvmmsink_deps += [nvds_meta_dep]
 endif
 

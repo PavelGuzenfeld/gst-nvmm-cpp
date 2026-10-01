@@ -1,9 +1,3 @@
-/// GstNvmmFlowStats — example consumer of NvmmOpticalFlowMeta.
-///
-/// A sink that reads the per-frame optical-flow field attached by `nvmmofa`,
-/// computes mean/max motion-vector magnitude (in pixels), and logs it —
-/// demonstrating that the flow metadata travels and is consumable downstream.
-/// No VPI dependency: it reads the host flow buffer in the meta directly.
 #pragma once
 
 #include <gst/gst.h>

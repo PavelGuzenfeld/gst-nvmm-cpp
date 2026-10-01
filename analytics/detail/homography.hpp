@@ -1,15 +1,3 @@
-/// Robust homography estimation for the dual-homography residual — the part of
-/// cv::findHomography(..., RANSAC) this project actually uses.
-///
-/// Hartley-normalised 4-point DLT, with the null vector taken from a cyclic
-/// Jacobi eigen-decomposition of the 9x9 normal matrix AᵀA (no general SVD
-/// needed at this size), inside a fixed-seed RANSAC loop with the adaptive
-/// iteration bound. Deterministic by construction — unlike OpenCV's RANSAC —
-/// so tests can assert on exact behaviour. No Levenberg-Marquardt polish; the
-/// final model is a least-squares DLT refit on the consensus set, which is
-/// enough for residual gating (validated against OpenCV in the golden tests).
-///
-/// Pure C++14, header-only, no dependencies.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -25,7 +13,7 @@ struct Pt {
 };
 
 struct Mat3 {
-    // row-major
+    /// Row-major.
     double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 
     static Mat3 identity() { return Mat3(); }
@@ -61,7 +49,7 @@ struct Mat3 {
         return r;
     }
 
-    /// Project (x, y, 1); false when the point maps to infinity.
+    /// False when the point maps to infinity.
     bool project(double x, double y, double &u, double &v) const {
         const double w = m[6] * x + m[7] * y + m[8];
         if (std::abs(w) < 1e-12) return false;
@@ -71,7 +59,7 @@ struct Mat3 {
     }
 };
 
-/// Smallest-eigenvalue eigenvector of a symmetric 9x9 matrix (cyclic Jacobi).
+/// Cyclic Jacobi on the 9x9 normal matrix AtA; no general SVD needed at this size.
 inline void min_eigenvector9(double a[9][9], double v_out[9])
 {
     double v[9][9] = {};
@@ -111,7 +99,7 @@ inline void min_eigenvector9(double a[9][9], double v_out[9])
     for (int i = 0; i < 9; i++) v_out[i] = v[i][best];
 }
 
-/// Hartley normalisation: translate centroid to origin, scale mean distance to sqrt(2).
+/// Hartley normalisation: centroid to origin, mean distance sqrt(2).
 inline Mat3 normalize_points(const std::vector<Pt> &pts, const std::vector<int> &idx,
                              std::vector<Pt> &out)
 {
@@ -137,7 +125,6 @@ inline Mat3 normalize_points(const std::vector<Pt> &pts, const std::vector<int> 
     return t;
 }
 
-/// Least-squares DLT over the selected correspondences. False on degenerate input.
 inline bool fit_homography_dlt(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
                                const std::vector<int> &idx, Mat3 &H)
 {
@@ -170,7 +157,6 @@ inline bool fit_homography_dlt(const std::vector<Pt> &p1, const std::vector<Pt> 
     return true;
 }
 
-/// Any 3 of the 4 sample points (nearly) collinear => degenerate sample.
 inline bool sample_degenerate(const std::vector<Pt> &p, const int s[4])
 {
     for (int a = 0; a < 2; a++)
@@ -184,7 +170,6 @@ inline bool sample_degenerate(const std::vector<Pt> &p, const int s[4])
     return false;
 }
 
-/// Deterministic LCG (numerical-recipes constants) for RANSAC sampling.
 class Lcg {
 public:
     explicit Lcg(uint32_t seed) : s_(seed ? seed : 1u) {}
@@ -195,10 +180,8 @@ private:
     uint32_t s_;
 };
 
-/// RANSAC homography p1 -> p2 (forward reprojection error, adaptive iteration
-/// bound, confidence 0.995, <= 2000 iterations, fixed seed). On success the
-/// final H is a least-squares refit on the consensus set and `inliers` is
-/// recomputed from it.
+/// Fixed-seed RANSAC with the adaptive bound (confidence 0.995, <= 2000 iterations), so
+/// tests can assert exact behaviour. Final H is a least-squares DLT refit on the inliers.
 inline bool find_homography_ransac(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
                                    double thresh, Mat3 &H, std::vector<uint8_t> &inliers,
                                    uint32_t seed = 0x5A17u)
@@ -241,8 +224,6 @@ inline bool find_homography_ransac(const std::vector<Pt> &p1, const std::vector<
         if (cnt > best_cnt) {
             best_cnt = cnt;
             best_H = M;
-            // adaptive bound: enough iterations to hit an all-inlier sample
-            // with 99.5% confidence given the observed inlier ratio
             const double w = (double)cnt / n;
             const double p_good = w * w * w * w;
             if (p_good > 1e-9) {
@@ -270,6 +251,6 @@ inline bool find_homography_ransac(const std::vector<Pt> &p1, const std::vector<
     return true;
 }
 
-}  // namespace detail
-}  // namespace motion
-}  // namespace nvmm
+}
+}
+}

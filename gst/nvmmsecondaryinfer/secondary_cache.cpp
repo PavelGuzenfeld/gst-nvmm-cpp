@@ -38,4 +38,4 @@ void SecondaryCache::expire(uint64_t frame_no)
     }
 }
 
-}  // namespace nvmm
+}

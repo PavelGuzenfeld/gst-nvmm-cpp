@@ -1,16 +1,12 @@
-/// Shared GstMeta API-type registration for the nvmm metas.
 #pragma once
 
 #include <gst/gst.h>
 
 G_BEGIN_DECLS
 
-/// Register (or reuse) a meta API GType by name. Defensive: nvmm_common is a
-/// shared lib in-tree (one copy/process), but a test harness or out-of-tree
-/// consumer may still static-link a second copy. gst_meta_api_type_register()
-/// is NOT idempotent, so reuse an existing registration; if we still lose a
-/// concurrent race, re-look-up the winner's type (the register call returns 0
-/// on a duplicate name). Callers keep their own g_once around this.
+/// gst_meta_api_type_register() is not idempotent and a second static copy of
+/// this lib may exist, so reuse an existing type and re-look-up after losing a
+/// race (register returns 0 on a duplicate name). Callers still wrap it in g_once.
 static inline GType
 nvmm_meta_api_register_once(const gchar *name, const gchar **tags)
 {

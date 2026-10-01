@@ -1,12 +1,3 @@
-// XFeat sparse detectAndCompute port (host C++), faithful to
-// the upstream XFeat modules xfeat.py + interpolator.py.
-//
-// Pipeline (post-net): normalize(feats) -> get_kpts_heatmap (softmax65 + pixel-shuffle)
-//  -> NMS (5x5 maxpool + thr + nonzero) -> reliability score (nearest(K1h)*bilinear(H1))
-//  -> argsort top_k -> bicubic grid_sample descriptors -> L2-norm -> scale by (rw,rh).
-//
-// Vendored from ../gst-nvmm-ostrack/src/ostrack_xfeat_sparse.hpp (namespace
-// ostrack::xfeat -> nvmm::xfeat). Pure host, std-only, OpenCV-free.
 #pragma once
 #include <vector>
 #include <cmath>
@@ -16,10 +7,8 @@
 
 namespace nvmm { namespace xfeat {
 
-// ---- Stage A: get_kpts_heatmap ----------------------------------------------
-// kpts: (65, Hc, Wc) row-major (channel-major: kpts[c*Hc*Wc + h*Wc + w]).
-// out:  (Hc*8, Wc*8) row-major. softmax over all 65 channels, keep 64, then the
-// (Hc,Wc,8,8)->(Hc,8,Wc,8) pixel-shuffle: out[h*8+a, w*8+d] = softmax_c[a*8+d].
+/// Port of XFeat xfeat.py. `kpts` is (65, Hc, Wc) channel-major: softmax over
+/// 65 channels, keep 64, pixel-shuffle to (Hc*8, Wc*8).
 inline std::vector<float> get_kpts_heatmap(const float* kpts, int Hc, int Wc,
                                            float softmax_temp = 1.0f) {
     const int C = 65;
@@ -29,12 +18,10 @@ inline std::vector<float> get_kpts_heatmap(const float* kpts, int Hc, int Wc,
     for (int h = 0; h < Hc; ++h) {
         for (int w = 0; w < Wc; ++w) {
             const int base = h * Wc + w;
-            // softmax denominator over all 65 channels (numerically stabilized)
             float mx = -1e30f;
             for (int c = 0; c < C; ++c) mx = std::max(mx, kpts[(size_t)c * HW + base] * softmax_temp);
             float denom = 0.f;
             for (int c = 0; c < C; ++c) denom += std::exp(kpts[(size_t)c * HW + base] * softmax_temp - mx);
-            // first 64 channels -> 8x8 block
             for (int a = 0; a < 8; ++a) {
                 for (int d = 0; d < 8; ++d) {
                     const int c = a * 8 + d;
@@ -47,9 +34,7 @@ inline std::vector<float> get_kpts_heatmap(const float* kpts, int Hc, int Wc,
     return out;
 }
 
-// ---- Stage B: NMS (5x5 maxpool stride1 pad2 + threshold + nonzero) ----------
-// x: (H,W) row-major. Returns keypoints as (x,y) int pairs in raster order
-// (torch nonzero yields row-major (row,col); .flip(-1) -> (col,row)=(x,y)).
+/// nms() returns (x, y) in raster order, like torch nonzero().flip(-1).
 struct KptI { int x, y; };
 inline std::vector<KptI> nms(const float* x, int H, int W,
                              float threshold = 0.05f, int kernel = 5) {
@@ -59,9 +44,6 @@ inline std::vector<KptI> nms(const float* x, int H, int W,
         for (int c = 0; c < W; ++c) {
             const float v = x[(size_t)r * W + c];
             if (!(v > threshold)) continue;
-            // local max over kxk window (clamped, matching MaxPool2d zero-pad: pad
-            // adds zeros but since v>thr>0 and we compare equality to the max of the
-            // real window, zero-pad never raises the max above an interior value).
             float lm = -1e30f;
             for (int dr = -pad; dr <= pad; ++dr) {
                 const int rr = r + dr; if (rr < 0 || rr >= H) continue;
@@ -70,15 +52,13 @@ inline std::vector<KptI> nms(const float* x, int H, int W,
                     lm = std::max(lm, x[(size_t)rr * W + cc]);
                 }
             }
-            if (v == lm) kpts.push_back({c, r});  // (x=col, y=row)
+            if (v == lm) kpts.push_back({c, r});
         }
     }
     return kpts;
 }
 
-// ---- grid_sample helpers (align_corners=False, padding_mode='zeros') --------
-// Sample a (C,Ht,Wt) tensor at keypoint (px,py), where positions are normalized by
-// (normH,normW): combined coord ix = px*Wt/(normW-1) - 0.5, iy = py*Ht/(normH-1) - 0.5.
+/// torch grid_sample with align_corners=False and zero padding.
 inline void gs_coord(int px, int py, int Ht, int Wt, int normH, int normW,
                      double& ix, double& iy) {
     ix = (double)px * Wt / (normW - 1) - 0.5;
@@ -114,7 +94,6 @@ inline void grid_sample_bilinear(const float* t, int C, int Ht, int Wt,
     }
 }
 
-// PyTorch bicubic (cubic convolution, A=-0.75)
 inline double cubic1(double x, double A){ return ((A+2)*x - (A+3))*x*x + 1; }
 inline double cubic2(double x, double A){ return (((A)*x - 5*A)*x + 8*A)*x - 4*A; }
 inline void cubic_coeffs(double t, double c[4]) {
@@ -138,7 +117,7 @@ inline void grid_sample_bicubic(const float* t, int C, int Ht, int Wt,
             long yy = y0 - 1 + i;
             for (int j = 0; j < 4; ++j) {
                 long xx = x0 - 1 + j;
-                double s = in(xx, yy) ? (double)tc[yy*Wt + xx] : 0.0;  // zeros padding
+                double s = in(xx, yy) ? (double)tc[yy*Wt + xx] : 0.0;
                 v += cy[i] * cx[j] * s;
             }
         }
@@ -146,15 +125,13 @@ inline void grid_sample_bicubic(const float* t, int C, int Ht, int Wt,
     }
 }
 
-// ---- Stage C: reliability scores + top-k ------------------------------------
-// score(kp) = nearest(K1h@256x480, kp) * bilinear(H1@32x60, kp), both normalized by (256,480).
-// Returns indices sorted by descending score (stable, matching torch.argsort default
-// which is NOT stable -- but ties are vanishingly unlikely on float scores).
+/// Sorted stably by descending score; torch.argsort is not stable, but float
+/// ties are rare.
 struct ScoredKpt { int x, y; float score; };
 inline std::vector<ScoredKpt> score_and_sort(
         const std::vector<KptI>& kpts,
-        const float* K1h, int Ho, int Wo,    // 256x480
-        const float* H1, int Hh, int Wh,     // 32x60
+        const float* K1h, int Ho, int Wo,
+        const float* H1, int Hh, int Wh,
         int normH, int normW) {
     std::vector<ScoredKpt> sk(kpts.size());
     for (size_t i = 0; i < kpts.size(); ++i) {
@@ -163,7 +140,6 @@ inline std::vector<ScoredKpt> score_and_sort(
         grid_sample_bilinear(H1, 1, Hh, Wh, kpts[i].x, kpts[i].y, normH, normW, &sb);
         sk[i] = {kpts[i].x, kpts[i].y, sn * sb};
     }
-    // torch.argsort(-scores): descending. Use stable sort by descending score.
     std::vector<int> idx(sk.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::stable_sort(idx.begin(), idx.end(), [&](int a, int b){ return sk[a].score > sk[b].score; });
@@ -172,4 +148,4 @@ inline std::vector<ScoredKpt> score_and_sort(
     return out;
 }
 
-}} // namespace nvmm::xfeat
+}}

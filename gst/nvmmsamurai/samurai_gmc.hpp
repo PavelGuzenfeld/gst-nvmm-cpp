@@ -1,9 +1,3 @@
-/// samurai_gmc.hpp — global/camera-motion estimation by zero-mean normalized
-/// cross-correlation over a small grayscale patch (host, dependency-free, unit-
-/// testable). Ports the intent of the Python PCC registrator (tracker.py GMC):
-/// estimate the dominant frame-to-frame translation so the tracker's KF + crop
-/// can be shifted to cancel camera motion. Runs on a downscaled center patch
-/// (e.g. 128x128 from a 1080-square VIC crop), so one small-pixel = scale_full.
 #pragma once
 
 #include <cmath>
@@ -14,10 +8,8 @@ namespace nvmm {
 
 struct GmcShift { float dx = 0.f, dy = 0.f, conf = 0.f; };
 
-/// Integer-pixel scene shift (small-patch units) such that
-/// curr[y,x] ~= prev[y - dy, x - dx]; i.e. how the content moved prev->curr.
-/// `n` = patch side, `search` = max shift searched. Zero-mean NCC; conf is the
-/// peak correlation in [-1,1]. Returns {0,0,0} if degenerate.
+/// Integer-px shift in patch units with curr[y,x] ~= prev[y-dy, x-dx]. Zero-mean
+/// NCC; conf is the peak correlation in [-1,1].
 inline GmcShift estimate_shift(const uint8_t *prev, const uint8_t *curr,
                                int n, int search)
 {
@@ -49,4 +41,4 @@ inline GmcShift estimate_shift(const uint8_t *prev, const uint8_t *curr,
     return best;
 }
 
-}  // namespace nvmm
+}

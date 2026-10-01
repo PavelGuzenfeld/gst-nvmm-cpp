@@ -1,22 +1,3 @@
-/// Feature detection + matching for dual_homography.hpp — two pipelines behind
-/// one correspondence-list interface:
-///
-///   small_motion — FAST-9/16 corners on the current frame + ZNCC patch match
-///     into the reference within a bounded search radius (coarse SAD grid, ZNCC
-///     refinement). Sized to this project's actual registration problem:
-///     near-consecutive frames of a panning camera — displacements are small
-///     and rotation is negligible, so descriptor rotation invariance buys
-///     nothing. Deterministic, no descriptors, no cross-frame detection.
-///
-///   orb — from-scratch ORB as in the OpenCV path it replaces: image pyramid,
-///     FAST per level, intensity-centroid orientation, rotated-BRIEF 256-bit
-///     descriptors on the blurred level, Hamming KNN(2) + Lowe ratio. The
-///     BRIEF sampling pattern is generated from a fixed seed (not OpenCV's
-///     learned table), so descriptors differ from cv::ORB bit-for-bit while
-///     the geometry they produce is validated to the same quality bar.
-///
-/// Both are exposed so the golden tests + benchmarks can decide which one the
-/// gate should default to. Pure C++14, header-only, no dependencies.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -36,8 +17,8 @@ struct Corner {
     float score = 0.f;
 };
 
-/// FAST-9/16 with 3x3 non-max suppression on a SAD-over-arc score, strongest
-/// first, capped at max_corners. `margin` excludes a border band (>= 3).
+/// FAST-9/16, 3x3 non-max suppression on a SAD-over-arc score, strongest first.
+/// `margin` (>= 3) excludes a border band.
 inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
                                         int max_corners, int margin)
 {
@@ -57,7 +38,6 @@ inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
         for (int x = m; x < w - m; x++) {
             const uint8_t *p = row + x;
             const int v = *p;
-            // an arc of 9 must contain one of each antipodal pair: cheap reject
             const int d0 = p[off[0]] - v, d8 = p[off[8]] - v;
             const int d4 = p[off[4]] - v, d12 = p[off[12]] - v;
             const bool may_b = (d0 > t || d8 > t) && (d4 > t || d12 > t);
@@ -101,22 +81,19 @@ inline std::vector<Corner> fast_corners(img::View<const uint8_t> im, int thresh,
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// small_motion pipeline
-// ---------------------------------------------------------------------------
-
 struct SmallMotionParams {
-    int search_radius = 32;   // max displacement searched (px)
-    int patch_r = 5;          // ZNCC patch half-size (patch is 2r+1 square)
-    int coarse_step = 3;      // SAD grid step of the coarse search
-    float zncc_min = 0.6f;    // acceptance threshold on the refined ZNCC score
-    float sad_ratio = 0.8f;   // ambiguity: best coarse SAD must be < ratio * runner-up
-                              // (runner-up outside the refinement neighbourhood) —
-                              // repetitive texture otherwise yields aliased matches
-                              // coherent enough to fake a parallax plane downstream
+    /// Max displacement, pixels.
+    int search_radius = 32;
+    /// ZNCC patch is (2r+1)^2.
+    int patch_r = 5;
+    int coarse_step = 3;
+    float zncc_min = 0.6f;
+    /// Best coarse SAD must be below ratio * runner-up outside the refinement window, or
+    /// repetitive texture yields aliased matches coherent enough to fake a parallax plane.
+    float sad_ratio = 0.8f;
 };
 
-/// ZNCC of the (2r+1)^2 patch at (cx,cy) in `a` vs (mx,my) in `b`; -1 on flat patches.
+/// -1 on flat patches.
 inline float zncc_at(img::View<const uint8_t> a, int cx, int cy,
                      img::View<const uint8_t> b, int mx, int my, int r)
 {
@@ -136,8 +113,7 @@ inline float zncc_at(img::View<const uint8_t> a, int cx, int cy,
     return (float)((sab - sa * sb / n) / std::sqrt(ca * cb));
 }
 
-/// FAST corners of `cur` matched into `ref` by bounded-radius patch search.
-/// Appends integer-pixel correspondences to p1 (cur) / p2 (ref).
+/// Integer-pixel correspondences: coarse SAD grid, then exhaustive ZNCC refinement.
 inline void small_motion_matches(img::View<const uint8_t> cur, img::View<const uint8_t> ref,
                                  const std::vector<Corner> &corners,
                                  const SmallMotionParams &p,
@@ -146,8 +122,6 @@ inline void small_motion_matches(img::View<const uint8_t> cur, img::View<const u
     const int r = p.patch_r, R = p.search_radius, w = cur.width, h = cur.height;
     for (const Corner &c : corners) {
         if (c.x < r || c.y < r || c.x >= w - r || c.y >= h - r) continue;
-        // coarse: SAD on a coarse displacement grid, tracking the runner-up
-        // outside the refinement neighbourhood for the ambiguity test
         int best_dx = 0, best_dy = 0;
         long best_sad = -1, second_sad = -1;
         for (int dy = -R; dy <= R; dy += p.coarse_step) {
@@ -179,10 +153,7 @@ inline void small_motion_matches(img::View<const uint8_t> cur, img::View<const u
             }
         }
         if (best_sad < 0) continue;
-        // ambiguous over repetitive texture: a far-away displacement explains the
-        // patch almost as well — a wrong-but-coherent match downstream, so drop it
         if (second_sad >= 0 && (float)best_sad >= p.sad_ratio * (float)second_sad) continue;
-        // refine: exhaustive ZNCC around the coarse winner
         const int rr = p.coarse_step;
         float best_z = -2.f;
         int zx = 0, zy = 0;
@@ -202,10 +173,6 @@ inline void small_motion_matches(img::View<const uint8_t> cur, img::View<const u
     }
 }
 
-// ---------------------------------------------------------------------------
-// orb pipeline
-// ---------------------------------------------------------------------------
-
 struct OrbParams {
     int nfeatures = 4000;
     int nlevels = 8;
@@ -214,11 +181,11 @@ struct OrbParams {
 };
 
 struct OrbFeature {
-    float x = 0.f, y = 0.f;  // level-0 coordinates
+    /// Level-0 coordinates.
+    float x = 0.f, y = 0.f;
     uint64_t desc[4] = {0, 0, 0, 0};
 };
 
-/// Bilinear resize (shrink) — pyramid construction.
 inline img::Image<uint8_t> resize_bilinear(img::View<const uint8_t> src, int dw, int dh)
 {
     img::Image<uint8_t> dst(dw, dh);
@@ -243,8 +210,8 @@ inline img::Image<uint8_t> resize_bilinear(img::View<const uint8_t> src, int dw,
     return dst;
 }
 
-/// 256 BRIEF point pairs inside the 31x31 patch (radius <= 15 after rotation),
-/// from a fixed-seed gaussian sampler — generated once, deterministic.
+/// 256 BRIEF pairs in the 31x31 patch from a fixed-seed sampler, so descriptors are
+/// deterministic but differ bit-for-bit from cv::ORB's learned table.
 inline const int8_t *brief_pattern()
 {
     static const std::vector<int8_t> pat = [] {
@@ -252,7 +219,6 @@ inline const int8_t *brief_pattern()
         v.reserve(256 * 4);
         Lcg rng(0xB51EFu);
         auto coord = [&]() {
-            // sum of three uniforms ~ gaussian(sigma ~ 31/5), clipped to the patch
             for (;;) {
                 const int c = (int)(rng.below(13) + rng.below(13) + rng.below(13)) - 18;
                 if (c >= -13 && c <= 13) return (int8_t)c;
@@ -269,7 +235,7 @@ inline const int8_t *brief_pattern()
     return pat.data();
 }
 
-/// Intensity-centroid orientation over the radius-15 disc (ORB's moment method).
+/// Intensity-centroid orientation over the radius-15 disc (ORB moment method).
 inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
                             float &cosA, float &sinA)
 {
@@ -289,17 +255,14 @@ inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
     sinA = (float)m01 / norm;
 }
 
-/// ORB features of one frame: pyramid, per-level FAST, orientation, rotated
-/// BRIEF on the blurred level. Coordinates are mapped back to level 0.
+/// The border margin covers the rotated BRIEF reach (<= 15, +1 for rounding); the FAST ring needs no more.
 inline std::vector<OrbFeature> orb_detect(img::View<const uint8_t> im, const OrbParams &p)
 {
-    // Rotated pattern reach is <= 15, +1 for rounding; FAST ring adds nothing beyond it.
     const int margin = 17;
     std::vector<OrbFeature> out;
     img::Image<uint8_t> level_store;
     img::Image<float> blur_tmp;
 
-    // per-level feature budget shrinking with level area (factor 1/scale^2)
     std::vector<int> budget((size_t)p.nlevels);
     {
         const double f = 1.0 / ((double)p.scale_factor * p.scale_factor);
@@ -325,7 +288,6 @@ inline std::vector<OrbFeature> orb_detect(img::View<const uint8_t> im, const Orb
             fast_corners(lv, p.fast_thresh, budget[(size_t)lvl], margin);
         if (corners.empty()) continue;
 
-        // descriptors sample a smoothed image, as in ORB (blur once per level)
         img::Image<float> smooth(lv.width, lv.height);
         img::gaussian_blur<uint8_t>(lv, blur_tmp, smooth.view(), 7);
 
@@ -357,7 +319,6 @@ inline int hamming256(const uint64_t a[4], const uint64_t b[4])
            __builtin_popcountll(a[2] ^ b[2]) + __builtin_popcountll(a[3] ^ b[3]);
 }
 
-/// Brute-force Hamming KNN(2) + Lowe ratio; appends correspondences to p1/p2.
 inline void orb_match(const std::vector<OrbFeature> &a, const std::vector<OrbFeature> &b,
                       float ratio, std::vector<Pt> &p1, std::vector<Pt> &p2)
 {
@@ -376,6 +337,6 @@ inline void orb_match(const std::vector<OrbFeature> &a, const std::vector<OrbFea
     }
 }
 
-}  // namespace detail
-}  // namespace motion
-}  // namespace nvmm
+}
+}
+}

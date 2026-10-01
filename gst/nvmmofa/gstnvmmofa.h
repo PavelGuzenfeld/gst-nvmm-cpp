@@ -1,9 +1,3 @@
-/// GstNvmmOfa — dense optical flow on the Orin OFA engine via VPI.
-///
-/// Passthrough transform: the NV12 NVMM frame flows downstream unchanged
-/// (zero-copy); for every consecutive pair of frames it runs VPI dense optical
-/// flow on the OFA hardware engine and attaches the motion-vector field as an
-/// NvmmOpticalFlowMeta. Orin-only (Xavier has no OFA).
 #pragma once
 
 #include <gst/gst.h>

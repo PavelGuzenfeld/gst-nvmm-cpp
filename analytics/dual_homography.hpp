@@ -1,34 +1,3 @@
-/// Plane+parallax independent-motion residual for a moving (panning) camera.
-///
-/// Frame differencing and single-homography background subtraction both fail on a
-/// translating camera: a single dominant-plane homography leaves strong residual
-/// wherever the scene has depth (near-field parallax), which then masquerades as
-/// motion. This computes a DUAL-homography residual instead:
-///
-///   1. Match the current frame to a reference frame and fit H1 (RANSAC) — the
-///      dominant background plane.
-///   2. Re-fit H2 on the RANSAC OUTLIERS — a second plane that captures the
-///      parallax structure the first plane missed.
-///   3. Compare the reference against the current frame under each plane and keep,
-///      per pixel, the residual that survives BOTH planes (element-wise min).
-///
-/// A pixel that is explained by either plane (flat background OR near-field parallax)
-/// is suppressed; only genuinely independent motion — an object moving relative to
-/// the whole scene — keeps a high residual. Two reference frames (e.g. two different
-/// past frames) are combined the same way so a static edge that aligns under one
-/// reference but not the other is also rejected.
-///
-/// The OpenCV op chain per plane (warpPerspective, absdiff, a second ones-warp,
-/// compare, erode, masked copy — ~6 sweeps, two of them full warps) is fused into
-/// ONE inverse-warp pass per reference pair: each output pixel projects through H,
-/// samples the reference bilinearly, differences, and applies validity as a
-/// source-margin test — no warped frame, no mask buffer, no erode. Feature
-/// matching is selectable (small_motion / orb — see detail/features.hpp); current-
-/// frame features are extracted once and reused for both references.
-///
-/// Pure C++14, header-only, no dependencies — unit-testable on the host.
-/// (Distinct from common/nvmm_motion.hpp, which scores boxes from a precomputed
-///  optical-flow field; this works directly on the raw grayscale frames.)
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -43,36 +12,39 @@
 namespace nvmm {
 namespace motion {
 
+/// small_motion: FAST + bounded ZNCC search, for near-consecutive frames.
+/// orb: pyramid ORB + Hamming KNN, tolerates rotation and scale at higher cost.
 enum class FeaturePipeline {
-    small_motion,  // FAST + bounded ZNCC search — near-consecutive frames, small pan
-    orb            // pyramid ORB + Hamming KNN — rotation/scale-robust, heavier
+    small_motion,
+    orb
 };
 
 struct DualHomographyParams {
-    int    features = 4000;      // ORB keypoint budget (small_motion uses max_corners)
-    double ransac_thresh = 3.0;  // RANSAC reprojection threshold (px)
-    int    min_matches = 20;     // need at least this many good matches to fit a plane
-    int    valid_margin = 15;    // drop pixels whose reference sample is this close to
-                                 // the reference edge (replaces the warp-mask erode)
-    int    blur = 3;             // Gaussian blur applied to the residual (odd; 0 = none)
-    int    border = 12;          // zero out this many px around the frame border
-    float  ratio = 0.75f;        // Lowe ratio for the ORB match
+    int    features = 4000;
+    /// Reprojection threshold, pixels.
+    double ransac_thresh = 3.0;
+    int    min_matches = 20;
+    /// Pixels a reference sample must keep from the reference edge; replaces the warp-mask erode.
+    int    valid_margin = 15;
+    int    blur = 3;
+    int    border = 12;
+    float  ratio = 0.75f;
     FeaturePipeline pipeline = FeaturePipeline::small_motion;
-    int    fast_thresh = 20;     // FAST threshold (both pipelines)
-    int    max_corners = 800;    // small_motion corner budget
-    int    search_radius = 32;   // small_motion max displacement (px)
-    float  zncc_min = 0.6f;      // small_motion match acceptance
-    float  min_plane_extent = 0.15f;  // the central 60% of H2's consensus must span at
-                                      // least this fraction of the frame in x or y —
-                                      // real parallax structure is extended; a compact
-                                      // cluster (+ a few chance agreers) is usually the
-                                      // independent mover, which H2 must not absorb
+    int    fast_thresh = 20;
+    int    max_corners = 800;
+    /// Max displacement, pixels.
+    int    search_radius = 32;
+    float  zncc_min = 0.6f;
+    /// The central 60% of H2's consensus must span this fraction of the frame in x or y:
+    /// a compact cluster is usually the independent mover, which H2 must not absorb.
+    float  min_plane_extent = 0.15f;
 };
 
 namespace detail {
 
 struct Plane {
-    Mat3 H;           // cur -> ref
+    /// Maps cur to ref.
+    Mat3 H;
     bool ok = false;
 };
 
@@ -84,8 +56,7 @@ inline OrbParams make_orb_params(const DualHomographyParams &p)
     return op;
 }
 
-/// H1 = dominant plane of the correspondences, H2 = parallax plane (RANSAC outliers).
-/// `fw`/`fh` are the frame dimensions (for the H2 extent gate).
+/// H1 = dominant plane; H2 = plane re-fit on H1's RANSAC outliers (parallax).
 inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
                        const DualHomographyParams &p, int fw, int fh,
                        Plane &pl1, Plane &pl2)
@@ -101,13 +72,6 @@ inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
     if ((int)o1.size() >= p.min_matches) {
         std::vector<uint8_t> omask;
         pl2.ok = find_homography_ransac(o1, o2, p.ransac_thresh, pl2.H, omask);
-        // A real parallax plane explains a BROAD, EXTENDED consensus. A compact
-        // coherent cluster of outliers is typically the independent mover itself —
-        // if H2 locked onto that, the min-combine would veto exactly the motion
-        // this residual exists to expose. Demand min_matches consensus AND a
-        // TRIMMED consensus span (central 60% per axis) covering a real fraction
-        // of the frame: a bounding box can be faked by the mover cluster plus a
-        // couple of chance agreers, a trimmed span cannot.
         if (pl2.ok) {
             std::vector<float> xs, ys;
             for (size_t i = 0; i < o1.size(); i++)
@@ -125,12 +89,9 @@ inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
     }
 }
 
-/// One fused pass: residual of `cur` against ref_a via Ha min ref_b via Hb.
-/// Per output pixel: project through H (incremental along the row), sample the
-/// reference bilinearly, |diff|, valid only when the SOURCE point keeps
-/// `margin` px from the reference edge; invalid or missing-plane samples
-/// contribute 0 exactly like the warp-mask erode + masked-copy chain did.
-/// False when neither plane is available.
+/// One inverse-warp pass: bilinear sample through H, |diff|, valid only when the source
+/// point keeps `margin` px (at least 1, for the ix+1/iy+1 taps) from the reference edge;
+/// invalid samples contribute 0. False when neither plane is available.
 inline bool plane_pair_residual(img::View<const uint8_t> cur,
                                 img::View<const uint8_t> ref_a, const Plane &pa,
                                 img::View<const uint8_t> ref_b, const Plane &pb,
@@ -140,7 +101,6 @@ inline bool plane_pair_residual(img::View<const uint8_t> cur,
     const int w = cur.width, h = cur.height;
     if (out.width() != w || out.height() != h) out = img::Image<float>(w, h);
 
-    // >= 1 so the bilinear taps at ix+1 / iy+1 stay in bounds
     const int mg = std::max(1, margin);
     const double lo = mg, hix = (double)w - 1 - mg, hiy = (double)h - 1 - mg;
     auto sample = [&](img::View<const uint8_t> ref, const Mat3 &H, int x, int y,
@@ -186,8 +146,6 @@ inline bool plane_pair_residual(img::View<const uint8_t> cur,
     return true;
 }
 
-/// Correspondences cur -> ref for the configured pipeline. `cur_corners` /
-/// `cur_orb` carry the current frame's features, extracted once by the caller.
 inline void pipeline_matches(img::View<const uint8_t> cur, img::View<const uint8_t> ref,
                              const DualHomographyParams &p,
                              const std::vector<Corner> &cur_corners,
@@ -206,23 +164,19 @@ inline void pipeline_matches(img::View<const uint8_t> cur, img::View<const uint8
     }
 }
 
-}  // namespace detail
+}
 
-/// Independent-motion residual of `cur` against two reference frames.
-/// `cur`, `ref_a`, `ref_b` are single-channel u8 (grayscale), same size.
-/// Returns float (same size): high where motion is unexplained by either the
-/// dominant plane or the parallax plane. Empty if no homography could be fit
-/// (e.g. textureless input) — callers should treat empty as "no estimate".
+/// Plane+parallax residual: per pixel, what survives both the dominant and the parallax
+/// plane, min over two references. Inputs u8, same size. Empty means no homography fit.
+/// Keypoints keep an 8 px margin so the ZNCC patch fits.
 inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cur,
                                                      img::View<const uint8_t> ref_a,
                                                      img::View<const uint8_t> ref_b,
                                                      const DualHomographyParams &p = {})
 {
-    // current-frame features once, reused against both references
     std::vector<detail::Corner> cur_corners;
     std::vector<detail::OrbFeature> cur_orb;
     if (p.pipeline == FeaturePipeline::small_motion) {
-        // corners must keep patch room for the ZNCC window
         cur_corners = detail::fast_corners(cur, p.fast_thresh, p.max_corners, 8);
     } else {
         cur_orb = detail::orb_detect(cur, detail::make_orb_params(p));
@@ -251,7 +205,6 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
             std::copy(row, row + w, r1.row(y));
         });
         if (have_r2) {
-            // fuse r2's vertical blur pass with the cross-plane min into r1
             img::convolve_rows<float>(r2.view(), tmp.view(), k);
             img::convolve_cols(tmp.view(), k, [&](int y, const float *row, int w) {
                 float *d = r1.row(y);
@@ -269,5 +222,5 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
     return r1;
 }
 
-}  // namespace motion
-}  // namespace nvmm
+}
+}

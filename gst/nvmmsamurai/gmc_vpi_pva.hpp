@@ -1,21 +1,8 @@
-/// gmc_vpi_pva.hpp — GMC pva backend: global translation from VPI HarrisCorners +
-/// OpticalFlowPyrLK on the PVA (VPI_BACKEND_PVA), reduced to a median (dx,dy). The
-/// classic sparse-optical-flow GMC, offloaded to the PVA engine (frees CPU + GPU).
-///
-/// Verified pipeline (see probe): Harris on PVA needs an S16 image (convert the U8
-/// patch on CUDA); PyrLK needs U8 pyramids (built on CUDA). Harris on PVA also
-/// needs input >= 160x120, so the caller uses a 256x256 patch, and minNMSDistance
-/// must be 8; PyrLK windowDimension must be 7/9/11 on PVA. conf = fraction of
-/// corners successfully tracked. Sign convention matches the other backends:
-/// median(cur - prev) = content motion prev -> curr.
-///
-/// Compiled only when NVMM_HAVE_VPI is defined; else available() is false and the
-/// tracker falls back.
 #pragma once
 #include <cstdint>
 #include <string>
 
-#include "samurai_gmc.hpp"  // GmcShift
+#include "samurai_gmc.hpp"
 
 #ifdef NVMM_HAVE_VPI
 #include <algorithm>
@@ -37,10 +24,9 @@ namespace nvmm {
 class GmcVpiPva {
 public:
     GmcVpiPva() = default;
-    GmcVpiPva(const GmcVpiPva &) = delete;             // owns VPI handles
+    GmcVpiPva(const GmcVpiPva &) = delete;
     GmcVpiPva &operator=(const GmcVpiPva &) = delete;
 
-    // Cheap availability probe: create+destroy the PVA Harris + PyrLK payloads.
     static bool available() {
         VPIStream s = nullptr;
         if (vpiStreamCreate(VPI_BACKEND_PVA, &s) != VPI_SUCCESS) return false;
@@ -74,23 +60,24 @@ public:
         return true;
     }
 
-    // Global translation (median of tracked corner displacements), same sign as
-    // PhaseCorrelator: content motion prev -> curr. conf = tracked fraction [0,1].
+    /// Median of tracked corner displacements (prev -> curr); conf is the tracked fraction.
+    /// PVA needs S16 Harris input of at least 160x120, minNMSDistance 8 and an LK window of
+    /// 7, 9 or 11; the U8/S16 conversions run on CUDA.
     GmcShift estimate(const uint8_t *prev, const uint8_t *curr) {
-        GmcShift out;  // {0,0,0} on any failure -> gated out by the caller
+        GmcShift out;
         if (!fill_u8(prev_u8_, prev) || !fill_u8(cur_u8_, curr)) return out;
         VPIHarrisCornerDetectorParams hp;
         vpiInitHarrisCornerDetectorParams(&hp);
-        hp.minNMSDistance = 8;  // required on PVA
+        hp.minNMSDistance = 8;
         if (vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, prev_u8_, prev_s16_, nullptr) != VPI_SUCCESS ||
             vpiSubmitHarrisCornerDetector(stream_, VPI_BACKEND_PVA, harris_, prev_s16_, kp_prev_, scores_, &hp) != VPI_SUCCESS ||
             vpiStreamSync(stream_) != VPI_SUCCESS) return out;
         int nkp = 0;
         vpiArrayGetSize(kp_prev_, &nkp);
-        if (nkp < 4) return out;  // too few corners (low texture) -> coast
+        if (nkp < 4) return out;
         VPIOpticalFlowPyrLKParams lp;
         vpiInitOpticalFlowPyrLKParams(VPI_BACKEND_PVA, &lp);
-        lp.windowDimension = 11;  // must be 7/9/11 on PVA
+        lp.windowDimension = 11;
         if (vpiSubmitGaussianPyramidGenerator(stream_, VPI_BACKEND_CUDA, prev_u8_, pyr_p_, VPI_BORDER_CLAMP) != VPI_SUCCESS ||
             vpiSubmitGaussianPyramidGenerator(stream_, VPI_BACKEND_CUDA, cur_u8_, pyr_c_, VPI_BORDER_CLAMP) != VPI_SUCCESS ||
             vpiSubmitOpticalFlowPyrLK(stream_, VPI_BACKEND_PVA, lk_, pyr_p_, pyr_c_, kp_prev_, kp_cur_, status_, &lp) != VPI_SUCCESS ||
@@ -125,7 +112,7 @@ private:
     bool fill_u8(VPIImage img, const uint8_t *src) {
         VPIImageData d;
         if (vpiImageLockData(img, VPI_LOCK_WRITE, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &d) != VPI_SUCCESS)
-            return false;   // don't estimate on stale/zero data
+            return false;
         const VPIImagePlanePitchLinear &pl = d.buffer.pitch.planes[0];
         uint8_t *p = (uint8_t *)pl.data;
         for (int y = 0; y < n_; y++)
@@ -151,9 +138,9 @@ private:
     std::vector<float> dxs_, dys_;
 };
 
-}  // namespace nvmm
+}
 
-#else  // !NVMM_HAVE_VPI — stub so callers compile on non-VPI (mock/CI) builds.
+#else
 namespace nvmm {
 class GmcVpiPva {
 public:
@@ -161,5 +148,5 @@ public:
     bool init(int, std::string &err) { err = "VPI not built"; return false; }
     GmcShift estimate(const uint8_t *, const uint8_t *) { return {}; }
 };
-}  // namespace nvmm
-#endif  // NVMM_HAVE_VPI
+}
+#endif
