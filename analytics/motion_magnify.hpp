@@ -28,9 +28,9 @@ public:
         const float two_pi = 6.28318530717958647692f;
         r_low_  = 1.f - std::exp(-two_pi * p_.low_hz  / p_.fps);
         r_high_ = 1.f - std::exp(-two_pi * p_.high_hz / p_.fps);
-    /// The first frame initialises the filters and is returned as is (blurred if enabled).
     }
 
+    /// The first frame initialises the filters and is returned as is (blurred if enabled).
     img::Image<float> process(img::View<const uint8_t> frame) { return run(frame); }
     img::Image<float> process(img::View<const float> frame) { return run(frame); }
 

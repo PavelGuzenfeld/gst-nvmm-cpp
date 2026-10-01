@@ -79,6 +79,9 @@ static gboolean best_det(GstNvmmFuseKf *self, GstNvmmDetMeta *det,
     return TRUE;
 }
 
+/// Only YOLO is gated, by pixel distance to the KF prediction: noise scales with box
+/// size, so a Mahalanobis gate fails on ~5 px targets. Init, loss and reseed follow
+/// SAMURAI; a lone YOLO det never starts or keeps a track.
 static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
     auto *self = GST_NVMM_FUSEKF(bt);
@@ -86,7 +89,6 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
     if (!tm)
         return GST_FLOW_OK;
 
-    /// In frames: PTS delta over buffer duration.
     double dt = 1.0;
     const guint64 pts = GST_BUFFER_PTS(buf);
     const guint64 dur = GST_BUFFER_DURATION(buf);
@@ -106,26 +108,19 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
     gboolean has_yolo = best_det(self, gst_buffer_get_nvmm_det_meta(buf), fw, fh,
                                  &yc, &yy, &yw, &yh);
 
-    /// SAMURAI updates ungated (it gates internally); only YOLO is gated. KalmanBox noise
-    /// scales with box size, so gating both would starve the KF on tiny targets.
     int updated = 0, fused_yolo = 0;
     double pred_cx = 0, pred_cy = 0; gboolean have_pred = FALSE;
-    /// Init only from SAMURAI: a lone YOLO det would lock onto a distractor before
-    /// SAMURAI settles on the target.
     if (!self->kf->initiated()) {
         if (has_sam) { self->kf->initiate(sam_cx, sam_cy, sam_w, sam_h); updated = 1; }
     } else {
         self->kf->predict(dt);
         double pcx, pcy, pw, ph; self->kf->box(pcx, pcy, pw, ph);
         pred_cx = pcx; pred_cy = pcy; have_pred = TRUE;
-        /// Pixel gate, not Mahalanobis: noise scales with box size, so on a ~5 px target a
-        /// Mahalanobis gate rejects or accepts everything.
         const double yd = std::hypot(yc - pcx, yy - pcy);
         const gboolean yolo_ok = has_yolo && yd < self->gate_thresh;
         if (has_sam) { self->kf->update(sam_cx, sam_cy, sam_w, sam_h); updated++; }
         if (yolo_ok) { self->kf->update(yc, yy, yw, yh); updated++; fused_yolo = 1; }
     }
-    /// Lost follows SAMURAI; a lone gated YOLO det does not keep the track alive.
     self->lost = has_sam ? 0 : self->lost + 1;
 
     if (self->kf->initiated() && self->lost <= self->max_lost) {
@@ -139,8 +134,6 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
         tm->valid = FALSE;
     }
 
-    /// Gate the det against the KF prediction, not the ballooned SAMURAI box, so a det
-    /// the diffuse box drifted away from is still recovered.
     if (self->flush_bb && tm->valid && has_yolo && yw > 0 && yh > 0) {
         const double fcx = tm->left + tm->width / 2.0, fcy = tm->top + tm->height / 2.0;
         const double rcx = have_pred ? pred_cx : fcx, rcy = have_pred ? pred_cy : fcy;
@@ -155,7 +148,6 @@ static GstFlowReturn gst_nvmm_fusekf_transform_ip(GstBaseTransform *bt, GstBuffe
     }
 
     if (self->reseed_cooldown > 0) self->reseed_cooldown--;
-    /// Reseed only after a track existed and was lost; initial acquisition is SAMURAI's.
     if (self->ever_valid && self->lost > self->max_lost && has_yolo && self->reseed_cooldown == 0) {
         GstStructure *s = gst_structure_new("nvmm-reseed",
             "x", G_TYPE_DOUBLE, yc - yw / 2.0, "y", G_TYPE_DOUBLE, yy - yh / 2.0,

@@ -50,6 +50,7 @@ NvBufSurfTransform_Compute to_nv_compute(ComputeMode m) {
 
 }
 
+/// Session params are process-global, so they are set only on an override.
 Result<void> NvmmTransform::transform(
     const NvmmBuffer& src, NvmmBuffer& dst, const TransformParams& params) {
     if (!src.raw() || !dst.raw()) {
@@ -89,7 +90,6 @@ Result<void> NvmmTransform::transform(
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FILTER;
     }
 
-    /// Session params are process-global, so set them only on an override.
     if (params.compute != ComputeMode::kDefault) {
         NvBufSurfTransformConfigParams cfg{};
         cfg.compute_mode = to_nv_compute(params.compute);

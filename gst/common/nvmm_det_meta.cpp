@@ -55,12 +55,12 @@ nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_widt
     return m;
 }
 
+/// Scale/crop would need the boxes re-derived, so only a straight copy
+/// keeps the meta.
 static gboolean
 nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer *,
                         GQuark type, gpointer)
 {
-    /// Scale/crop would need the boxes re-derived, so only a straight copy
-    /// keeps the meta.
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 
@@ -112,6 +112,7 @@ gst_buffer_add_nvmm_det_meta(GstBuffer *buffer, const NvmmFrameMeta *frame)
 }
 
 #ifdef NVMM_DEEPSTREAM_META
+/// DeepStream marks untracked objects all-Fs; the wire contract uses 0.
 guint
 nvmm_frame_meta_from_nvds(void *batch, guint frame_index,
                           guint32 infer_w, guint32 infer_h,
@@ -151,7 +152,6 @@ nvmm_frame_meta_from_nvds(void *batch, guint frame_index,
         d->height = obj->rect_params.height;
         d->class_id = obj->class_id;
         d->confidence = (float)obj->confidence;
-        /// DeepStream marks untracked objects all-Fs; the wire contract uses 0.
         d->tracker_id = (obj->object_id == 0xFFFFFFFFFFFFFFFFULL)
                             ? 0u : (uint64_t)obj->object_id;
         const char *lbl = obj->obj_label;

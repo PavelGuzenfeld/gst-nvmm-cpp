@@ -142,6 +142,7 @@ gst_nvmm_ofa_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
     return TRUE;
 }
 
+/// OFA writes the flow; the CPU backend lets it be locked to host for the meta.
 static gboolean
 configure(GstNvmmOfa *self, VPIImage sample)
 {
@@ -162,7 +163,6 @@ configure(GstNvmmOfa *self, VPIImage sample)
                          grid, self->width, self->height);
         return FALSE;
     }
-    /// OFA writes the flow; the CPU backend lets it be locked to host for the meta.
     if (vpiImageCreate(mvW, mvH, VPI_IMAGE_FORMAT_2S16_BL,
                        VPI_BACKEND_OFA | VPI_BACKEND_CPU, &self->mv) != VPI_SUCCESS) {
         GST_ERROR_OBJECT(self, "vpiImageCreate(mv) failed");
@@ -317,6 +317,7 @@ gst_nvmm_ofa_class_init(GstNvmmOfaClass *klass)
     GST_DEBUG_CATEGORY_INIT(gst_nvmm_ofa_debug, "nvmmofa", 0, "NVMM OFA optical flow");
 }
 
+/// In place, not passthrough, so the buffer is writable for gst_buffer_add_meta.
 static void
 gst_nvmm_ofa_init(GstNvmmOfa *self)
 {
@@ -328,7 +329,6 @@ gst_nvmm_ofa_init(GstNvmmOfa *self)
     self->prev = nullptr;
     self->prev_buf = nullptr;
     self->configured = FALSE;
-    /// In place, not passthrough, so the buffer is writable for gst_buffer_add_meta.
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
 

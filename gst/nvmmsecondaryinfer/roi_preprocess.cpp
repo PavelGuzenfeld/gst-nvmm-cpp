@@ -31,6 +31,8 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
 
 }
 
+/// Per-call _Ctx stream instead of nppSetStream: the global NPP stream is
+/// process-wide and nvmminfer sets it to its own stream.
 bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scale,
                                 const float *offsets, const float *std_values,
                                 cudaStream_t stream, std::string &err) {
@@ -67,8 +69,6 @@ bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scal
         return false;
     }
 
-    /// Per-call _Ctx stream instead of nppSetStream: the global NPP stream is
-    /// process-wide and nvmminfer sets it to its own stream.
     NppStatus st = nppGetStreamContext(&npp_ctx_);
     if (st != NPP_SUCCESS) {
         err = "nppGetStreamContext failed: " + std::to_string((int)st);
@@ -78,6 +78,7 @@ bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scal
     return true;
 }
 
+/// NV12 chroma is 2x2 subsampled; VIC wants even crop coordinates and sizes.
 bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
                           float width, float height, float *d_input,
                           std::string &err) {
@@ -88,7 +89,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
     const int sw = (int)src->surfaceList[0].width;
     const int sh = (int)src->surfaceList[0].height;
 
-    /// NV12 chroma is 2x2 subsampled; VIC wants even crop coordinates and sizes.
     int x0 = std::max(0, (int)std::floor(left)) & ~1;
     int y0 = std::max(0, (int)std::floor(top)) & ~1;
     int x1 = std::min(sw, (int)std::ceil(left + width));

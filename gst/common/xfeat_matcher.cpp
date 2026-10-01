@@ -25,6 +25,8 @@ void XfeatMatcher::free_buffers() {
     if (stream_) { cudaStreamDestroy(stream_); stream_ = nullptr; }
 }
 
+/// Buffers are sized from the engine so an fp16 engine still binds, but extract()
+/// reads the outputs as fp32.
 bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
     xf_ = TrtEngine::load_file(engine_dir + "/xfeat.engine", err);
     if (!xf_) return false;
@@ -33,8 +35,6 @@ bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
 
     if (cudaStreamCreate(&stream_) != cudaSuccess) { err = "cudaStreamCreate failed"; return false; }
 
-    /// Sized from the engine so an fp16 engine still binds, but extract() reads
-    /// the outputs as fp32.
     auto xbytes = [&](const char* nm) -> size_t {
         for (const auto& t : xf_->tensors()) if (t.name == nm) return t.bytes;
         return 0;
@@ -78,6 +78,7 @@ bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
     return true;
 }
 
+/// VIC writes px[0] = R; the CNN takes planar RGB /255, no mean/std.
 bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err) {
     out.kpts.clear(); out.descs.clear();
 
@@ -93,7 +94,6 @@ bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err)
     const uint8_t* rgba = (const uint8_t*)rgba_->surfaceList[0].mappedAddr.addr[0];
     const int pitch = rgba_->surfaceList[0].pitch;
 
-    /// VIC writes px[0] = R; the CNN takes planar RGB /255, no mean/std.
     std::vector<float> in((size_t)3 * kXH * kXW);
     const int plane = kXH * kXW;
     for (int y = 0; y < kXH; ++y)

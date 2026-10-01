@@ -116,6 +116,8 @@ get_surface(GstBuffer* buf)
     return nullptr;
 }
 
+/// Pads write only their dst_rect, so uncovered pixels are undefined: pads
+/// must tile the output, or add a full-frame background pad.
 static GstFlowReturn
 gst_nvmm_compositor_aggregate(GstAggregator* agg, gboolean timeout)
 {
@@ -133,8 +135,6 @@ gst_nvmm_compositor_aggregate(GstAggregator* agg, gboolean timeout)
         self->src_caps_set = TRUE;
     }
 
-    /// Pads write only their dst_rect, so uncovered pixels are undefined: pads
-    /// must tile the output, or add a full-frame background pad.
     GstMemory* omem = gst_nvmm_allocator_alloc_video(
         self->allocator, GST_VIDEO_FORMAT_NV12, self->out_width, self->out_height);
     if (!omem) {

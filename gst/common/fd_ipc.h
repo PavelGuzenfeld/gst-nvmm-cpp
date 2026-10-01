@@ -10,10 +10,10 @@
 extern "C" {
 #endif
 
+/// SCM_RIGHTS needs at least one byte of normal data next to the fds.
 static inline int
 nvmm_send_fds(int sock, const int *fds, int count)
 {
-    /// SCM_RIGHTS needs at least one byte of normal data next to the fds.
     char dummy = 'F';
     struct iovec iov = { .iov_base = &dummy, .iov_len = 1 };
 

@@ -210,6 +210,7 @@ draw_text(guint8 *rgba, int W, int H, int x, int y, const char *str, int s,
     }
 }
 
+/// Motion and class metas are index-aligned with the det meta.
 static GstFlowReturn
 gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *outbuf)
 {
@@ -257,7 +258,6 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
 
     GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(inbuf);
     if (self->draw_det && m && m->num_objects) {
-        /// Motion and class metas are index-aligned with the det meta.
         GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
         GstNvmmClassMeta *cm = gst_buffer_get_nvmm_class_meta(inbuf);
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
@@ -314,7 +314,6 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             int ty = (int)tm->top - FONT_H * ts - ts; if (ty < ts) ty = (int)tm->top + ts;
             draw_text((guint8 *)omap.data, W, H, (int)tm->left + ts, ty, tl, ts, 0, 255, 255);
         }
-        /// n_frames was incremented above, so it is >= 1.
         const double cov = 100.0 * self->n_valid / self->n_frames;
         char hud[64];
         g_snprintf(hud, sizeof hud, "FPS %.1f  TRACK %.0f%%", self->ema_fps, cov);

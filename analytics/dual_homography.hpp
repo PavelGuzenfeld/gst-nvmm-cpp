@@ -90,8 +90,8 @@ inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
 }
 
 /// One inverse-warp pass: bilinear sample through H, |diff|, valid only when the source
-/// point keeps `margin` px from the reference edge; invalid samples contribute 0.
-/// False when neither plane is available.
+/// point keeps `margin` px (at least 1, for the ix+1/iy+1 taps) from the reference edge;
+/// invalid samples contribute 0. False when neither plane is available.
 inline bool plane_pair_residual(img::View<const uint8_t> cur,
                                 img::View<const uint8_t> ref_a, const Plane &pa,
                                 img::View<const uint8_t> ref_b, const Plane &pb,
@@ -101,7 +101,6 @@ inline bool plane_pair_residual(img::View<const uint8_t> cur,
     const int w = cur.width, h = cur.height;
     if (out.width() != w || out.height() != h) out = img::Image<float>(w, h);
 
-    /// At least 1 so the bilinear taps at ix+1 / iy+1 stay in bounds.
     const int mg = std::max(1, margin);
     const double lo = mg, hix = (double)w - 1 - mg, hiy = (double)h - 1 - mg;
     auto sample = [&](img::View<const uint8_t> ref, const Mat3 &H, int x, int y,
@@ -169,6 +168,7 @@ inline void pipeline_matches(img::View<const uint8_t> cur, img::View<const uint8
 
 /// Plane+parallax residual: per pixel, what survives both the dominant and the parallax
 /// plane, min over two references. Inputs u8, same size. Empty means no homography fit.
+/// Keypoints keep an 8 px margin so the ZNCC patch fits.
 inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cur,
                                                      img::View<const uint8_t> ref_a,
                                                      img::View<const uint8_t> ref_b,
@@ -177,7 +177,6 @@ inline img::Image<float> independent_motion_residual(img::View<const uint8_t> cu
     std::vector<detail::Corner> cur_corners;
     std::vector<detail::OrbFeature> cur_orb;
     if (p.pipeline == FeaturePipeline::small_motion) {
-        /// Margin 8 leaves patch room for the ZNCC window.
         cur_corners = detail::fast_corners(cur, p.fast_thresh, p.max_corners, 8);
     } else {
         cur_orb = detail::orb_detect(cur, detail::make_orb_params(p));

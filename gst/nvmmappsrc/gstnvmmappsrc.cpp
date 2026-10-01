@@ -178,6 +178,9 @@ gst_nvmm_app_src_get_property(GObject *object, guint prop_id,
     }
 }
 
+/// Sets numFilled after NvBufSurfaceImport, or NvBufSurfTransform fails with -3.
+/// meta_enabled implies the meta region is mapped: the producer grew the segment
+/// before we mapped st_size.
 static gboolean
 gst_nvmm_app_src_start(GstBaseSrc *src)
 {
@@ -228,8 +231,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         return FALSE;
     }
 
-    /// The producer grew the segment and we mapped st_size, so meta_enabled
-    /// implies the region is mapped.
     priv->meta_available = priv->import_metadata && header->meta_enabled;
     if (priv->import_metadata && !header->meta_enabled)
         fprintf(stderr, "[nvmmappsrc] import-metadata=true but producer is not "
@@ -277,7 +278,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
                     i, fds[i]);
             return FALSE;
         }
-        /// NvBufSurfaceImport leaves numFilled at 0; NvBufSurfTransform then fails with -3.
         surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->imported_surfaces[i] = surf;
     }
@@ -326,6 +326,9 @@ gst_nvmm_app_src_stop(GstBaseSrc *src)
     return TRUE;
 }
 
+/// ref_counts -1 means the producer is writing the slot, so increment only from >= 0.
+/// Our ref on idx also pins meta slot idx, so meta attaches unconditionally; checking
+/// the live frame_number would drop it whenever we lag.
 static GstFlowReturn
 gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
 {
@@ -370,7 +373,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     if (idx >= (uint32_t)priv->pool_size)
         return GST_FLOW_ERROR;
 
-    /// Increment only when >= 0; -1 means the producer is writing the slot.
     int attempts_cas = 0;
     while (true) {
         int32_t old_val = __sync_add_and_fetch(&header->ref_counts[idx], 0);
@@ -406,8 +408,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     GST_BUFFER_PTS(buffer) = header->timestamp_ns;
     GST_BUFFER_DURATION(buffer) = GST_CLOCK_TIME_NONE;
 
-    /// Our ref on idx pins slot[idx] too, so attach unconditionally; comparing
-    /// against the live header frame_number drops metadata whenever we lag.
     if (priv->meta_available) {
         NvmmFrameMeta *slot = nvmm_shm_meta(priv->shm_ptr, idx);
         gst_buffer_add_nvmm_det_meta(buffer, slot);

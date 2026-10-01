@@ -92,7 +92,6 @@ __global__ void assemble_k(const float *const *maskmem, const float *objptr,
     } else {
         const int o = row - kMaskRows, p = o / 4, k = o % 4;
         memory[idx] = objptr[p * 256 + k * 64 + ch];
-        /// t_diff_max = 15.
         const float x = pos_list[p] / 15.f;
         float acc = tposproj_b[ch];
         const float *wr = tposproj_w + (size_t)ch * 256;

@@ -61,13 +61,13 @@ static GstStaticPadTemplate src_tmpl = GST_STATIC_PAD_TEMPLATE(
                     "width=(int)[32,8192], height=(int)[32,8192], "
                     "framerate=(fraction)[0/1, 240/1]"));
 
+/// DeepStream-style NVMM buffers map to an NvBufSurface struct and lack this
+/// allocator's tag.
 static NvBufSurface *surface_of(GstBuffer *buf)
 {
     GstMemory *m = gst_buffer_peek_memory(buf, 0);
     if (m && gst_is_nvmm_memory(m))
         return static_cast<NvBufSurface *>(gst_nvmm_memory_get_surface(m));
-    /// DeepStream-style NVMM buffers map to an NvBufSurface struct and lack this
-    /// allocator's tag.
     GstMapInfo map;
     if (m && gst_buffer_map(buf, &map, GST_MAP_READ)) {
         auto *s = reinterpret_cast<NvBufSurface *>(map.data);
@@ -77,6 +77,9 @@ static NvBufSurface *surface_of(GstBuffer *buf)
     return nullptr;
 }
 
+/// Emits no dets until a target is confirmed, then exactly one, so SAMURAI never seeds
+/// on terrain. Motion strength is the per-anchor minimum residual over two RANSAC
+/// background affines. Det infer_w/h equal the frame size, so no rescale is needed.
 static GstFlowReturn
 gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
@@ -136,8 +139,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         }
     }
 
-    /// RANSAC fits a background affine per past reference, rejecting movers as
-    /// outliers; the per-anchor minimum residual over both is the motion strength.
     int keep = -1;
     if ((int)self->hist->size() >= (int)need && self->matcher_ready && !cur.empty()) {
         const auto &h = *self->hist;
@@ -160,8 +161,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         keep = self->gate->update(motion, dets, surfW, surfH);
     }
 
-    /// Until a target is confirmed emit zero dets, so SAMURAI never seeds on terrain;
-    /// then exactly one.
     if (det) {
         float scx, scy, sw, sh;
         if (keep >= 0 && keep < (int)det->num_objects) {
@@ -173,7 +172,6 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
                 self->announced = TRUE;
             }
         } else if (keep == -2 && self->gate && self->gate->synth_seed(scx, scy, sw, sh)) {
-            /// DetMeta infer_w/h equal the frame size here, so surface coords need no scale.
             NvmmDetObject &o = det->objects[0];
             o.left = scx - sw / 2.f; o.top = scy - sh / 2.f; o.width = sw; o.height = sh;
             o.class_id = self->target_class; o.confidence = 0.90f; o.tracker_id = 0;

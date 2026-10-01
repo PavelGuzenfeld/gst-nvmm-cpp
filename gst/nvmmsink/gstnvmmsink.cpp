@@ -94,6 +94,7 @@ get_nvbufsurface_from_buffer(GstBaseSink *sink, GstBuffer *buffer)
     return surf;
 }
 
+/// Sets numFilled: NvBufSurfaceCreate leaves it at 0, which NvBufSurfTransform rejects.
 static gboolean
 allocate_pool(GstNvmmSink *self)
 {
@@ -129,7 +130,6 @@ allocate_pool(GstNvmmSink *self)
             GST_ERROR_OBJECT(self, "Failed to create pool buffer %d", i);
             return FALSE;
         }
-        /// NvBufSurfaceCreate leaves numFilled at 0, which NvBufSurfTransform rejects.
         surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->pool[i].surface = surf;
         priv->pool[i].fd = (int)surf->surfaceList[0].bufferDesc;
@@ -412,6 +412,9 @@ gst_nvmm_sink_stop(GstBaseSink *sink)
     return TRUE;
 }
 
+/// ref_counts -1 is the writer lock (CAS 0 -> -1). NvBufSurfTransform, not NvBufSurfaceCopy:
+/// upstream is BLOCK_LINEAR, the pool PITCH_LINEAR, and NvBufSurfaceCopy does not de-tile.
+/// Meta is written before frame_number is published and shares ref_counts[target].
 static GstFlowReturn
 gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
 {
@@ -428,7 +431,6 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
         return GST_FLOW_ERROR;
     }
 
-    /// ref_count -1 is the writer lock: CAS 0 -> -1 claims a slot, readers skip it.
     int target = -1;
     for (int i = 0; i < priv->pool_size; i++) {
         int idx = (priv->write_idx + 1 + i) % priv->pool_size;
@@ -443,8 +445,6 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
         return GST_FLOW_OK;
     }
 
-    /// NvBufSurfTransform, not NvBufSurfaceCopy: upstream hands BLOCK_LINEAR
-    /// surfaces, the pool is PITCH_LINEAR, and NvBufSurfaceCopy does not de-tile.
     NvBufSurfTransformParams xform;
     memset(&xform, 0, sizeof(xform));
     xform.transform_flag = 0;
@@ -458,8 +458,6 @@ gst_nvmm_sink_render(GstBaseSink *sink, GstBuffer *buffer)
     __sync_lock_test_and_set(&header->ref_counts[target], 0);
     __sync_synchronize();
 
-    /// Written before frame_number is published, so a reader past the barrier
-    /// sees it; slot `target` shares ref_counts[target] with the pixels.
 #ifdef NVMM_DEEPSTREAM_META
     if (priv->meta_active) {
         uint64_t fn = priv->frame_number.load(std::memory_order_relaxed);

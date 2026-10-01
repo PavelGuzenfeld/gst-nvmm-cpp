@@ -60,15 +60,14 @@ public:
         return true;
     }
 
-    /// Median of tracked corner displacements (content motion prev -> curr); conf is
-    /// the tracked fraction. Harris on PVA needs S16 input of at least 160x120 and
-    /// PyrLK needs U8 pyramids; both conversions run on CUDA.
+    /// Median of tracked corner displacements (prev -> curr); conf is the tracked fraction.
+    /// PVA needs S16 Harris input of at least 160x120, minNMSDistance 8 and an LK window of
+    /// 7, 9 or 11; the U8/S16 conversions run on CUDA.
     GmcShift estimate(const uint8_t *prev, const uint8_t *curr) {
         GmcShift out;
         if (!fill_u8(prev_u8_, prev) || !fill_u8(cur_u8_, curr)) return out;
         VPIHarrisCornerDetectorParams hp;
         vpiInitHarrisCornerDetectorParams(&hp);
-        /// Required on PVA.
         hp.minNMSDistance = 8;
         if (vpiSubmitConvertImageFormat(stream_, VPI_BACKEND_CUDA, prev_u8_, prev_s16_, nullptr) != VPI_SUCCESS ||
             vpiSubmitHarrisCornerDetector(stream_, VPI_BACKEND_PVA, harris_, prev_s16_, kp_prev_, scores_, &hp) != VPI_SUCCESS ||
@@ -78,7 +77,6 @@ public:
         if (nkp < 4) return out;
         VPIOpticalFlowPyrLKParams lp;
         vpiInitOpticalFlowPyrLKParams(VPI_BACKEND_PVA, &lp);
-        /// PVA accepts only 7, 9 or 11.
         lp.windowDimension = 11;
         if (vpiSubmitGaussianPyramidGenerator(stream_, VPI_BACKEND_CUDA, prev_u8_, pyr_p_, VPI_BORDER_CLAMP) != VPI_SUCCESS ||
             vpiSubmitGaussianPyramidGenerator(stream_, VPI_BACKEND_CUDA, cur_u8_, pyr_c_, VPI_BORDER_CLAMP) != VPI_SUCCESS ||

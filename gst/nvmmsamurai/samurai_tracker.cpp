@@ -212,6 +212,9 @@ GmcShift SamuraiTracker::Impl::gmc_estimate(const uint8_t *prev, const uint8_t *
     }
 }
 
+/// The target is masked out of both patches so its motion is not read as camera motion;
+/// raw frames stay unmasked for the swap. conf is peak NCC for ncc, the phase response
+/// for fft and the tracked-corner fraction for pva.
 void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
 {
     if (!gmc_surf) return;
@@ -234,9 +237,6 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
     gmc_scale = (float)sq / gmc_n_;
 
     if (gmc_have_prev) {
-        /// Mask the target out of both patches so its own motion is not read as camera
-        /// motion; FFT backends otherwise report a spurious shift on a static camera.
-        /// Raw prev/curr stay unmasked for the next-frame swap.
         const uint8_t *pe = gmc_prev.data(), *ce = gmc_curr.data();
         const GmcMaskBox mb = gmc_map_box_to_patch(last.left, last.top, last.width, last.height,
                                                     W, H, sq, gmc_n_);
@@ -248,8 +248,6 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
             pe = gmc_pm.data(); ce = gmc_cm.data();
         }
         const GmcShift s = gmc_estimate(pe, ce);
-        /// Confidence is peak NCC in [-1,1] for ncc, the phase-correlation response for
-        /// fft, and the fraction of corners tracked for pva.
         float min_conf = 0.05f;
         if (gmc_backend == GmcBackend::Ncc) min_conf = 0.3f;
         else if (gmc_backend == GmcBackend::Pva) min_conf = 0.3f;
@@ -267,11 +265,13 @@ void SamuraiTracker::Impl::apply_gmc(NvBufSurface *frame)
     gmc_have_prev = true;
 }
 
+/// Box prompt in crop coords (the crop equals the export's image_size); 2 points exceed
+/// multimask_max_pt_num=1, so the seed takes mask token 0, not the tracking argmax.
+/// Seed memory mask is binarize * 20 - 10; min_obj_score_logits is -1.
 bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err)
 {
     const int M = mlow(), HI = crop_size, TOK = tok(), MM = 64 * TOK;
     constexpr int T = 256;
-    /// Crop coords with no scale: the crop equals the export's image_size.
     const float coords[4] = {box.left - view.x,             box.top - view.y,
                              box.left + box.width - view.x, box.top + box.height - view.y};
     cudaMemcpyAsync(d_coords, coords, sizeof(coords), cudaMemcpyHostToDevice, stream);
@@ -285,10 +285,7 @@ bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err
     float ious[4] = {0}, obj_score = 0.f;
     cudaMemcpy(ious, d_dious, sizeof(ious), cudaMemcpyDeviceToHost);
     cudaMemcpy(&obj_score, d_dobj, sizeof(float), cudaMemcpyDeviceToHost);
-    /// A box prompt (2 pts > multimask_max_pt_num=1) runs multimask_output=False, so
-    /// the seed takes mask token 0, not the 4-candidate argmax of the tracking path.
     const int best = 0;
-    /// SAM2 min_obj_score_logits = -1.
     const bool appearing = obj_score > -1.0f;
     k_bilinear(d_dmasks + (size_t)best * M * M, d_high, M, M, HI, HI, stream);
     const int initbox[4] = {HI, HI, -1, -1};
@@ -318,7 +315,6 @@ bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err
     const float *no_ptr = consts.data("no_obj_ptr");
     for (int i = 0; i < T; i++)
         cond_obj_ptr[i] = lambda * cond_obj_ptr[i] + (1.f - lambda) * no_ptr[i];
-    /// Seed memory mask: binarize_mask_from_pts * 20 - 10.
     k_threshold_scale(d_high, d_mem_mask, HI * HI, 10.f, -10.f, stream);
     if (!mem_encoder->infer(stream)) { err = "memory_encoder infer failed"; return false; }
     if (cudaStreamSynchronize(stream) != cudaSuccess) { err = "memenc sync"; return false; }
@@ -360,6 +356,9 @@ bool SamuraiTracker::Impl::seed_cond_frame(const TrackBox &box, std::string &err
     return true;
 }
 
+/// Non-finite objectness coasts and skips the memory update: one NaN maskmem poisons every
+/// later assemble. Candidates are un-viewed to frame coords, where the KF runs. Selection
+/// is SamuraiSelector (sam2_base.py:430-511); memory mask is sigmoid * 20 - 10.
 bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
 {
     using namespace memdims;
@@ -424,13 +423,9 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     float ious[4] = {0}, obj_score = 0.f;
     cudaMemcpy(ious, d_dious, sizeof(ious), cudaMemcpyDeviceToHost);
     cudaMemcpy(&obj_score, d_dobj, sizeof(float), cudaMemcpyDeviceToHost);
-    /// A degenerate memory-attention frame can emit non-finite objectness. Coast and
-    /// skip the memory update: one NaN maskmem poisons every later assemble.
     const bool finite_obj = std::isfinite(obj_score);
     const bool appearing = finite_obj && obj_score > -1.0f;
 
-    /// Candidates are un-viewed to frame coords: the KF runs in frame coords so a
-    /// recentered crop does not move it.
     MaskBox cbox[3];
     float ciou[3] = {ious[1], ious[2], ious[3]};
 #ifdef SAMURAI_HOST_OPS
@@ -456,7 +451,6 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
     }
 #endif
 
-    /// SamuraiSelector, sam2_base.py:430-511.
     int sel = 0;
     MaskBox kfbox;
     auto argmax3 = [](const float *v) { int b = 0; if (v[1] > v[b]) b = 1; if (v[2] > v[b]) b = 2; return b; };
@@ -528,7 +522,6 @@ bool SamuraiTracker::Impl::track_frame(TrackResult &out, std::string &err)
       cudaMemcpyAsync(d_mem_mask, mem.data(), mem.size() * sizeof(float), cudaMemcpyHostToDevice, stream); }
 #else
     k_bilinear(d_dmasks + (size_t)(1 + sel) * M * M, d_high, M, M, HI, HI, stream);
-    /// Tracking memory mask is sigmoid(mask) * 20 - 10, not the seed's binarize.
     k_sigmoid_scale(d_high, d_mem_mask, HI * HI, 20.f, -10.f, stream);
 #endif
     if (!mem_encoder->infer(stream)) { err = "memory_encoder infer failed"; return false; }
@@ -628,6 +621,8 @@ load_one(const std::string &dir, const char *name, std::string &err)
     return eng;
 }
 
+/// Accelerators are probed only when the request can use one: a PVA payload can start
+/// PVA firmware (seconds) and log VPI errors on boxes without PVA.
 bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
 {
     cfg_ = cfg;
@@ -765,8 +760,6 @@ bool SamuraiTracker::init(const SamuraiConfig &cfg, std::string &err)
     cudaMemcpy(impl_->d_tposproj_b, impl_->consts.data("obj_ptr_tpos_proj.bias"), 64 * sizeof(float), cudaMemcpyHostToDevice);
     impl_->gmc_enabled = cfg.gmc;
     if (cfg.gmc) {
-        /// Probe accelerators only when the request can use one: a PVA payload can start
-        /// PVA firmware (seconds) and log VPI errors on boxes without PVA.
         bool have_cuda_fft = false, have_pva = false;
         if (cfg.gmc_backend != GmcBackend::Ncc && cfg.gmc_backend != GmcBackend::FftCpu) {
             have_cuda_fft = GmcVpiFft::available();

@@ -255,9 +255,9 @@ inline void orb_orientation(img::View<const uint8_t> im, int cx, int cy,
     sinA = (float)m01 / norm;
 }
 
+/// The border margin covers the rotated BRIEF reach (<= 15, +1 for rounding); the FAST ring needs no more.
 inline std::vector<OrbFeature> orb_detect(img::View<const uint8_t> im, const OrbParams &p)
 {
-    /// Rotated BRIEF reach is <= 15, +1 for rounding; the FAST ring needs no more.
     const int margin = 17;
     std::vector<OrbFeature> out;
     img::Image<uint8_t> level_store;

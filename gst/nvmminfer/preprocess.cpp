@@ -31,6 +31,7 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
 
 }
 
+/// Letterbox gray is filled once: each frame copies only the image rect, so the pad survives.
 bool Preprocessor::configure(int net_w, int net_h, int frame_w, int frame_h,
                              bool color_rgb, float scale, cudaStream_t stream,
                              std::string &err) {
@@ -69,7 +70,6 @@ bool Preprocessor::configure(int net_w, int net_h, int frame_w, int frame_h,
 
     nppSetStream(stream);
 
-    /// Letterbox gray is filled once: each frame copies only the image rect, so the pad survives.
     const Npp8u pad[4] = {114, 114, 114, 255};
     const NppiSize full = {net_w, net_h};
     if (nppiSet_8u_C4R(pad, rgba_lin_, net_w * 4, full) != NPP_SUCCESS) {

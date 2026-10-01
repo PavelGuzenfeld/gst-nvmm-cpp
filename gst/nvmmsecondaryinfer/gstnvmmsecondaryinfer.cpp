@@ -180,6 +180,7 @@ load_labels(GstNvmmSecondaryInfer *self)
     return TRUE;
 }
 
+/// The engine must output a flat score vector: [1,C], [1,C,1,1] or [C].
 static gboolean
 gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
 {
@@ -250,7 +251,6 @@ gst_nvmm_secondary_infer_start(GstBaseTransform *bt)
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
-    /// A flat score vector: [1,C], [1,C,1,1] or [C]. A detection head or multi-batch is rejected.
     bool head_ok = false;
     switch (out->dims.nbDims) {
         case 1: head_ok = true; break;
@@ -359,6 +359,8 @@ label_of(GstNvmmSecondaryInfer *self, int class_id, char *out, size_t len)
         g_snprintf(out, len, "class%d", class_id);
 }
 
+/// lookup() marks the track seen, so skipped or failed inference cannot expire it.
+/// Untracked objects (tracker_id 0) cannot be cached and re-infer every frame.
 static GstFlowReturn
 gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
@@ -389,8 +391,6 @@ gst_nvmm_secondary_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         const NvmmDetObject &o = m->objects[i];
         NvmmClassEntry &e = entries[i];
 
-        /// lookup() marks the track seen, so skipped or failed inference cannot expire it.
-        /// Untracked objects (tracker_id 0) cannot be cached and re-infer every frame.
         const nvmm::ClassResult *cached =
             o.tracker_id ? self->cache->lookup(o.tracker_id, fno) : nullptr;
         if (cached) {

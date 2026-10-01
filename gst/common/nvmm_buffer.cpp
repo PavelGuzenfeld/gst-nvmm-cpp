@@ -95,6 +95,8 @@ NvmmBuffer& NvmmBuffer::operator=(NvmmBuffer&& other) noexcept {
     return *this;
 }
 
+/// Sets numFilled: NvBufSurfaceCreate leaves it at 0, and Map/Transform reject
+/// index 0 until it is set.
 Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
     if (params.width == 0 || params.height == 0) {
         return NvmmError{ErrorCode::kInvalidParam, "width and height must be > 0"};
@@ -116,8 +118,6 @@ Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
                          "NvBufSurfaceCreate returned " + std::to_string(ret)};
     }
 
-    /// NvBufSurfaceCreate leaves numFilled at 0, and Map/Transform reject
-    /// index 0 until it is set.
     surface->numFilled = surface->batchSize;
 
     return NvmmBuffer{surface};
@@ -193,12 +193,12 @@ Result<void> NvmmBuffer::unmap() {
     return Result<void>{};
 }
 
+/// For SURFACE_ARRAY/HANDLE memory the fd is bufferDesc.
 Result<int> NvmmBuffer::export_fd() const {
     if (!surface_) {
         return NvmmError{ErrorCode::kInvalidParam, "null surface"};
     }
 
-    /// For SURFACE_ARRAY/HANDLE memory, bufferDesc is the DMA-buf fd.
     int fd = static_cast<int>(surface_->surfaceList[0].bufferDesc);
     if (fd < 0) {
         return NvmmError{ErrorCode::kDmaBufFailed, "no DMA-buf fd available"};

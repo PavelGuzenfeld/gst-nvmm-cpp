@@ -52,9 +52,9 @@ void KalmanBox::initiate(double cx, double cy, double w, double h)
     initiated_ = true;
 }
 
+/// Q uses the pre-prediction w, h, as kalman_filter.py does.
 void KalmanBox::predict(double dt)
 {
-    /// Q uses the pre-prediction w, h, as kalman_filter.py does.
     const double sp = kStdWPos, sv = kStdWVel;
     const double q[8] = {
         sp * mean_[2], sp * mean_[3], sp * mean_[2], sp * mean_[3],

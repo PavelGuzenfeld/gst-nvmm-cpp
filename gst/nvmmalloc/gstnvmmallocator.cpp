@@ -36,11 +36,11 @@ static void gst_nvmm_allocator_free(GstAllocator* allocator, GstMemory* memory) 
     delete mem;
 }
 
+/// NVIDIA convention: the mapped data is the NvBufSurface*, not pixels.
 static gpointer gst_nvmm_allocator_mem_map(GstMemory* memory, gsize maxsize,
                                              GstMapFlags flags) {
     (void)maxsize;
     (void)flags;
-    /// NVIDIA convention: the mapped data is the NvBufSurface*, not pixels.
     auto* mem = nvmm_owner(memory);
     if (!mem->buffer) return nullptr;
     return mem->buffer->raw();
@@ -139,6 +139,8 @@ void gst_nvmm_memory_unmap_plane(GstMemory* mem) {
     }
 }
 
+/// Share-capable (no NO_SHARE), so tee fan-out and make_writable reference
+/// the surface instead of deep-copying it.
 GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
                                            int format,
                                            guint width, guint height) {
@@ -171,8 +173,6 @@ GstMemory* gst_nvmm_allocator_alloc_video(GstAllocator* allocator,
     auto* mem = new GstNvmmMemory{};
     auto actual_size = static_cast<gsize>((*result).data_size());
 
-    /// Share-capable (no NO_SHARE), so tee fan-out and make_writable reference
-    /// the surface instead of deep-copying it.
     gst_memory_init(GST_MEMORY_CAST(mem),
                     static_cast<GstMemoryFlags>(0),
                     allocator, nullptr, actual_size, 0, 0, actual_size);

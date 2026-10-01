@@ -63,8 +63,9 @@ public:
         return true;
     }
 
-    /// prev/curr are host uint8 n*n. Same sign as PhaseCorrelator::correlate: content
-    /// motion prev -> curr. Any CUDA/VPI failure returns {}, gated out by the caller.
+    /// prev/curr are host uint8 n*n; sign matches PhaseCorrelator::correlate. Any CUDA/VPI
+    /// failure returns {}. The response is rescaled by N to undo VPI's 1/N inverse FFT, so
+    /// one confidence gate fits both FFT backends.
     PhaseShift estimate(const uint8_t *prev, const uint8_t *curr) {
         const int n = n_;
         const size_t n2 = (size_t)n * n;
@@ -82,8 +83,6 @@ public:
             vpiStreamSync(stream_) != VPI_SUCCESS) return {};
         if (cudaMemcpyAsync(h_corr_.data(), d_corr_, n2 * sizeof(float2), cudaMemcpyDeviceToHost, cs_) != cudaSuccess ||
             cudaStreamSynchronize(cs_) != cudaSuccess) return {};
-        /// VPI's inverse FFT is 1/N-scaled and PhaseCorrelator's is not; rescale by N so
-        /// one confidence gate fits both FFT backends. The shift is scale-invariant.
         const double nrm = (double)n2;
         for (size_t i = 0; i < n2; i++) real_[i] = (double)h_corr_[2 * i] * nrm;
         return refine_correlation_peak(real_, n, n);
