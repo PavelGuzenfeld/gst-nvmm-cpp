@@ -19,42 +19,23 @@ function(nvmm_add_test name)
     endif()
 endfunction()
 
-nvmm_add_test(test_nvmm_buffer
-    SOURCES test_nvmm_buffer.cpp
+nvmm_add_test(test_nvmm_surface
+    SOURCES test_nvmm_surface.cpp
     LIBRARIES nvmm_common
 )
 
-nvmm_add_test(test_nvmm_transform
-    SOURCES test_nvmm_transform.cpp
-    LIBRARIES nvmm_common
-)
-
-nvmm_add_test(test_gst_nvmm_allocator
-    SOURCES test_gst_nvmm_allocator.cpp
+nvmm_add_test(test_gst_meta_and_allocator
+    SOURCES test_gst_meta_and_allocator.cpp
+        ${CMAKE_SOURCE_DIR}/gst/common/nvmm_optical_flow_meta.cpp
+        ${CMAKE_SOURCE_DIR}/gst/common/nvmm_track_meta.cpp
+        ${CMAKE_SOURCE_DIR}/gst/common/nvmm_class_meta.cpp
     LIBRARIES nvmm_common gstnvmmalloc PkgConfig::GSTREAMER
 )
 
-nvmm_add_test(test_nvmm_det_meta
-    SOURCES test_nvmm_det_meta.cpp
-    LIBRARIES nvmm_common PkgConfig::GSTREAMER
-)
-
-nvmm_add_test(test_nvmm_sink
-    SOURCES test_nvmm_sink.cpp
-    LIBRARIES gstnvmmsink PkgConfig::GSTREAMER
-    ENV "GST_PLUGIN_PATH=${_plugin_path}"
-)
-
-nvmm_add_test(test_nvmm_appsrc
-    SOURCES test_nvmm_appsrc.cpp
+nvmm_add_test(test_nvmm_sink_appsrc
+    SOURCES test_nvmm_sink_appsrc.cpp
     LIBRARIES gstnvmmsink gstnvmmappsrc PkgConfig::GSTREAMER
     ENV "GST_PLUGIN_PATH=${_plugin_path}"
-)
-
-nvmm_add_test(test_gstcheck_elements
-    SOURCES test_gstcheck_elements.cpp
-    LIBRARIES PkgConfig::GSTREAMER PkgConfig::GSTREAMER_VIDEO
-    ENV "GST_PLUGIN_PATH=${_plugin_path_with_convert}"
 )
 
 nvmm_add_test(test_integration
@@ -64,6 +45,6 @@ nvmm_add_test(test_integration
 )
 
 # They share /dev/shm.
-set_tests_properties(test_nvmm_sink test_nvmm_appsrc test_gstcheck_elements test_integration
+set_tests_properties(test_nvmm_sink_appsrc test_integration
     PROPERTIES RUN_SERIAL TRUE
 )

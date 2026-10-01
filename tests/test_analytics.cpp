@@ -1,10 +1,84 @@
+#include "persistence_gate.hpp"
 #include "dual_homography.hpp"
 #include "analytics_scene.h"
-#include "test_harness.h"
+#include "low_texture_motion.hpp"
+#include "active_region.hpp"
+#include "detection_motion_gate.hpp"
+#include "motion_magnify.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <vector>
+
+#include "test_harness.h"
+
+namespace {
+
+/// Input amplitude is 20, so an unamplified output has peak-to-peak 40. Defined first:
+/// on a fresh heap glibc aborts on a one-row overrun in the magnifier; later it may not.
+float steady_pp(float f0, float low, float high, float alpha) {
+    nvmm::motion::MagnifyParams p; p.fps = 30.f; p.low_hz = low; p.high_hz = high; p.alpha = alpha;
+    nvmm::motion::MotionMagnifier mag(p);
+    const int N = 150, settle = 100;
+    float lo = 1e9f, hi = -1e9f;
+    for (int n = 0; n < N; n++) {
+        const float v = 128.f + 20.f * std::sin(2.f * 3.14159265f * f0 * n / p.fps);
+        nvmm::img::Image<uint8_t> f(16, 16, scene::clamp_u8(v));
+        nvmm::img::Image<float> out = mag.process(f);
+        const float c = out.at(8, 8);
+        if (n >= settle) { lo = std::min(lo, c); hi = std::max(hi, c); }
+    }
+    return hi - lo;
+}
+
+TEST(in_band_oscillation_is_amplified) {
+    float pp = steady_pp(4.f, 2.f, 8.f, 10.f);
+    printf("[in-band pp=%.1f vs input 40] ", pp);
+    ASSERT_TRUE(pp > 80.0f);
+}
+
+TEST(out_of_band_oscillation_is_not_amplified) {
+    float pp = steady_pp(0.2f, 2.f, 8.f, 10.f);
+    printf("[out-of-band pp=%.1f vs input 40] ", pp);
+    ASSERT_TRUE(pp < 60.0f);
+}
+
+}
+
+namespace {
+
+using nvmm::track::Detection;
+using nvmm::track::PersistenceGate;
+using nvmm::track::PersistenceParams;
+
+std::vector<Detection> one(float x, float y, bool supported) {
+    return { Detection{x, y, 0.9f, supported} };
+}
+
+TEST(persistent_supported_confirms_then_latches) {
+    PersistenceGate g{PersistenceParams{}};
+    int first = -1;
+    for (int f = 1; f <= 5; f++) ASSERT_TRUE(g.update(one(100, 100, true)) == -1);
+    first = g.update(one(100, 100, true));
+    ASSERT_TRUE(first == 0);
+    ASSERT_TRUE(g.locked());
+    ASSERT_TRUE(g.update(one(101, 100, true)) == 0);
+}
+
+TEST(unsupported_never_confirms) {
+    PersistenceGate g{PersistenceParams{}};
+    for (int f = 1; f <= 30; f++) ASSERT_TRUE(g.update(one(100, 100, false)) == -1);
+    ASSERT_TRUE(!g.locked());
+}
+
+TEST(flickering_support_never_confirms) {
+    PersistenceGate g{PersistenceParams{}};
+    for (int f = 1; f <= 40; f++)
+        ASSERT_TRUE(g.update(one(100, 100, f % 2 == 0)) == -1);
+    ASSERT_TRUE(!g.locked());
+}
+
+}
 
 namespace {
 
@@ -166,7 +240,95 @@ TEST(brief_pair_second_ends_reach_exactly_the_patch_radius) {
 
 }
 
+namespace {
+
+nvmm::img::Image<uint8_t> make_scene() {
+    scene::Rng rng(3);
+    nvmm::img::Image<uint8_t> f(256, 256);
+    for (int y = 0; y < 256; y++)
+        for (int x = 0; x < 256; x++)
+            f.at(y, x) = scene::clamp_u8(110.f + rng.gauss(3.f));
+    for (int y = 30; y < 90; y++)
+        for (int x = 30; x < 90; x++) f.at(y, x) = (uint8_t)rng.uniform(0, 256);
+    return f;
+}
+
+TEST(diff_kept_in_low_texture_masked_over_textured_patch) {
+    nvmm::img::Image<uint8_t> cur = make_scene();
+    nvmm::img::Image<uint8_t> ref(256, 256);
+    for (int y = 0; y < 256; y++)
+        for (int x = 0; x < 256; x++)
+            ref.at(y, x) = (uint8_t)(cur.at(y, x) < 30 ? 0 : cur.at(y, x) - 30);
+
+    nvmm::img::Image<float> m = nvmm::motion::low_texture_motion(cur, ref, ref);
+    const float low_tex = nvmm::img::window_max(m.view(), 185, 185, 8);
+    const float high_tex = nvmm::img::window_max(m.view(), 60, 60, 8);
+    printf("[low_tex=%.1f high_tex=%.1f] ", low_tex, high_tex);
+
+    ASSERT_TRUE(low_tex > 20.0f);
+    ASSERT_TRUE(high_tex < 5.0f);
+}
+
+}
+
+namespace {
+
+TEST(trims_uniform_bars_keeps_dark_textured_content) {
+    nvmm::img::Image<uint8_t> f(200, 200, 128);
+    scene::Rng rng(7);
+    for (int i = 0; i < 120; i++) {
+        const int x = rng.uniform(42, 158), y = rng.uniform(4, 196);
+        scene::fill_circle(f, x, y, rng.uniform(2, 4), (uint8_t)rng.uniform(10, 60));
+    }
+    scene::gaussian_blur_u8(f, 3);
+
+    nvmm::img::Rect r = nvmm::video::active_region(f);
+    printf("[x=%d w=%d] ", r.x, r.w);
+    ASSERT_TRUE(r.x >= 38 && r.x <= 44);
+    ASSERT_TRUE(r.x + r.w >= 156 && r.x + r.w <= 162);
+}
+
+TEST(uniform_frame_returns_full) {
+    nvmm::img::Image<uint8_t> f(120, 120, 50);
+    nvmm::img::Rect r = nvmm::video::active_region(f);
+    ASSERT_TRUE(r.w == f.width() && r.h == f.height());
+}
+
+}
+
+namespace {
+
+nvmm::img::Image<uint8_t> frame_at(const nvmm::img::Image<uint8_t> &bg, int t) {
+    nvmm::img::Image<uint8_t> f = scene::translate(bg, 3.0 * t, 2.0 * t);
+    scene::fill_circle(f, 70 + 6 * t, 180, 6, 255);
+    return f;
+}
+
+TEST(confirms_independent_mover_not_static_clutter) {
+    nvmm::img::Image<uint8_t> bg = scene::textured_bg(256, 99);
+    nvmm::motion::MovingObjectGate gate;
+
+    int confirmed_idx = -2;
+    for (int t = 2; t <= 16; t++) {
+        nvmm::img::Image<uint8_t> cur = frame_at(bg, t);
+        nvmm::img::Image<uint8_t> ref_a = frame_at(bg, t - 1);
+        nvmm::img::Image<uint8_t> ref_b = frame_at(bg, t - 2);
+        std::vector<nvmm::track::Detection> dets = {
+            { (float)(70 + 6 * t), 180.f, 0.9f, false },
+            { 200.f,               60.f,  0.9f, false },
+        };
+        const int r = gate.update(dets, cur, ref_a, ref_b);
+        if (r >= 0 && confirmed_idx == -2) confirmed_idx = r;
+        ASSERT_TRUE(r != 1);
+    }
+    printf("[first_confirm_idx=%d] ", confirmed_idx);
+    ASSERT_TRUE(confirmed_idx == 0);
+    ASSERT_TRUE(gate.locked());
+}
+
+}
+
 int main() {
-    printf("== analytics/dual_homography ==\n");
+    printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }

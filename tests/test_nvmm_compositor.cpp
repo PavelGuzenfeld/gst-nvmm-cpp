@@ -3,35 +3,19 @@
 
 #include <cstdio>
 
-static int tests_passed = 0;
-static int tests_failed = 0;
+#include "test_harness.h"
 
-#define RUN_TEST(name) do { \
-    printf("  TEST %s ... ", #name); \
-    test_##name(); \
-} while(0)
+namespace {
 
-#define ASSERT_TRUE(expr) do { \
-    if (!(expr)) { printf("FAIL at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-                    tests_failed++; return; } } while(0)
-
-#define ASSERT_NOT_NULL(ptr) ASSERT_TRUE((ptr) != NULL)
-
-#define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
+/// Declared first: within one TU, static objects initialize in declaration order.
+struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
 /// aggregate() needs real NVMM buffers; compositing itself is covered by the
 /// on-device runs in docs/validation.md.
-static void test_compositor_creates() {
+TEST(compositor_is_aggregator_with_settable_output_size) {
     GstElement *comp = gst_element_factory_make("nvmmcompositor", "test-comp");
     ASSERT_NOT_NULL(comp);
     ASSERT_TRUE(GST_IS_AGGREGATOR(comp));
-    gst_object_unref(comp);
-    PASS();
-}
-
-static void test_compositor_output_props() {
-    GstElement *comp = gst_element_factory_make("nvmmcompositor", NULL);
-    ASSERT_NOT_NULL(comp);
 
     gint w = 0, h = 0;
     g_object_get(comp, "width", &w, "height", &h, NULL);
@@ -42,10 +26,9 @@ static void test_compositor_output_props() {
     ASSERT_TRUE(w == 1920 && h == 1080);
 
     gst_object_unref(comp);
-    PASS();
 }
 
-static void test_request_pads() {
+TEST(request_pads) {
     GstElement *comp = gst_element_factory_make("nvmmcompositor", NULL);
     ASSERT_NOT_NULL(comp);
 
@@ -68,10 +51,9 @@ static void test_request_pads() {
     gst_object_unref(p0);
     gst_object_unref(p1);
     gst_object_unref(comp);
-    PASS();
 }
 
-static void test_pad_placement_props() {
+TEST(pad_placement_props) {
     GstElement *comp = gst_element_factory_make("nvmmcompositor", NULL);
     ASSERT_NOT_NULL(comp);
 
@@ -86,18 +68,11 @@ static void test_pad_placement_props() {
     gst_element_release_request_pad(comp, pad);
     gst_object_unref(pad);
     gst_object_unref(comp);
-    PASS();
 }
 
-int main(int argc, char **argv) {
-    gst_init(&argc, &argv);
-    printf("Running GstNvmmCompositor tests:\n");
+}
 
-    RUN_TEST(compositor_creates);
-    RUN_TEST(compositor_output_props);
-    RUN_TEST(request_pads);
-    RUN_TEST(pad_placement_props);
-
+int main() {
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed == 0 ? 0 : 1;
+    return tests_failed > 0 ? 1 : 0;
 }

@@ -2,6 +2,7 @@
 #include <gst/video/video.h>
 
 #include "gstnvmmallocator.h"
+#include "shm_protocol.h"
 
 #include <cstdio>
 
@@ -10,27 +11,59 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int tests_passed = 0;
-static int tests_failed = 0;
+#include "test_harness.h"
 
-#define RUN_TEST(name) do { \
-    printf("  TEST %s ... ", #name); fflush(stdout); \
-    test_##name(); \
-} while(0)
+namespace {
 
-#define ASSERT_TRUE(expr) do { \
-    if (!(expr)) { printf("FAIL at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-                    tests_failed++; return; } } while(0)
+/// Declared first: within one TU, static objects initialize in declaration order.
+struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
-#define ASSERT_NOT_NULL(ptr) ASSERT_TRUE((ptr) != NULL)
-#define ASSERT_EQ(a, b) ASSERT_TRUE((a) == (b))
+TEST(nvmmconvert_state_transitions) {
+    GstElement *elem = gst_element_factory_make("nvmmconvert", NULL);
+    ASSERT_NOT_NULL(elem);
 
-#define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
+    GstStateChangeReturn ret;
+    GstState current, pending;
 
-#include "shm_protocol.h"
+    ret = gst_element_set_state(elem, GST_STATE_READY);
+    ASSERT_TRUE(ret == GST_STATE_CHANGE_SUCCESS ||
+                ret == GST_STATE_CHANGE_NO_PREROLL);
+
+    gst_element_get_state(elem, &current, &pending, GST_CLOCK_TIME_NONE);
+    ASSERT_EQ(current, GST_STATE_READY);
+
+    ret = gst_element_set_state(elem, GST_STATE_NULL);
+    ASSERT_EQ(ret, GST_STATE_CHANGE_SUCCESS);
+
+    gst_object_unref(elem);
+}
+
+TEST(nvmmconvert_pad_templates) {
+    GstElement *elem = gst_element_factory_make("nvmmconvert", NULL);
+    ASSERT_NOT_NULL(elem);
+
+    GstPad *sink_pad = gst_element_get_static_pad(elem, "sink");
+    ASSERT_NOT_NULL(sink_pad);
+
+    GstPad *src_pad = gst_element_get_static_pad(elem, "src");
+    ASSERT_NOT_NULL(src_pad);
+
+    GstCaps *sink_caps = gst_pad_query_caps(sink_pad, NULL);
+    ASSERT_NOT_NULL(sink_caps);
+    ASSERT_TRUE(!gst_caps_is_empty(sink_caps));
+
+    GstCapsFeatures *features = gst_caps_get_features(sink_caps, 0);
+    ASSERT_NOT_NULL(features);
+    ASSERT_TRUE(gst_caps_features_contains(features, "memory:NVMM"));
+
+    gst_caps_unref(sink_caps);
+    gst_object_unref(sink_pad);
+    gst_object_unref(src_pad);
+    gst_object_unref(elem);
+}
 
 /// Sequential, because each segment is ~33MB and Docker's /dev/shm is small.
-static void test_multiple_shm_segments() {
+TEST(multiple_shm_segments) {
     const char *names[] = {"/test_int_multi_0", "/test_int_multi_1"};
 
     for (int i = 0; i < 2; i++) {
@@ -51,11 +84,9 @@ static void test_multiple_shm_segments() {
         fd = shm_open(names[i], O_RDONLY, 0);
         ASSERT_TRUE(fd < 0);
     }
-
-    PASS();
 }
 
-static void test_convert_dynamic_properties() {
+TEST(convert_dynamic_properties) {
     GstElement *convert = gst_element_factory_make("nvmmconvert", NULL);
     ASSERT_NOT_NULL(convert);
 
@@ -87,11 +118,9 @@ static void test_convert_dynamic_properties() {
 
     gst_element_set_state(convert, GST_STATE_NULL);
     gst_object_unref(convert);
-
-    PASS();
 }
 
-static void test_convert_in_pipeline_bin() {
+TEST(convert_in_pipeline_bin) {
     GstElement *pipeline = gst_pipeline_new("test");
     GstElement *convert = gst_element_factory_make("nvmmconvert", "conv");
     GstElement *sink = gst_element_factory_make("nvmmsink", "sink");
@@ -122,11 +151,9 @@ static void test_convert_in_pipeline_bin() {
 
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline);
-
-    PASS();
 }
 
-static void test_allocator_no_leak_stress() {
+TEST(allocator_no_leak_stress) {
     GstAllocator *alloc = gst_nvmm_allocator_new(0);
     ASSERT_NOT_NULL(alloc);
 
@@ -138,10 +165,9 @@ static void test_allocator_no_leak_stress() {
     }
 
     gst_object_unref(alloc);
-    PASS();
 }
 
-static void test_shm_header_protocol() {
+TEST(shm_header_protocol) {
     const char *shm_name = "/test_int_protocol";
 
     GstElement *sink = gst_element_factory_make("nvmmsink", NULL);
@@ -169,11 +195,9 @@ static void test_shm_header_protocol() {
 
     gst_element_set_state(sink, GST_STATE_NULL);
     gst_object_unref(sink);
-
-    PASS();
 }
 
-static void test_source_missing_shm() {
+TEST(source_missing_shm) {
     shm_unlink("/test_int_missing");
 
     GstElement *src = gst_element_factory_make("nvmmappsrc", NULL);
@@ -186,22 +210,11 @@ static void test_source_missing_shm() {
 
     gst_element_set_state(src, GST_STATE_NULL);
     gst_object_unref(src);
-
-    PASS();
 }
 
-int main(int argc, char *argv[]) {
-    gst_init(&argc, &argv);
-    printf("=== Integration Tests ===\n");
+}
 
-    RUN_TEST(multiple_shm_segments);
-    RUN_TEST(convert_dynamic_properties);
-    RUN_TEST(convert_in_pipeline_bin);
-    RUN_TEST(allocator_no_leak_stress);
-    RUN_TEST(shm_header_protocol);
-    RUN_TEST(source_missing_shm);
-
+int main() {
     printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
-    gst_deinit();
     return tests_failed > 0 ? 1 : 0;
 }
