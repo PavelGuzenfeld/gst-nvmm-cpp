@@ -27,16 +27,15 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_drawdet_debug);
 struct _GstNvmmDrawDet {
     GstBaseTransform parent;
     gint           width, height;
-    gint           thickness;          /* property: box line thickness (px) */
-    gboolean       draw_labels;        /* property: draw "label conf%" text */
-    gboolean       draw_det;           /* property: draw raw YOLO det boxes */
-    NvBufSurface  *rgba;               /* VIC-native RGBA, full-frame */
-    cudaGraphicsResource_t egl_res;    /* CUDA view of rgba via EGL */
-    /* SAMURAI/fusekf track-meta HUD: live FPS (EMA) + tracking coverage. */
-    gboolean       draw_track;         /* property: draw GstNvmmTrackMeta + HUD */
-    gdouble        fps_smoothing;      /* property: HUD FPS EMA weight on history (0..1) */
-    gint           font_scale_div;    /* property: font px = max(1, height/this) */
-    gint64         last_us;            /* monotonic time of previous frame */
+    gint           thickness;
+    gboolean       draw_labels;
+    gboolean       draw_det;
+    NvBufSurface  *rgba;
+    cudaGraphicsResource_t egl_res;
+    gboolean       draw_track;
+    gdouble        fps_smoothing;
+    gint           font_scale_div;
+    gint64         last_us;
     double         ema_fps;
     guint64        n_frames, n_valid;
 };
@@ -72,7 +71,6 @@ surface_of(GstBuffer *buf)
     return nullptr;
 }
 
-/* NVMM NV12 <-> system RGBA, same dimensions/framerate. */
 static GstCaps *
 gst_nvmm_drawdet_transform_caps(GstBaseTransform *, GstPadDirection direction,
                                 GstCaps *caps, GstCaps *filter)
@@ -80,10 +78,10 @@ gst_nvmm_drawdet_transform_caps(GstBaseTransform *, GstPadDirection direction,
     GstCaps *res = gst_caps_new_empty();
     for (guint i = 0; i < gst_caps_get_size(caps); i++) {
         GstStructure *st = gst_structure_copy(gst_caps_get_structure(caps, i));
-        if (direction == GST_PAD_SINK) {  // -> src: system RGBA
+        if (direction == GST_PAD_SINK) {
             gst_structure_set(st, "format", G_TYPE_STRING, "RGBA", nullptr);
             gst_caps_append_structure_full(res, st, gst_caps_features_new_empty());
-        } else {                          // -> sink: NVMM NV12
+        } else {
             gst_structure_set(st, "format", G_TYPE_STRING, "NV12", nullptr);
             gst_caps_append_structure_full(res, st,
                 gst_caps_features_new("memory:NVMM", nullptr));
@@ -106,21 +104,13 @@ gst_nvmm_drawdet_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
            gst_structure_get_int(s, "height", &self->height);
 }
 
-/* Output allocation size. The NVMM input's gst-buffer size is a surface
-   HANDLE, not pixels, so the default unit-size scaling must never be used to
-   size the packed-RGBA output: with a caps-any downstream (no pool from the
-   ALLOCATION query, e.g. fakesink) that mis-sized the buffer and the host
-   copy in transform() corrupted the heap. Compute the size from the raw-RGBA
-   caps instead, whichever direction holds them. */
 static gboolean
 gst_nvmm_drawdet_transform_size(GstBaseTransform *bt, GstPadDirection direction,
-                                GstCaps * /*caps*/, gsize /*size*/,
+                                GstCaps * , gsize ,
                                 GstCaps *othercaps, gsize *othersize)
 {
-    GstCaps *rgba_caps = othercaps;  /* SINK direction: othercaps = src (RGBA) */
+    GstCaps *rgba_caps = othercaps;
     if (direction == GST_PAD_SRC) {
-        /* othercaps = sink (NVMM NV12): the NVMM buffer is a handle; report
-           the only meaningful size we have, the surface-struct pointer slot. */
         *othersize = sizeof(NvBufSurface *);
         return TRUE;
     }
@@ -163,7 +153,6 @@ ensure_rgba(GstNvmmDrawDet *self)
     return TRUE;
 }
 
-/* Vivid, high-contrast color per class id (RGBA), cycling a fixed palette. */
 static void
 class_color(int id, guint8 *r, guint8 *g, guint8 *b)
 {
@@ -190,7 +179,6 @@ draw_rect(guint8 *rgba, int W, int H, int x, int y, int w, int h, int t,
     }
 }
 
-/* Fill the rect [x,x+w) x [y,y+h), clipped once to the frame. */
 static void
 fill_rect(guint8 *rgba, int W, int H, int x, int y, int w, int h,
           guint8 r, guint8 g, guint8 b)
@@ -202,9 +190,6 @@ fill_rect(guint8 *rgba, int W, int H, int x, int y, int w, int h,
     }
 }
 
-/* Draw `str` with the built-in 6x8 font scaled by `s`: a filled bar in the box
- * color (r,g,b) with black glyphs on top, for legibility over any background.
- * (x,y) is the glyph origin; the bar is padded one scaled pixel around it. */
 static void
 draw_text(guint8 *rgba, int W, int H, int x, int y, const char *str, int s,
           guint8 r, guint8 g, guint8 b)
@@ -232,7 +217,6 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     if (!src) { GST_WARNING_OBJECT(self, "no NvBufSurface"); return GST_FLOW_ERROR; }
     if (src->numFilled == 0) src->numFilled = src->batchSize ? src->batchSize : 1;
 
-    /* NV12 -> RGBA (full frame) on the VIC. */
     NvBufSurfTransformParams xform{};
     if (NvBufSurfTransform(src, self->rgba, &xform) != NvBufSurfTransformError_Success) {
         GST_WARNING_OBJECT(self, "NvBufSurfTransform failed");
@@ -243,8 +227,6 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
     if (!gst_buffer_map(outbuf, &omap, GST_MAP_WRITE)) return GST_FLOW_ERROR;
     const int W = self->width, H = self->height;
 
-    /* Refuse to scribble: a mis-negotiated output buffer fails loudly here
-       instead of corrupting the heap (see transform_size above). */
     if (omap.size < (gsize)W * H * 4) {
         GST_ELEMENT_ERROR(self, STREAM, FAILED,
                           ("output buffer is %" G_GSIZE_FORMAT " bytes, need %dx%dx4",
@@ -253,7 +235,6 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
         return GST_FLOW_ERROR;
     }
 
-    /* EGL/CUDA view of the RGBA surface -> copy to the (host) output buffer. */
     cudaEglFrame ef;
     cudaError_t r = cudaGraphicsResourceGetMappedEglFrame(&ef, self->egl_res, 0, 0);
     if (r == cudaSuccess) {
@@ -271,18 +252,13 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
         return GST_FLOW_ERROR;
     }
 
-    /* Draw raw detection boxes (scaled from the meta's inference-frame space).
-       Off when draw-det=false — for the tracker result video we only want the
-       single fused track box, not the noisy per-frame YOLO detections. */
     GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(inbuf);
     if (self->draw_det && m && m->num_objects) {
-        /* Motion annotation (from nvmmfusion): entries align by index. */
         GstNvmmMotionMeta *mm = gst_buffer_get_nvmm_motion_meta(inbuf);
-        /* Classifier annotation (from nvmmsecondaryinfer): same alignment. */
         GstNvmmClassMeta *cm = gst_buffer_get_nvmm_class_meta(inbuf);
         const float sx = m->infer_width  ? (float)W / m->infer_width  : 1.f;
         const float sy = m->infer_height ? (float)H / m->infer_height : 1.f;
-        const int ts = MAX(1, H / 360);  /* font scale: ~3 at 1080p, ~2 at 720p */
+        const int ts = MAX(1, H / 360);
         for (guint32 i = 0; i < m->num_objects; i++) {
             const NvmmDetObject &o = m->objects[i];
             const gboolean moving =
@@ -290,14 +266,11 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             guint8 r8, g8, b8;
             class_color(o.class_id, &r8, &g8, &b8);
             const int bx = (int)(o.left * sx), by = (int)(o.top * sy);
-            /* Movers get a heavier box so motion reads at a glance. */
             draw_rect((guint8 *)omap.data, W, H, bx, by,
                       (int)(o.width * sx), (int)(o.height * sy),
                       moving ? self->thickness * 2 : self->thickness, r8, g8, b8);
 
             if (!self->draw_labels) continue;
-            /* "car #4 82% >> [taxi 91%]" — tracker id when assigned, ">>"
-             * when moving, secondary-classifier result when attached. */
             char idbuf[24] = "";
             if (o.tracker_id)
                 g_snprintf(idbuf, sizeof idbuf, " #%" G_GUINT64_FORMAT, o.tracker_id);
@@ -310,25 +283,23 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             g_snprintf(text, sizeof text, "%s%s %.0f%%%s%s",
                        o.label[0] ? o.label : "obj", idbuf,
                        (double)o.confidence * 100.0, moving ? " >>" : "", clsbuf);
-            /* Label bar just above the box; tuck it inside the top if no room. */
             int ty = by - FONT_H * ts - ts;
             if (ty < ts) ty = by + ts;
             draw_text((guint8 *)omap.data, W, H, bx + ts, ty, text, ts, r8, g8, b8);
         }
     }
-    /* SAMURAI/fusekf track-meta box (frame coords == W x H) + live HUD. */
     if (self->draw_track) {
         const gint64 now = g_get_monotonic_time();
         if (self->last_us) {
             const double inst = 1e6 / (double)(now - self->last_us);
-            const double a = self->fps_smoothing;   /* prop fps-smoothing (def 0.9) */
+            const double a = self->fps_smoothing;
             self->ema_fps = self->ema_fps > 0 ? a * self->ema_fps + (1.0 - a) * inst : inst;
         }
         self->last_us = now;
         self->n_frames++;
         GstNvmmTrackMeta *tm = gst_buffer_get_nvmm_track_meta(inbuf);
-        const int ts = MAX(1, H / self->font_scale_div);  /* prop font-scale-divisor (def 540) */
-        const int line = MAX(1, self->thickness);   /* thin track box (thickness prop) */
+        const int ts = MAX(1, H / self->font_scale_div);
+        const int line = MAX(1, self->thickness);
         if (tm && tm->valid && tm->width > 0) {
             self->n_valid++;
             draw_rect((guint8 *)omap.data, W, H, (int)tm->left, (int)tm->top,
@@ -339,7 +310,7 @@ gst_nvmm_drawdet_transform(GstBaseTransform *bt, GstBuffer *inbuf, GstBuffer *ou
             int ty = (int)tm->top - FONT_H * ts - ts; if (ty < ts) ty = (int)tm->top + ts;
             draw_text((guint8 *)omap.data, W, H, (int)tm->left + ts, ty, tl, ts, 0, 255, 255);
         }
-        const double cov = 100.0 * self->n_valid / self->n_frames;  /* n_frames++ above guarantees >= 1 */
+        const double cov = 100.0 * self->n_valid / self->n_frames;
         char hud[64];
         g_snprintf(hud, sizeof hud, "FPS %.1f  TRACK %.0f%%", self->ema_fps, cov);
         draw_text((guint8 *)omap.data, W, H, 8, 8, hud, ts, 0, 255, 0);

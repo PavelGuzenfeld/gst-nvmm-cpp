@@ -4,15 +4,12 @@
 #include <cmath>
 
 #include <npp.h>
-#include <cuda_egl_interop.h>  // runtime EGL interop (cudaGraphicsEGLRegisterImage, cudaEglFrame)
+#include <cuda_egl_interop.h>
 
 namespace nvmm {
 
 namespace {
 
-// VIC-native dst: surface-array RGBA (same rationale as nvmminfer's
-// preprocess: NvBufSurfTransform reliably writes these; CUDA-memory dsts are
-// rejected for some source memtypes). Pixels reached from CUDA via EGL.
 NvBufSurface *create_rgba(int w, int h, std::string &err) {
     NvBufSurfaceCreateParams p{};
     p.width       = (uint32_t)w;
@@ -30,7 +27,7 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
     return s;
 }
 
-}  // namespace
+}
 
 bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scale,
                                 const float *offsets, const float *std_values,
@@ -50,7 +47,6 @@ bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scal
     rgba_ = create_rgba(net_w, net_h, err);
     if (!rgba_) return false;
 
-    // Map the VIC-native surface into CUDA via EGL (zero-copy view).
     if (NvBufSurfaceMapEglImage(rgba_, 0) != 0) {
         err = "NvBufSurfaceMapEglImage failed";
         return false;
@@ -63,16 +59,12 @@ bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scal
         return false;
     }
 
-    // Linear RGBA (NPP-usable) + 4 split planes (RGBA C4->P4; A ignored).
     if (cudaMalloc((void **)&rgba_lin_, (size_t)4 * net_w * net_h) != cudaSuccess ||
         cudaMalloc((void **)&planes_,   (size_t)4 * net_w * net_h) != cudaSuccess) {
         err = "cudaMalloc(rgba_lin/planes) failed";
         return false;
     }
 
-    // Explicit per-call stream context (the _Ctx API) instead of nppSetStream:
-    // the global NPP stream is process-wide, and nvmminfer in the same pipeline
-    // sets it to ITS stream — sharing it would break per-element ordering.
     NppStatus st = nppGetStreamContext(&npp_ctx_);
     if (st != NPP_SUCCESS) {
         err = "nppGetStreamContext failed: " + std::to_string((int)st);
@@ -92,8 +84,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
     const int sw = (int)src->surfaceList[0].width;
     const int sh = (int)src->surfaceList[0].height;
 
-    // Clamp the box to the surface and even-align (NV12 chroma is 2x2
-    // subsampled; VIC wants even crop coordinates/sizes).
     int x0 = std::max(0, (int)std::floor(left)) & ~1;
     int y0 = std::max(0, (int)std::floor(top)) & ~1;
     int x1 = std::min(sw, (int)std::ceil(left + width));
@@ -106,7 +96,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
     src_rect.left = (uint32_t)x0; src_rect.top = (uint32_t)y0;
     src_rect.width = (uint32_t)w; src_rect.height = (uint32_t)h;
 
-    // NV12 ROI -> RGBA, stretch-resized to the full net-size dst (VIC).
     NvBufSurfTransformParams xform{};
     xform.transform_flag = NVBUFSURF_TRANSFORM_CROP_SRC;
     xform.src_rect = &src_rect;
@@ -118,8 +107,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
 
     const int W = net_w_, H = net_h_;
 
-    // Pull the freshly-written surface from the EGL/CUDA view into the linear
-    // buffer — device-to-device.
     cudaEglFrame ef;
     cudaError_t r = cudaGraphicsResourceGetMappedEglFrame(&ef, egl_res_, 0, 0);
     if (r != cudaSuccess) {
@@ -130,7 +117,7 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
         const cudaPitchedPtr &pp = ef.frame.pPitch[0];
         r = cudaMemcpy2DAsync(rgba_lin_, (size_t)W * 4, pp.ptr, pp.pitch,
                               (size_t)W * 4, H, cudaMemcpyDeviceToDevice, stream_);
-    } else {  // cudaEglFrameTypeArray
+    } else {
         r = cudaMemcpy2DFromArrayAsync(rgba_lin_, (size_t)W * 4, ef.frame.pArray[0],
                                        0, 0, (size_t)W * 4, H,
                                        cudaMemcpyDeviceToDevice, stream_);
@@ -141,7 +128,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
     }
 
     const NppiSize roi = {W, H};
-    // RGBA (interleaved) -> 4 packed uint8 planes [R,G,B,A]; we use R,G,B.
     Npp8u *planes4[4] = {planes_, planes_ + (size_t)W * H,
                          planes_ + 2 * (size_t)W * H, planes_ + 3 * (size_t)W * H};
     if (nppiCopy_8u_C4P4R_Ctx(rgba_lin_, W * 4, planes4, W, roi, npp_ctx_) != NPP_SUCCESS) {
@@ -149,7 +135,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
         return false;
     }
 
-    // uint8 planes -> f32 NCHW (channel order RGB or BGR; alpha plane unused).
     const int map[3] = {color_rgb_ ? 0 : 2, 1, color_rgb_ ? 2 : 0};
     for (int c = 0; c < 3; c++) {
         if (nppiConvert_8u32f_C1R_Ctx(planes4[map[c]], W,
@@ -160,7 +145,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
         }
     }
 
-    // Scale all 3 contiguous planes by `scale` in one pass.
     const NppiSize all = {W, 3 * H};
     if (nppiMulC_32f_C1IR_Ctx((Npp32f)scale_, d_input, W * (int)sizeof(float), all,
                               npp_ctx_) != NPP_SUCCESS) {
@@ -168,8 +152,6 @@ bool RoiPreprocessor::run(NvBufSurface *src, float left, float top,
         return false;
     }
 
-    // Optional per-channel normalization: y = (x*scale - offset[c]) / std[c]
-    // (e.g. Caffe-style mean subtraction, torchvision mean/std).
     for (int c = 0; (has_offsets_ || has_std_) && c < 3; c++) {
         Npp32f *plane = d_input + (size_t)c * W * H;
         if (has_offsets_ &&
@@ -198,4 +180,4 @@ RoiPreprocessor::~RoiPreprocessor() {
     if (planes_) cudaFree(planes_);
 }
 
-}  // namespace nvmm
+}

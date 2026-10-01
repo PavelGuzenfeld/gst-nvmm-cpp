@@ -1,9 +1,3 @@
-/// GstNvmmCompositor — VIC-composited multi-input NVMM mixer.
-///
-/// Each request sink pad places its NVMM frame into a rectangle of the output
-/// NVMM frame via NvBufSurfTransform (VIC) — no CPU copy. Multi-camera mosaic /
-/// overlay without DeepStream. Built on GstAggregator (not GstVideoAggregator,
-/// whose GstVideoFrame mapping does not understand NVMM memory).
 #pragma once
 
 #include <gst/gst.h>

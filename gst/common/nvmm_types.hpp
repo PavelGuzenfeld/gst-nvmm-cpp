@@ -8,7 +8,6 @@
 
 namespace nvmm {
 
-/// Error codes for NVMM operations
 enum class ErrorCode : int {
     kSuccess = 0,
     kInvalidParam,
@@ -22,7 +21,6 @@ enum class ErrorCode : int {
     kSurfaceDestroyFailed,
 };
 
-/// Human-readable error category
 class NvmmErrorCategory : public std::error_category {
 public:
     const char* name() const noexcept override {
@@ -55,7 +53,6 @@ inline std::error_code make_error_code(ErrorCode e) {
     return {static_cast<int>(e), nvmm_error_category()};
 }
 
-/// NvmmError wraps an error code with optional context
 struct NvmmError {
     ErrorCode code;
     std::string detail;
@@ -65,8 +62,6 @@ struct NvmmError {
         : code(c), detail(std::move(d)) {}
 };
 
-/// C++14 Result type using aligned storage (value | error).
-/// Supports move-only types without requiring default construction.
 template <typename T>
 class Result {
 public:
@@ -123,7 +118,6 @@ private:
     bool has_value_ = false;
 };
 
-/// Specialization for void Result
 template <>
 class Result<void> {
 public:
@@ -140,7 +134,6 @@ private:
     bool has_value_ = true;
 };
 
-/// Lightweight non-owning view of contiguous bytes
 class ByteSpan {
 public:
     ByteSpan() = default;
@@ -161,18 +154,16 @@ private:
     std::size_t size_ = 0;
 };
 
-/// Memory types matching NvBufSurfaceMemType
 enum class MemoryType : int {
-    kDefault = 0,       // NVBUF_MEM_DEFAULT
-    kCudaDevice = 1,    // NVBUF_MEM_CUDA_DEVICE
-    kCudaPinned = 2,    // NVBUF_MEM_CUDA_PINNED
-    kCudaUnified = 3,   // NVBUF_MEM_CUDA_UNIFIED
-    kSurfaceArray = 4,  // NVBUF_MEM_SURFACE_ARRAY
-    kHandle = 5,        // NVBUF_MEM_HANDLE
-    kSystemHeap = 6,    // NVBUF_MEM_SYSTEM
+    kDefault = 0,
+    kCudaDevice = 1,
+    kCudaPinned = 2,
+    kCudaUnified = 3,
+    kSurfaceArray = 4,
+    kHandle = 5,
+    kSystemHeap = 6,
 };
 
-/// Color formats matching NvBufSurfaceColorFormat (subset)
 enum class ColorFormat : int {
     kNV12 = 0,
     kRGBA = 1,
@@ -182,7 +173,6 @@ enum class ColorFormat : int {
     kGRAY8 = 5,
 };
 
-/// Plane info for a buffer surface
 struct PlaneInfo {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -192,7 +182,6 @@ struct PlaneInfo {
     uint32_t bytes_per_pixel = 0;
 };
 
-/// Parameters for creating NVMM surfaces
 struct SurfaceParams {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -201,7 +190,6 @@ struct SurfaceParams {
     uint32_t num_surfaces = 1;
 };
 
-/// Flip method for transforms
 enum class FlipMethod : int {
     kNone = 0,
     kRotate90CW = 1,
@@ -213,27 +201,22 @@ enum class FlipMethod : int {
     kFlipUpperLeftToLowerRight = 7,
 };
 
-/// Interpolation/filter used when the VIC scales a surface. Maps to
-/// NvBufSurfTransformInter_*; kDefault lets the VIC pick.
 enum class Interpolation : int {
-    kNearest = 0,   // NvBufSurfTransformInter_Nearest
-    kBilinear = 1,  // NvBufSurfTransformInter_Bilinear
-    k5Tap = 2,      // NvBufSurfTransformInter_Algo1
-    k10Tap = 3,     // NvBufSurfTransformInter_Algo2
-    kSmart = 4,     // NvBufSurfTransformInter_Algo3
-    kNicest = 5,    // NvBufSurfTransformInter_Algo4
-    kDefault = 6,   // NvBufSurfTransformInter_Default
+    kNearest = 0,
+    kBilinear = 1,
+    k5Tap = 2,
+    k10Tap = 3,
+    kSmart = 4,
+    kNicest = 5,
+    kDefault = 6,
 };
 
-/// Which compute engine performs the transform. kDefault lets the driver pick
-/// (VIC on Tegra). Maps to NvBufSurfTransformCompute_*.
 enum class ComputeMode : int {
     kDefault = 0,
     kGpu = 1,
     kVic = 2,
 };
 
-/// Crop rectangle
 struct CropRect {
     uint32_t x = 0;
     uint32_t y = 0;
@@ -245,7 +228,6 @@ struct CropRect {
     }
 };
 
-/// Transform parameters
 struct TransformParams {
     CropRect src_crop;
     CropRect dst_crop;
@@ -254,4 +236,4 @@ struct TransformParams {
     ComputeMode compute = ComputeMode::kDefault;
 };
 
-}  // namespace nvmm
+}

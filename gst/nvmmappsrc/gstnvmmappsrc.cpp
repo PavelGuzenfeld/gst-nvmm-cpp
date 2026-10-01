@@ -1,12 +1,4 @@
-/// nvmmappsrc — Zero-copy NVMM IPC source.
-///
-/// Connects to nvmmsink via unix socket to receive pool buffer DMA-buf fds
-/// and NvBufSurfaceMapParams, imports them with NvBufSurfaceImport, and
-/// pushes NVMM GstBuffers downstream.
-///
-/// Ref counts in shared memory manage buffer lifecycle.
-
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmappsrc.h"
 
@@ -44,8 +36,6 @@ enum {
     PROP_IMPORT_METADATA,
 };
 
-/* --- Custom GstAllocator for imported NVMM pool buffers --- */
-
 typedef struct {
     GstAllocator parent;
 } NvmmImportedAllocator;
@@ -65,21 +55,18 @@ struct NvmmImportedMemory {
 };
 
 static gpointer
-nvmm_imported_mem_map(GstMemory *mem, gsize /*maxsize*/, GstMapFlags /*flags*/)
+nvmm_imported_mem_map(GstMemory *mem, gsize , GstMapFlags )
 {
     auto *m = reinterpret_cast<NvmmImportedMemory *>(mem);
-    return m->surface;  /* NVIDIA convention: mapped data = NvBufSurface* */
+    return m->surface;
 }
 
 static void
-nvmm_imported_mem_unmap(GstMemory * /*mem*/) {}
+nvmm_imported_mem_unmap(GstMemory * ) {}
 
 static void
-nvmm_imported_mem_free(GstAllocator * /*alloc*/, GstMemory *mem)
+nvmm_imported_mem_free(GstAllocator * , GstMemory *mem)
 {
-    /* Do NOT decrement ref_count here — the hardware encoder may still be
-       reading the DMA buffer after GstBuffer unref. Ref counts are managed
-       by the create() function via a delayed release ring. */
     auto *m = reinterpret_cast<NvmmImportedMemory *>(mem);
     (void)m;
     g_free(m);
@@ -116,12 +103,7 @@ get_imported_allocator(void)
     return imported_allocator_singleton;
 }
 
-/* --- Main element --- */
-
-/* Delay ring: hold ref counts for RELEASE_DELAY frames before decrementing.
-   This accounts for hardware encoder pipeline depth — the encoder may still
-   be reading the DMA buffer after unreffing the GstBuffer. */
-#define RELEASE_DELAY 12  /* ~100ms at 120fps, covers encoder pipeline depth */
+#define RELEASE_DELAY 12
 
 struct RefSlot {
     volatile int32_t *ptr;
@@ -137,15 +119,13 @@ struct _GstNvmmAppSrcPrivate {
     GstVideoInfo video_info;
     gboolean is_live;
     gboolean caps_set;
-    gboolean import_metadata;  /* attach GstNvmmDetMeta from the side-channel */
-    gboolean meta_available;   /* import_metadata AND producer publishes metadata */
+    gboolean import_metadata;
+    gboolean meta_available;
 
-    /* Zero-copy pool */
     int socket_fd;
     int pool_size;
     NvBufSurface *imported_surfaces[NVMM_POOL_SIZE];
 
-    /* Delayed ref count release ring */
     RefSlot release_ring[RELEASE_DELAY];
     int ring_head;
 };
@@ -204,7 +184,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
     if (priv->shm_name.empty())
         priv->shm_name = "/nvmm_sink_0";
 
-    /* Open shared memory */
     priv->shm_fd = shm_open(priv->shm_name.c_str(), O_RDWR, 0);
     if (priv->shm_fd < 0) {
         fprintf(stderr, "[nvmmappsrc] shm_open(%s) failed: %s\n",
@@ -233,7 +212,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
 
     auto *header = static_cast<ShmHeader *>(priv->shm_ptr);
 
-    /* Wait for producer header */
     int wait = 0;
     while (header->magic != NVMM_SHM_MAGIC || header->socket_path[0] == '\0') {
         if (++wait > 5000) {
@@ -247,22 +225,17 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         return FALSE;
     }
 
-    /* Metadata side-channel is usable only if both sides opted in. The producer
-       grew the segment (and we mmap'd st.st_size), so meta_enabled implies the
-       region is present and mapped. */
     priv->meta_available = priv->import_metadata && header->meta_enabled;
     if (priv->import_metadata && !header->meta_enabled)
         fprintf(stderr, "[nvmmappsrc] import-metadata=true but producer is not "
                 "exporting metadata — no GstNvmmDetMeta will be attached\n");
 
-    /* Connect to producer socket */
     priv->socket_fd = nvmm_client_connect(header->socket_path);
     if (priv->socket_fd < 0) {
         fprintf(stderr, "[nvmmappsrc] Connect to %s failed: %s\n",
                 header->socket_path, strerror(errno));
         return FALSE;
     }
-    /* Receive pool_size */
     int ps = 0;
     if (recv(priv->socket_fd, &ps, sizeof(ps), MSG_WAITALL) != sizeof(ps) ||
         ps <= 0 || ps > NVMM_POOL_SIZE) {
@@ -273,7 +246,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
     }
     priv->pool_size = ps;
 
-    /* Receive NvBufSurfaceMapParams for each buffer */
     NvBufSurfaceMapParams params[NVMM_POOL_SIZE];
     for (int i = 0; i < priv->pool_size; i++) {
         if (recv(priv->socket_fd, &params[i], sizeof(params[i]), MSG_WAITALL)
@@ -284,7 +256,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
             return FALSE;
         }
     }
-    /* Receive DMA-buf fds via SCM_RIGHTS */
     int fds[NVMM_POOL_SIZE];
     if (nvmm_recv_fds(priv->socket_fd, fds, priv->pool_size) < 0) {
         fprintf(stderr, "[nvmmappsrc] Failed to receive fds: %s\n", strerror(errno));
@@ -292,9 +263,7 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
         priv->socket_fd = -1;
         return FALSE;
     }
-    /* Import each fd using NvBufSurfaceImport with the received params */
     for (int i = 0; i < priv->pool_size; i++) {
-        /* Update the fd in params to the one we received via SCM_RIGHTS */
         params[i].fd = fds[i];
 
         NvBufSurface *surf = nullptr;
@@ -303,11 +272,6 @@ gst_nvmm_app_src_start(GstBaseSrc *src)
                     i, fds[i]);
             return FALSE;
         }
-        /* NvBufSurfaceImport leaves numFilled = 0. NvBufSurfTransform (called by
-           any downstream nvvidconv/nvmmconvert) rejects a surface with no filled
-           buffers and returns -3, so the consumer pipeline dies with
-           "NvBufSurfTransform Failed". Mark the single imported buffer as filled,
-           mirroring what nvmm_buffer.cpp does after NvBufSurfaceCreate. */
         surf->numFilled = surf->batchSize ? surf->batchSize : 1;
         priv->imported_surfaces[i] = surf;
     }
@@ -324,7 +288,6 @@ gst_nvmm_app_src_stop(GstBaseSrc *src)
     auto *self = GST_NVMM_APP_SRC(src);
     auto *priv = self->priv;
 
-    /* Flush delayed release ring — decrement all held ref counts */
     for (int i = 0; i < RELEASE_DELAY; i++) {
         if (priv->release_ring[i].active && priv->release_ring[i].ptr) {
             __sync_fetch_and_sub(priv->release_ring[i].ptr, 1);
@@ -367,7 +330,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     if (!priv->shm_ptr)
         return GST_FLOW_ERROR;
 
-    /* Wait for a new frame */
     int attempts = 0;
     while (!header->ready || header->frame_number == priv->last_frame_number) {
         if (GST_PAD_IS_FLUSHING(GST_BASE_SRC_PAD(push_src)))
@@ -384,7 +346,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     if (header->magic != NVMM_SHM_MAGIC)
         return GST_FLOW_ERROR;
 
-    /* Set NVMM caps on first frame */
     if (!priv->caps_set && header->width > 0 && header->height > 0) {
         GstVideoFormat fmt = static_cast<GstVideoFormat>(header->format);
         gst_video_info_set_format(&priv->video_info, fmt,
@@ -399,18 +360,14 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
 
     }
 
-    /* Read current buffer index and safely increment ref count.
-       Use CAS to ensure we don't increment a buffer being written (-1). */
     uint32_t idx = header->write_idx;
     if (idx >= (uint32_t)priv->pool_size)
         return GST_FLOW_ERROR;
 
-    /* CAS loop: increment ref_count only if >= 0 (not being written) */
     int attempts_cas = 0;
     while (true) {
         int32_t old_val = __sync_add_and_fetch(&header->ref_counts[idx], 0);
         if (old_val < 0) {
-            /* Buffer being written — re-read write_idx, producer may have moved on */
             g_usleep(100);
             idx = header->write_idx;
             if (++attempts_cas > 1000) return GST_FLOW_ERROR;
@@ -421,9 +378,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     }
     __sync_synchronize();
 
-    /* Delayed release: decrement the ref count of the buffer we acquired
-       RELEASE_DELAY frames ago. This gives the hardware encoder enough time
-       to finish reading the DMA buffer before the producer recycles it. */
     RefSlot *old_slot = &priv->release_ring[priv->ring_head];
     if (old_slot->active && old_slot->ptr) {
         __sync_fetch_and_sub(old_slot->ptr, 1);
@@ -432,13 +386,12 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     old_slot->active = 1;
     priv->ring_head = (priv->ring_head + 1) % RELEASE_DELAY;
 
-    /* Create GstBuffer with custom memory wrapping the imported surface. */
     NvmmImportedMemory *mem = (NvmmImportedMemory *)g_malloc0(sizeof(NvmmImportedMemory));
     gst_memory_init(GST_MEMORY_CAST(mem), GST_MEMORY_FLAG_NO_SHARE,
                     get_imported_allocator(), nullptr,
                     sizeof(NvBufSurface), 0, 0, sizeof(NvBufSurface));
     mem->surface = priv->imported_surfaces[idx];
-    mem->ref_count_ptr = nullptr;  /* managed by ring, not by free callback */
+    mem->ref_count_ptr = nullptr;
 
     GstBuffer *buffer = gst_buffer_new();
     gst_buffer_append_memory(buffer, GST_MEMORY_CAST(mem));
@@ -446,13 +399,6 @@ gst_nvmm_app_src_create(GstPushSrc *push_src, GstBuffer **buf)
     GST_BUFFER_PTS(buffer) = header->timestamp_ns;
     GST_BUFFER_DURATION(buffer) = GST_CLOCK_TIME_NONE;
 
-    /* Attach detections from the side-channel. The ref count we incremented on
-       `idx` pins both pool[idx] and slot[idx]: the producer only writes a slot it
-       owns (ref_count == -1) and won't reuse `idx` while we hold a ref, so
-       slot[idx] is exactly the metadata for the pixels in this buffer regardless
-       of how far the producer has since advanced. Attach unconditionally — a
-       frame_number comparison against the live header would wrongly drop metadata
-       whenever the consumer lags the producer. */
     if (priv->meta_available) {
         NvmmFrameMeta *slot = nvmm_shm_meta(priv->shm_ptr, idx);
         gst_buffer_add_nvmm_det_meta(buffer, slot);
@@ -548,7 +494,6 @@ gst_nvmm_app_src_init(GstNvmmAppSrc *self)
     gst_base_src_set_format(GST_BASE_SRC(self), GST_FORMAT_TIME);
 }
 
-/* Plugin registration */
 static gboolean
 plugin_init(GstPlugin *plugin)
 {

@@ -1,13 +1,3 @@
-/// Minimal 2D image buffer + strided view for the analytics components.
-///
-/// Replaces the cv::Mat surface these headers used to lean on, with just what
-/// the fused implementations need: an owning single-channel buffer and a
-/// non-owning strided view. The view is the public currency — a caller can wrap
-/// any strided plane (e.g. a CPU-mapped NVMM luma plane) without a copy. No
-/// elementwise-op methods on purpose: operations live inside the components'
-/// fused passes, not on the buffer type.
-///
-/// Pure C++14, header-only, no dependencies.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -21,8 +11,6 @@ struct Rect {
     int x = 0, y = 0, w = 0, h = 0;
 };
 
-/// Non-owning view of a strided single-channel 2D buffer. `stride` is in
-/// ELEMENTS (not bytes). Use View<const T> for read-only access.
 template <typename T>
 struct View {
     T *data = nullptr;
@@ -36,15 +24,6 @@ struct View {
     T *row(int y) const { return data + (std::ptrdiff_t)y * stride; }
     T &at(int y, int x) const { return row(y)[x]; }
 
-    /// View<T> -> View<const T> (SFINAE'd away when T is already const).
-    /// U must be pinned to T via is_same: without it, the conversion-operator
-    /// template lets the compiler deduce U from the CONVERSION TARGET alone
-    /// (e.g. U=float when converting a View<uint8_t> to View<const float> in a
-    /// call's overload resolution), since a conversion operator has no function
-    /// parameter tying U back to the class's actual T. That made View<uint8_t>
-    /// spuriously "convertible" to View<const AnyType>, which under -std=c++20
-    /// surfaced as an ambiguous overload between unrelated process(View<const
-    /// uint8_t>) / process(View<const float>) call targets.
     template <typename U = T,
               typename std::enable_if<std::is_same<U, T>::value &&
                                       !std::is_const<U>::value, int>::type = 0>
@@ -55,7 +34,6 @@ struct View {
     }
 };
 
-/// Owning, densely-packed (stride == width) single-channel buffer.
 template <typename T>
 class Image {
 public:
@@ -85,5 +63,5 @@ private:
     std::vector<T> d_;
 };
 
-}  // namespace img
-}  // namespace nvmm
+}
+}

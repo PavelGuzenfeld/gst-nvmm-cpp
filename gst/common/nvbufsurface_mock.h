@@ -1,6 +1,3 @@
-/// Mock NvBufSurface API for host-side compilation and testing.
-/// Struct layout matches the real NVIDIA headers exactly so that a single
-/// implementation file works for both mock and real builds.
 #pragma once
 
 #ifdef __cplusplus
@@ -23,13 +20,13 @@ typedef enum {
 typedef enum {
     NVBUF_COLOR_FORMAT_INVALID,
     NVBUF_COLOR_FORMAT_GRAY8,
-    NVBUF_COLOR_FORMAT_YUV420,    /* I420 */
+    NVBUF_COLOR_FORMAT_YUV420,
     NVBUF_COLOR_FORMAT_YVU420,
     NVBUF_COLOR_FORMAT_YUV420_ER,
     NVBUF_COLOR_FORMAT_YVU420_ER,
-    NVBUF_COLOR_FORMAT_NV12,      /* = 6 */
+    NVBUF_COLOR_FORMAT_NV12,
     NVBUF_COLOR_FORMAT_NV12_ER,
-    NVBUF_COLOR_FORMAT_NV21,      /* = 8 */
+    NVBUF_COLOR_FORMAT_NV21,
     NVBUF_COLOR_FORMAT_NV21_ER,
     NVBUF_COLOR_FORMAT_UYVY,
     NVBUF_COLOR_FORMAT_UYVY_ER,
@@ -40,8 +37,8 @@ typedef enum {
     NVBUF_COLOR_FORMAT_YVYU,
     NVBUF_COLOR_FORMAT_YVYU_ER,
     NVBUF_COLOR_FORMAT_YUV444,
-    NVBUF_COLOR_FORMAT_RGBA,      /* = 19 */
-    NVBUF_COLOR_FORMAT_BGRA,      /* = 20 */
+    NVBUF_COLOR_FORMAT_RGBA,
+    NVBUF_COLOR_FORMAT_BGRA,
     NVBUF_COLOR_FORMAT_ARGB,
     NVBUF_COLOR_FORMAT_ABGR,
     NVBUF_COLOR_FORMAT_RGBx,
@@ -97,10 +94,10 @@ typedef enum {
 typedef enum {
     NvBufSurfTransformInter_Nearest = 0,
     NvBufSurfTransformInter_Bilinear,
-    NvBufSurfTransformInter_Algo1,    /* 5-tap */
-    NvBufSurfTransformInter_Algo2,    /* 10-tap */
-    NvBufSurfTransformInter_Algo3,    /* Smart */
-    NvBufSurfTransformInter_Algo4,    /* Nicest */
+    NvBufSurfTransformInter_Algo1,
+    NvBufSurfTransformInter_Algo2,
+    NvBufSurfTransformInter_Algo3,
+    NvBufSurfTransformInter_Algo4,
     NvBufSurfTransformInter_Default = 6
 } NvBufSurfTransform_Inter;
 
@@ -113,10 +110,9 @@ typedef enum {
 typedef struct {
     NvBufSurfTransform_Compute compute_mode;
     int32_t gpu_id;
-    void* cuda_stream;  /* real type is cudaStream_t; opaque in the mock */
+    void* cuda_stream;
 } NvBufSurfTransformConfigParams;
 
-/* Session config is process-global in the real API; the mock just records it. */
 static inline NvBufSurfTransform_Error
 NvBufSurfTransformSetSessionParams(NvBufSurfTransformConfigParams* params) {
     (void)params;
@@ -138,7 +134,6 @@ typedef struct {
     NvBufSurfTransformRect* dst_rect;
 } NvBufSurfTransformParams;
 
-/* Matches real NvBufSurfacePlaneParams: flat arrays indexed by plane */
 typedef struct NvBufSurfacePlaneParams {
     uint32_t num_planes;
     uint32_t width[NVBUF_MAX_PLANES];
@@ -150,7 +145,6 @@ typedef struct NvBufSurfacePlaneParams {
     void* _reserved[STRUCTURE_PADDING * NVBUF_MAX_PLANES];
 } NvBufSurfacePlaneParams;
 
-/* Matches real NvBufSurfaceMappedAddr: per-plane void* array */
 typedef struct NvBufSurfaceMappedAddr {
     void* addr[NVBUF_MAX_PLANES];
     void* eglImage;
@@ -193,8 +187,6 @@ typedef struct NvBufSurface {
     void* _reserved[STRUCTURE_PADDING];
 } NvBufSurface;
 
-/* ---- Helpers ---- */
-
 static inline uint32_t _mock_plane_count(NvBufSurfaceColorFormat fmt) {
     switch (fmt) {
         case NVBUF_COLOR_FORMAT_NV12:
@@ -217,8 +209,6 @@ static inline uint32_t _mock_bpp(NvBufSurfaceColorFormat fmt) {
     }
 }
 
-/* ---- Mock function implementations ---- */
-
 static inline int NvBufSurfaceCreate(NvBufSurface** surf,
                                       uint32_t batch_size,
                                       NvBufSurfaceCreateParams* params) {
@@ -239,7 +229,7 @@ static inline int NvBufSurfaceCreate(NvBufSurface** surf,
         p->colorFormat = params->colorFormat;
         p->layout = params->layout;
         p->pitch = params->width * _mock_bpp(params->colorFormat);
-        p->bufferDesc = 42 + i;  /* fake DMA-buf fd */
+        p->bufferDesc = 42 + i;
 
         uint32_t nplanes = _mock_plane_count(params->colorFormat);
         p->planeParams.num_planes = nplanes;
@@ -298,7 +288,6 @@ static inline int NvBufSurfaceMap(NvBufSurface* surf, int index,
     NvBufSurfaceParams* p = &surf->surfaceList[index];
 
     if (plane < 0) {
-        /* Map all planes */
         for (uint32_t pl = 0; pl < p->planeParams.num_planes; pl++) {
             if (!p->mappedAddr.addr[pl]) {
                 uint32_t psize = p->planeParams.psize[pl];
@@ -346,22 +335,18 @@ static inline int NvBufSurfaceUnMap(NvBufSurface* surf, int index, int plane) {
 
 static inline int NvBufSurfaceSyncForCpu(NvBufSurface* surf, int index, int plane) {
     (void)surf; (void)index; (void)plane;
-    return 0;  /* no-op in mock */
+    return 0;
 }
 
 static inline int NvBufSurfaceSyncForDevice(NvBufSurface* surf, int index, int plane) {
     (void)surf; (void)index; (void)plane;
-    return 0;  /* no-op in mock */
+    return 0;
 }
 
 static inline int NvBufSurfaceFromFd(int fd, void** surf_ptr) {
     (void)fd; (void)surf_ptr;
-    return -1;  /* not implemented in mock */
+    return -1;
 }
-
-/* ---- Mock stubs for the cross-process Import API
- *      (NvBufSurfaceImport / NvBufSurfaceMapParams / NvBufSurfaceGetMapParams).
- *      These ship in real L4T R35.3.1+ (JP 5.1.1) and any JP6.            ---- */
 
 typedef struct NvBufSurfaceMapParams {
     int fd;

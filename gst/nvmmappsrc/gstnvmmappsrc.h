@@ -1,8 +1,3 @@
-/// GstNvmmAppSrc — GStreamer source that reads NVMM frames from shared memory.
-///
-/// Connects to a named POSIX shared memory segment (written by nvmmsink or
-/// an external producer) and pushes frames into a GStreamer pipeline as
-/// video/x-raw(memory:NVMM) buffers.
 #pragma once
 
 #include <gst/gst.h>

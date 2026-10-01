@@ -1,5 +1,3 @@
-/// KalmanBox implementation — see kalman_box.hpp. Port of kalman_filter.py.
-
 #include "kalman_box.hpp"
 
 #include <cmath>
@@ -8,7 +6,6 @@ namespace nvmm {
 
 namespace {
 
-/// Cholesky factor L (lower) of a symmetric positive-definite 4x4 A: A = L L^T.
 static void chol4(const std::array<std::array<double, 4>, 4> &A,
                   std::array<std::array<double, 4>, 4> &L)
 {
@@ -23,18 +20,17 @@ static void chol4(const std::array<std::array<double, 4>, 4> &A,
     }
 }
 
-/// Solve A x = b for a single 4-vector via the precomputed Cholesky factor L.
 static std::array<double, 4>
 chol_solve_vec(const std::array<std::array<double, 4>, 4> &L,
                const std::array<double, 4> &b)
 {
     std::array<double, 4> y{}, x{};
-    for (int i = 0; i < 4; ++i) {            // forward: L y = b
+    for (int i = 0; i < 4; ++i) {
         double s = b[i];
         for (int k = 0; k < i; ++k) s -= L[i][k] * y[k];
         y[i] = (L[i][i] != 0.0) ? s / L[i][i] : 0.0;
     }
-    for (int i = 3; i >= 0; --i) {           // back: L^T x = y
+    for (int i = 3; i >= 0; --i) {
         double s = y[i];
         for (int k = i + 1; k < 4; ++k) s -= L[k][i] * x[k];
         x[i] = (L[i][i] != 0.0) ? s / L[i][i] : 0.0;
@@ -42,7 +38,7 @@ chol_solve_vec(const std::array<std::array<double, 4>, 4> &L,
     return x;
 }
 
-}  // namespace
+}
 
 void KalmanBox::initiate(double cx, double cy, double w, double h)
 {
@@ -58,23 +54,17 @@ void KalmanBox::initiate(double cx, double cy, double w, double h)
 
 void KalmanBox::predict(double dt)
 {
-    // Process noise Q uses the PRE-prediction w,h (matches kalman_filter.py,
-    // which computes std from mean[2],mean[3] before advancing the mean).
     const double sp = kStdWPos, sv = kStdWVel;
     const double q[8] = {
         sp * mean_[2], sp * mean_[3], sp * mean_[2], sp * mean_[3],
         sv * mean_[2], sv * mean_[3], sv * mean_[2], sv * mean_[3]};
 
-    // mean = F mean : cx,cy,w,h += dt * (vx,vy,vw,vh)
     for (int i = 0; i < 4; ++i) mean_[i] += dt * mean_[4 + i];
 
-    // cov = F cov F^T + Q.  F = I with F[i][4+i]=dt (i<4).
-    // (F cov)[i][j] = cov[i][j] + (i<4 ? dt*cov[4+i][j] : 0)
     Mat8 fc{};
     for (int i = 0; i < 8; ++i)
         for (int j = 0; j < 8; ++j)
             fc[i][j] = cov_[i][j] + (i < 4 ? dt * cov_[4 + i][j] : 0.0);
-    // (fc F^T)[i][j] = fc[i][j] + (j<4 ? dt*fc[i][4+j] : 0)
     Mat8 nc{};
     for (int i = 0; i < 8; ++i)
         for (int j = 0; j < 8; ++j)
@@ -104,9 +94,6 @@ void KalmanBox::update(double cx, double cy, double w, double h)
     std::array<std::array<double, 4>, 4> L;
     chol4(pcov, L);
 
-    // K (8x4) = cov H^T pcov^{-1}, where cov H^T = cov[:, :4].
-    // Solve pcov K^T = (cov[:, :4])^T : per state-row r, solve pcov * x = B_r
-    // where B_r = cov[r][0..3]; then K[r] = x.
     std::array<std::array<double, 4>, 8> K;
     for (int r = 0; r < 8; ++r) {
         std::array<double, 4> b = {cov_[r][0], cov_[r][1], cov_[r][2], cov_[r][3]};
@@ -114,14 +101,11 @@ void KalmanBox::update(double cx, double cy, double w, double h)
     }
 
     const double innov[4] = {cx - pmean[0], cy - pmean[1], w - pmean[2], h - pmean[3]};
-    // new_mean = mean + K innov
     for (int r = 0; r < 8; ++r) {
         double s = 0.0;
         for (int j = 0; j < 4; ++j) s += K[r][j] * innov[j];
         mean_[r] += s;
     }
-    // new_cov = cov - K pcov K^T
-    // M = pcov K^T  (4x8): M[a][c] = sum_b pcov[a][b] K[c][b]
     std::array<std::array<double, 8>, 4> M{};
     for (int a = 0; a < 4; ++a)
         for (int c = 0; c < 8; ++c) {
@@ -129,7 +113,6 @@ void KalmanBox::update(double cx, double cy, double w, double h)
             for (int b = 0; b < 4; ++b) s += pcov[a][b] * K[c][b];
             M[a][c] = s;
         }
-    // (K M)[i][j] = sum_a K[i][a] M[a][j]
     for (int i = 0; i < 8; ++i)
         for (int j = 0; j < 8; ++j) {
             double s = 0.0;
@@ -146,7 +129,6 @@ double KalmanBox::gating_distance(double cx, double cy, double w, double h) cons
     std::array<std::array<double, 4>, 4> L;
     chol4(pcov, L);
     const std::array<double, 4> d = {cx - pmean[0], cy - pmean[1], w - pmean[2], h - pmean[3]};
-    // squared Mahalanobis = || L^{-1} d ||^2 (forward solve only)
     std::array<double, 4> z{};
     for (int i = 0; i < 4; ++i) {
         double s = d[i];
@@ -158,4 +140,4 @@ double KalmanBox::gating_distance(double cx, double cy, double w, double h) cons
     return m;
 }
 
-}  // namespace nvmm
+}

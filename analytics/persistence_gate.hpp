@@ -1,17 +1,3 @@
-/// Causal persistence gate ("track-before-detect" confirmation).
-///
-/// A noisy detector fires on the target AND on clutter. Feeding every detection to a
-/// tracker seeds it on the first false-positive. This gate commits only to a
-/// detection that BOTH persists and carries supporting evidence for several
-/// consecutive frames — then LATCHES onto it, so the heavy per-frame evidence step
-/// can be skipped while the lock holds, and re-engaged only after the lock is lost.
-///
-/// "Support" is supplied by the caller (a motion cue, a classifier, an IR contrast
-/// score, …) as a per-detection boolean each frame — this gate is agnostic to what
-/// the evidence is. Pair it with the motion components (dual_homography /
-/// low_texture_motion) to get the full detector-∩-motion confirmation.
-///
-/// Pure C++ — no OpenCV/GStreamer — so it unit-tests on any host/CI build.
 #pragma once
 #include <vector>
 #include <cmath>
@@ -22,16 +8,16 @@ namespace nvmm {
 namespace track {
 
 struct Detection {
-    float cx, cy;     // detection centre (pixels)
-    float conf;       // detector confidence (used only to order associations)
-    bool  supported;  // caller's evidence flag for THIS detection THIS frame
+    float cx, cy;
+    float conf;
+    bool  supported;
 };
 
 struct PersistenceParams {
-    float assoc_dist = 45.f;  // max centre distance to associate a detection to a track (px)
-    int   min_age = 6;        // a track must survive this many frames before it can confirm
-    int   min_support = 4;    // ...AND carry support for this many CONSECUTIVE frames
-    int   max_lost = 2;       // frames a track may miss a detection before it dies / unlocks
+    float assoc_dist = 45.f;
+    int   min_age = 6;
+    int   min_support = 4;
+    int   max_lost = 2;
 };
 
 class PersistenceGate {
@@ -42,15 +28,12 @@ public:
     float lock_x() const { return lx_; }
     float lock_y() const { return ly_; }
 
-    /// Advance one frame. Returns the index into `dets` of the confirmed/locked
-    /// target this frame, or -1 if nothing is committed.
     int update(const std::vector<Detection> &dets)
     {
         if (locked_) return update_locked(dets);
 
         for (auto &t : tracks_) { t.lost++; t.matched = false; }
 
-        // associate highest-confidence detections first
         std::vector<size_t> order(dets.size());
         for (size_t i = 0; i < dets.size(); i++) order[i] = i;
         std::sort(order.begin(), order.end(),
@@ -67,17 +50,15 @@ public:
             if (best) {
                 best->cx = d.cx; best->cy = d.cy; best->age++; best->lost = 0;
                 best->matched = true; best->src = (int)oi;
-                best->sup = d.supported ? best->sup + 1 : 0;   // CONSECUTIVE support
+                best->sup = d.supported ? best->sup + 1 : 0;
             } else {
                 tracks_.push_back(Track{d.cx, d.cy, 1, 0, d.supported ? 1 : 0, true, (int)oi});
             }
         }
-        // reap dead tracks
         std::vector<Track> keep;
         for (auto &t : tracks_) if (t.lost <= p_.max_lost) keep.push_back(t);
         tracks_.swap(keep);
 
-        // confirm the first track that has both persisted and stayed supported
         for (auto &t : tracks_)
             if (t.lost == 0 && t.age >= p_.min_age && t.sup >= p_.min_support) {
                 locked_ = true; lock_lost_ = 0; lx_ = t.cx; ly_ = t.cy;
@@ -91,7 +72,6 @@ public:
 private:
     struct Track { float cx, cy; int age, lost, sup; bool matched; int src; };
 
-    // cheap association to the lock; no support needed while latched
     int update_locked(const std::vector<Detection> &dets)
     {
         int best = -1; float bd = p_.assoc_dist;
@@ -111,5 +91,5 @@ private:
     float lx_ = 0.f, ly_ = 0.f;
 };
 
-}  // namespace track
-}  // namespace nvmm
+}
+}

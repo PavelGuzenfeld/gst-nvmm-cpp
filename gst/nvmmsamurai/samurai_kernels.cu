@@ -1,10 +1,6 @@
-/// samurai_kernels.cu — SAMURAI per-frame CUDA kernels (CUDA 12.6, -std=c++20,
-/// sm_87). Host wrappers declared in samurai_kernels.hpp. See that file for the
-/// contract; each kernel mirrors a host reference in samurai_seed_math.hpp /
-/// samurai_tracker.cpp and is parity-checked (tests/samurai_kernel_probe).
 #include "samurai_kernels.hpp"
 
-#include <cuda/std/cmath>   // cuda::std::fmaxf (libcu++ / CCCL; CUDA 12.6 has no <algorithm>)
+#include <cuda/std/cmath>
 
 namespace nvmm {
 namespace {
@@ -41,7 +37,6 @@ __global__ void threshold_scale_k(const float *in, float *out, int n, float hi, 
     out[idx] = in[idx] > 0.f ? hi : lo;
 }
 
-// Bilinear, align_corners=False: src = (dst+0.5)*scale - 0.5, edge-clamped.
 __global__ void bilinear_k(const float *src, float *dst, int hi, int wi, int ho, int wo)
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -60,7 +55,6 @@ __global__ void bilinear_k(const float *src, float *dst, int hi, int wi, int ho,
     dst[idx] = top + (bot - top) * wy;
 }
 
-// d_box = [xmin, ymin, xmax, ymax]; caller pre-sets {w, h, -1, -1}.
 __global__ void mask_bbox_k(const float *mask, int h, int w, int *box)
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -72,7 +66,6 @@ __global__ void mask_bbox_k(const float *mask, int h, int w, int *box)
     }
 }
 
-// One element of get_1d_sine_pe(x, dim=256): in<128 -> sin, else cos.
 __device__ inline float sine_pe_elem(float x, int in)
 {
     const int pe_dim = 128;
@@ -82,8 +75,6 @@ __device__ inline float sine_pe_elem(float x, int in)
     return in < pe_dim ? __sinf(v) : __cosf(v);
 }
 
-// Mirrors samurai_memory.hpp assemble_memory. (7*tok+64)*64 outputs; tok = the
-// encoder grid token count ((crop/16)^2 — 1024 @512, 576 @384, 256 @256).
 __global__ void assemble_k(const float *const *maskmem, const float *objptr,
                            const float *pos_list, const float *maskmem_pos,
                            const float *tpos, const float *tposproj_w, const float *tposproj_b,
@@ -93,21 +84,20 @@ __global__ void assemble_k(const float *const *maskmem, const float *objptr,
     const int kMaskRows = 7 * tok, kTotal = kMaskRows + 64;
     if (idx >= kTotal * 64) return;
     const int row = idx / 64, ch = idx % 64;
-    if (row < kMaskRows) {                       // maskmem block
+    if (row < kMaskRows) {
         const int s = row / tok, i = row % tok;
         memory[idx] = maskmem[s][ch * tok + i];
         memory_pos[idx] = maskmem_pos[ch * tok + i] + tpos[(6 - s) * 64 + ch];
-    } else {                                     // obj_ptr block
+    } else {
         const int o = row - kMaskRows, p = o / 4, k = o % 4;
         memory[idx] = objptr[p * 256 + k * 64 + ch];
-        const float x = pos_list[p] / 15.f;      // t_diff_max = 15
+        const float x = pos_list[p] / 15.f;
         float acc = tposproj_b[ch];
         const float *wr = tposproj_w + (size_t)ch * 256;
         for (int in = 0; in < 256; in++) acc += wr[in] * sine_pe_elem(x, in);
         memory_pos[idx] = acc;
     }
 }
-// GMC fft-cuda: window a uint8 patch by a separable Hann into complex 2F32.
 __global__ void gmc_window_k(const unsigned char *y, int pitch, int n,
                              const float *hann, float2 *out)
 {
@@ -118,18 +108,17 @@ __global__ void gmc_window_k(const unsigned char *y, int pitch, int n,
     out[idx] = make_float2((float)y[(size_t)r * pitch + c] * win, 0.f);
 }
 
-// GMC fft-cuda: normalized cross-power a = R/|R|, R = a * conj(b), in place.
 __global__ void gmc_cross_power_k(float2 *a, const float2 *b, int n2)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n2) return;
     const float2 av = a[i], bv = b[i];
-    const float rx = av.x * bv.x + av.y * bv.y;   // Re(a * conj(b))
-    const float ry = av.y * bv.x - av.x * bv.y;   // Im(a * conj(b))
+    const float rx = av.x * bv.x + av.y * bv.y;
+    const float ry = av.y * bv.x - av.x * bv.y;
     const float m = sqrtf(rx * rx + ry * ry);
     a[i] = m > 1e-12f ? make_float2(rx / m, ry / m) : make_float2(0.f, 0.f);
 }
-}  // namespace
+}
 
 void k_gmc_window(const unsigned char *y, int pitch, int n, const float *hann,
                   float2 *out, cudaStream_t s)
@@ -163,4 +152,4 @@ void k_assemble_memory(const float *const *maskmem, const float *objptr,
 { assemble_k<<<grid((7 * tok + 64) * 64), kBlk, 0, s>>>(maskmem, objptr, pos_list, maskmem_pos,
                                               tpos, tposproj_w, tposproj_b, memory, memory_pos, tok); }
 
-}  // namespace nvmm
+}

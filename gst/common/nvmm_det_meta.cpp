@@ -1,5 +1,3 @@
-/// Implementation of GstNvmmDetMeta (see nvmm_det_meta.h).
-
 #include "nvmm_det_meta.h"
 
 #include "nvmm_meta_util.h"
@@ -11,7 +9,7 @@
 #endif
 
 static gboolean
-nvmm_det_meta_init(GstMeta *meta, gpointer /*params*/, GstBuffer * /*buffer*/)
+nvmm_det_meta_init(GstMeta *meta, gpointer , GstBuffer * )
 {
     auto *m = reinterpret_cast<GstNvmmDetMeta *>(meta);
     m->frame_number = 0;
@@ -24,7 +22,7 @@ nvmm_det_meta_init(GstMeta *meta, gpointer /*params*/, GstBuffer * /*buffer*/)
 }
 
 static void
-nvmm_det_meta_free(GstMeta *meta, GstBuffer * /*buffer*/)
+nvmm_det_meta_free(GstMeta *meta, GstBuffer * )
 {
     auto *m = reinterpret_cast<GstNvmmDetMeta *>(meta);
     g_free(m->objects);
@@ -32,10 +30,6 @@ nvmm_det_meta_free(GstMeta *meta, GstBuffer * /*buffer*/)
     m->num_objects = 0;
 }
 
-/* Allocate + populate a GstNvmmDetMeta on `buffer` from flat fields, deep-copying
-   the `n` objects (n must already be clamped to NVMM_META_MAX_OBJECTS; `objects`
-   may be null when n == 0). Shared by the public add and the copy-transform so the
-   object array is copied exactly once, with no NvmmFrameMeta-sized temporary. */
 static GstNvmmDetMeta *
 nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_width,
                      guint32 infer_height, guint32 flags, guint n,
@@ -61,17 +55,12 @@ nvmm_det_meta_attach(GstBuffer *buffer, guint64 frame_number, guint32 infer_widt
 }
 
 static gboolean
-nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * /*buffer*/,
-                        GQuark type, gpointer /*data*/)
+nvmm_det_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * ,
+                        GQuark type, gpointer )
 {
-    /* Copy only on copy-transforms (e.g. gst_buffer_copy); for any non-copy
-       transform (scale/crop) we drop the meta rather than remap it. Detections
-       describe frame content and survive a straight copy, but callers that
-       resize must re-derive coordinates. */
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
 
-    /* src->num_objects is already clamped (set when src was attached). */
     auto *src = reinterpret_cast<GstNvmmDetMeta *>(meta);
     return nvmm_det_meta_attach(dest, src->frame_number, src->infer_width,
                                 src->infer_height, src->flags, src->num_objects,
@@ -135,7 +124,6 @@ nvmm_frame_meta_from_nvds(void *batch, guint frame_index,
     if (!bmeta)
         return 0;
 
-    /* Find the requested frame in the batch. */
     NvDsFrameMeta *frame = nullptr;
     for (NvDsMetaList *l = bmeta->frame_meta_list; l; l = l->next) {
         auto *fm = static_cast<NvDsFrameMeta *>(l->data);
@@ -160,8 +148,6 @@ nvmm_frame_meta_from_nvds(void *batch, guint frame_index,
         d->height = obj->rect_params.height;
         d->class_id = obj->class_id;
         d->confidence = (float)obj->confidence;
-        /* Normalize the no-tracker sentinel (UNTRACKED_OBJECT_ID == all-Fs) to 0
-           to match the wire contract ("0 when no tracker"). */
         d->tracker_id = (obj->object_id == 0xFFFFFFFFFFFFFFFFULL)
                             ? 0u : (uint64_t)obj->object_id;
         const char *lbl = obj->obj_label;

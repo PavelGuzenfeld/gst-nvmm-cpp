@@ -5,7 +5,6 @@
 namespace nvmm {
 
 namespace {
-// IOU of two xywh boxes (a = ax,ay,aw,ah; b = bx,by,bw,bh).
 float iou(float ax, float ay, float aw, float ah,
           float bx, float by, float bw, float bh) {
     const float ix1 = std::max(ax, bx), iy1 = std::max(ay, by);
@@ -15,7 +14,7 @@ float iou(float ax, float ay, float aw, float ah,
     const float uni = aw * ah + bw * bh - inter;
     return uni > 0.f ? inter / uni : 0.f;
 }
-}  // namespace
+}
 
 void Tracker::reset() {
     tracks_.clear();
@@ -23,12 +22,11 @@ void Tracker::reset() {
 }
 
 void Tracker::update(NvmmDetObject* objects, uint32_t num_objects) {
-    std::vector<char> matched(tracks_.size(), 0);  // tracks matched this frame
+    std::vector<char> matched(tracks_.size(), 0);
 
     for (uint32_t i = 0; i < num_objects; i++) {
         NvmmDetObject& o = objects[i];
 
-        // Greedy: best-IOU track of the same class, not yet claimed this frame.
         int best = -1;
         float best_iou = params_.iou_threshold;
         for (std::size_t k = 0; k < tracks_.size(); k++) {
@@ -53,7 +51,6 @@ void Tracker::update(NvmmDetObject* objects, uint32_t num_objects) {
         }
     }
 
-    // Age the tracks that went unmatched this frame; drop the expired ones.
     for (std::size_t k = 0; k < tracks_.size(); k++)
         if (!matched[k]) tracks_[k].age++;
     tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
@@ -61,4 +58,4 @@ void Tracker::update(NvmmDetObject* objects, uint32_t num_objects) {
                   tracks_.end());
 }
 
-}  // namespace nvmm
+}

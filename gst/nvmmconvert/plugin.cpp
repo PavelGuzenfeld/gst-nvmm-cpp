@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmconvert.h"
 

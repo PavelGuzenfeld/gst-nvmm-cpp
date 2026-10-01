@@ -1,20 +1,3 @@
-/// phase_correlation.hpp — sub-pixel translation estimation by FFT phase
-/// correlation (host, dependency-free, unit-testable). OpenCV-free reimplementation
-/// of cv::phaseCorrelate + cv::createHanningWindow, used by the SAMURAI GMC
-/// (camera-motion compensation) path.
-///
-/// Method (matches cv::phaseCorrelate exactly so it is parity-checkable against it):
-///   1. window both frames with a separable Hann window;
-///   2. R = FFT(a) · conj(FFT(b)); C = R / |R|  (normalized cross-power spectrum);
-///   3. c = real(IFFT(C)); fft-shift so DC lands at the centre;
-///   4. locate the peak, refine to sub-pixel by a 5x5 weighted centroid;
-///   5. shift = centre − peak;  response = centroid mass / (W·H)  in [0,1].
-///
-/// Dimensions MUST be powers of two (radix-2 Cooley–Tukey). cv::phaseCorrelate pads
-/// to getOptimalDFTSize; feeding it pow2 dims makes both use the identical grid, so
-/// the parity test is exact rather than approximate.
-///
-/// Pure C++ (<complex>), header-only, no OpenCV / CUDA / GStreamer.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -28,12 +11,6 @@ namespace nvmm {
 
 struct PhaseShift { double x = 0.0, y = 0.0, response = 0.0; };
 
-// Refine a real correlation surface (w*h row-major, NOT yet fft-shifted) into a
-// sub-pixel translation: fft-shift so DC lands at the centre, locate the peak,
-// then a 5x5 weighted centroid (cv::weightedCentroid). Shared by PhaseCorrelator
-// (CPU) and the VPI/CUDA FFT GMC backend so both use identical refinement. `surf`
-// is shifted in place. Even dims only (GMC uses pow2). shift = centre − sub-pixel
-// peak; response = centroid mass / (w·h).
 inline PhaseShift refine_correlation_peak(std::vector<double> &surf, int w, int h) {
     const int hw = w / 2, hh = h / 2;
     for (int y = 0; y < hh; y++)
@@ -66,18 +43,11 @@ class PhaseCorrelator {
 public:
     struct Shift { double x = 0.0, y = 0.0, response = 0.0; };
 
-    // w, h must be powers of two (radix-2 FFT); a non-pow2 dim would otherwise produce
-    // silently wrong shifts. This check is unconditional (NOT assert/NDEBUG-gated) —
-    // no exceptions are used in this codebase, and a hard, loud abort() beats either
-    // a silent wrong answer in release builds or requiring every caller to add a
-    // fallible-construction path for a precondition callers already control.
     PhaseCorrelator(int w, int h) : w_(w), h_(h) {
         if (w_ <= 1 || h_ <= 1 || (w_ & (w_ - 1)) != 0 || (h_ & (h_ - 1)) != 0) {
             std::fprintf(stderr, "PhaseCorrelator: w=%d h=%d must be powers of two > 1\n", w_, h_);
             std::abort();
         }
-        // Separable Hann window, matching cv::createHanningWindow:
-        //   wc[i] = 0.5*(1 - cos(2*pi*i/(N-1))),  hann(y,x) = wr[y]*wc[x].
         wx_.resize((size_t)w_);
         wy_.resize((size_t)h_);
         for (int x = 0; x < w_; x++)
@@ -92,9 +62,6 @@ public:
     int width()  const { return w_; }
     int height() const { return h_; }
 
-    // Sub-pixel shift such that a(x) ~= b(x + shift): the content moved by +shift
-    // from a to b (same convention & sign as cv::phaseCorrelate(a, b, hann)).
-    // `prev`/`curr` are row-major float, w*h each.
     Shift correlate(const float *prev, const float *curr) {
         for (int y = 0; y < h_; y++)
             for (int x = 0; x < w_; x++) {
@@ -105,16 +72,12 @@ public:
             }
         fft2d(A_, false);
         fft2d(B_, false);
-        // normalized cross-power spectrum, in place into A_
         for (size_t i = 0; i < A_.size(); i++) {
             const cd r = A_[i] * std::conj(B_[i]);
             const double m = std::abs(r);
             A_[i] = m > 1e-12 ? r / m : cd(0.0, 0.0);
         }
-        fft2d(A_, true);   // unscaled inverse (matches cv::idft without DFT_SCALE)
-        // Hand the real correlation surface to the shared refiner — the VPI/CUDA
-        // FFT GMC backend fetches its IFFT result the same way, so both paths use
-        // identical fft-shift + peak + 5x5-centroid refinement.
+        fft2d(A_, true);
         real_.resize(A_.size());
         for (size_t i = 0; i < A_.size(); i++) real_[i] = A_[i].real();
         const PhaseShift ps = refine_correlation_peak(real_, w_, h_);
@@ -125,7 +88,6 @@ private:
     using cd = std::complex<double>;
     static constexpr double kPi = 3.14159265358979323846;
 
-    // In-place radix-2 Cooley–Tukey; NOT scaled on inverse (caller matches cv idft).
     static void fft1d(cd *a, int n, bool inverse) {
         for (int i = 1, j = 0; i < n; i++) {
             int bit = n >> 1;
@@ -160,7 +122,7 @@ private:
     int w_, h_;
     std::vector<double> wx_, wy_;
     std::vector<cd> A_, B_, col_;
-    std::vector<double> real_;  // scratch: real part of the IFFT surface for refine
+    std::vector<double> real_;
 };
 
-}  // namespace nvmm
+}

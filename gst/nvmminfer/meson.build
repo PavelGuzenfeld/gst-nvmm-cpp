@@ -4,7 +4,7 @@ gstnvmminfer = library('gstnvmminfer',
     'trt_engine.cpp',
     'preprocess.cpp',
     'yolo_parser.cpp',
-  ),  # nvmm_det_meta.cpp lives in gst/common (CI-built + tested)
+  ),
   include_directories : [
     config_inc,
     common_inc,

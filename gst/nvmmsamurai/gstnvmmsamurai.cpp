@@ -1,9 +1,4 @@
-/// GstNvmmSamurai — see gstnvmmsamurai.h. Phase B2: element shell — loads the
-/// SamuraiTracker (5 engines), seeds from the first confident YOLO detection,
-/// runs the (B2-stub) tracker per frame, and attaches GstNvmmTrackMeta. The real
-/// per-frame dataflow lands in SamuraiTracker (Phase B3).
-
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmsamurai.h"
 
@@ -19,7 +14,7 @@
 #include "samurai_tracker.hpp"
 #include "nvmm_det_meta.h"
 #include "nvmm_track_meta.h"
-#include "gstnvmmallocator.h"    // gst_is_nvmm_memory / gst_nvmm_memory_get_surface
+#include "gstnvmmallocator.h"
 
 #include <nvbufsurface.h>
 
@@ -29,7 +24,6 @@ GST_DEBUG_CATEGORY(gst_nvmm_samurai_debug);
 struct _GstNvmmSamurai {
     GstBaseTransform parent;
 
-    /* properties */
     gchar  *engine_dir;
     gchar  *consts_file;
     gint    crop_size;
@@ -37,26 +31,22 @@ struct _GstNvmmSamurai {
     gdouble kf_score_weight;
     gint    stable_frames_threshold;
     gdouble iou_threshold;
-    gdouble kf_min_area;        /* min KF box area (px^2) to accept a KF update */
+    gdouble kf_min_area;
     gint    target_class;
-    gdouble seed_conf;          /* min YOLO conf to autonomously seed */
-    gboolean seed_prefer_center; /* seed the most-central det, not the most confident */
-    guint    seed_delay;        /* don't auto-seed before this frame (camera settle) */
-    gchar  *seed_roi;           /* "x,y,w,h" frame coords: force initial seed here,
-                                   bypassing YOLO (for targets the detector misses) */
-    gboolean gmc;               /* camera-motion compensation (handheld clips) */
-    gint     gmc_backend;       /* nvmm::GmcBackend enum value (auto resolves at init) */
+    gdouble seed_conf;
+    gboolean seed_prefer_center;
+    guint    seed_delay;
+    gchar  *seed_roi;
+    gboolean gmc;
+    gint     gmc_backend;
 
-    /* runtime */
     nvmm::SamuraiTracker *tracker;
     guint64 frame_no;
-    guint   kf_count;           /* consecutive KF-only frames since last full inference */
+    guint   kf_count;
 
-    /* re-seed authority: nvmmfusekf (downstream) sends an upstream "nvmm-reseed"
-       event with a box; we force a (re)seed on the next frame. */
     nvmm::TrackBox reseed_box;
     gboolean       reseed_pending;
-    gboolean       roi_armed;    /* seed-roi pending; applied at frame >= seed_delay */
+    gboolean       roi_armed;
 };
 
 enum {
@@ -66,9 +56,6 @@ enum {
     PROP_SEED_ROI, PROP_SEED_DELAY, PROP_GMC, PROP_GMC_BACKEND,
 };
 
-/* GMC backend as a GEnum so gst-inspect lists the choices. Values mirror
-   nvmm::GmcBackend (gmc_backend.hpp); "auto" resolves to the best available at
-   tracker init. */
 #define GST_TYPE_NVMM_GMC_BACKEND (gst_nvmm_gmc_backend_get_type())
 static GType gst_nvmm_gmc_backend_get_type(void)
 {
@@ -99,7 +86,6 @@ static GstStaticPadTemplate src_tmpl = GST_STATIC_PAD_TEMPLATE(
 
 G_DEFINE_TYPE(GstNvmmSamurai, gst_nvmm_samurai, GST_TYPE_BASE_TRANSFORM)
 
-/* NVMM memory -> NvBufSurface (no copy); fall back to mapping for plain mem. */
 static NvBufSurface *surface_of(GstBuffer *buf)
 {
     GstMemory *m = gst_buffer_peek_memory(buf, 0);
@@ -146,12 +132,11 @@ static gboolean gst_nvmm_samurai_start(GstBaseTransform *bt)
     self->kf_count = 0;
     self->reseed_pending = FALSE;
     self->roi_armed = FALSE;
-    /* seed-roi: force the initial seed at a fixed box (bypass YOLO auto-seed). */
     if (self->seed_roi && *self->seed_roi) {
         float x = 0, y = 0, w = 0, h = 0;
         if (sscanf(self->seed_roi, "%f,%f,%f,%f", &x, &y, &w, &h) == 4 && w > 0 && h > 0) {
             self->reseed_box = {x, y, w, h, 0.f, true};
-            self->roi_armed = TRUE;   /* applied at frame >= seed-delay (settle) */
+            self->roi_armed = TRUE;
             GST_INFO_OBJECT(self, "seed-roi armed at (%.0f,%.0f %.0fx%.0f), delay=%u",
                             x, y, w, h, self->seed_delay);
         } else {
@@ -168,11 +153,6 @@ static gboolean gst_nvmm_samurai_stop(GstBaseTransform *bt)
     return TRUE;
 }
 
-/* Pick a target-class detection to seed from, mapped from infer space to surface
-   pixels. Among dets with conf >= seed-conf: by default the highest confidence;
-   with seed-prefer-center=true, the one closest to the frame center (the target
-   of interest is what the camera is pointed at — avoids locking onto a higher-
-   confidence background false positive). Returns false if none qualifies. */
 static gboolean best_seed_box(GstNvmmSamurai *self, GstBuffer *buf, NvBufSurface *surf,
                               nvmm::TrackBox *out)
 {
@@ -204,9 +184,6 @@ static gboolean best_seed_box(GstNvmmSamurai *self, GstBuffer *buf, NvBufSurface
     return TRUE;
 }
 
-/* Upstream re-seed authority: nvmmfusekf sends a CUSTOM_UPSTREAM "nvmm-reseed"
-   event carrying a box (frame/surface coords) when the track is lost. We stash it
-   and force a (re)seed on the next frame (we have the surface there, not here). */
 static gboolean gst_nvmm_samurai_src_event(GstBaseTransform *bt, GstEvent *ev)
 {
     auto *self = GST_NVMM_SAMURAI(bt);
@@ -220,7 +197,7 @@ static gboolean gst_nvmm_samurai_src_event(GstBaseTransform *bt, GstEvent *ev)
             self->reseed_pending = TRUE;
             GST_DEBUG_OBJECT(self, "reseed requested at (%.0f,%.0f %.0fx%.0f)", x, y, w, h);
             gst_event_unref(ev);
-            return TRUE;  // consume
+            return TRUE;
         }
     }
     return GST_BASE_TRANSFORM_CLASS(gst_nvmm_samurai_parent_class)->src_event(bt, ev);
@@ -238,15 +215,12 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
 
     std::string err;
     nvmm::TrackResult res;
-    /* Forced re-seed from the downstream fusekf authority takes precedence. */
     if (self->reseed_pending) {
         self->reseed_pending = FALSE;
         self->kf_count = 0;
         if (!self->tracker->seed(surf, self->reseed_box, err))
             GST_WARNING_OBJECT(self, "reseed failed: %s", err.c_str());
     }
-    /* seed-roi: force the initial seed at the configured box once the image has
-       settled (frame >= seed-delay), bypassing YOLO auto-seed. */
     if (self->roi_armed && !self->tracker->seeded() && fno >= self->seed_delay) {
         self->roi_armed = FALSE;
         if (!self->tracker->seed(surf, self->reseed_box, err))
@@ -260,9 +234,6 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
         }
     }
     if (self->tracker->seeded()) {
-        /* max-kf fast frames: run full SAM inference, then up to max-kf KF-only
-           frames (kf.predict only, no engines) — the box is extrapolated between
-           full inferences. max-kf=0 => every frame full. */
         gboolean kf_only = FALSE;
         if ((gint)self->kf_count < self->max_kf) {
             kf_only = TRUE; self->kf_count++;
@@ -275,7 +246,6 @@ static GstFlowReturn gst_nvmm_samurai_transform_ip(GstBaseTransform *bt, GstBuff
         }
     }
 
-    /* Attach the track meta (valid=FALSE until seeded). */
     GstNvmmTrackMeta *tm = gst_buffer_add_nvmm_track_meta(buf);
     if (tm) {
         tm->frame_number = fno;

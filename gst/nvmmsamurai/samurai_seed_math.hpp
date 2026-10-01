@@ -1,9 +1,3 @@
-/// samurai_seed_math.hpp — host-side math for the seed/track selection, kept
-/// dependency-free so it can be unit-tested off-target. Correctness-first (host);
-/// the per-frame mask ops are CUDA-optimization candidates later.
-///   - bilinear_upsample: PyTorch F.interpolate(align_corners=False) clone
-///   - mask_to_box: argwhere(mask>0) -> [x,y,w,h] (w=xmax-xmin), matches sam2_base
-///   - mlp3_relu: obj_ptr_proj (3 Linear layers, ReLU between, none after last)
 #pragma once
 
 #include <cstddef>
@@ -11,14 +5,11 @@
 
 namespace nvmm {
 
-/// Box in pixel coords (within the upsampled mask frame). valid=false if empty.
 struct MaskBox {
     float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
     bool valid = false;
 };
 
-/// Bilinear resize src[hi*wi] -> dst[ho*wo], matching torch interpolate with
-/// align_corners=False (src = (dst+0.5)*scale - 0.5, edge-clamped).
 inline std::vector<float> bilinear_upsample(const float *src, int hi, int wi,
                                             int ho, int wo)
 {
@@ -43,8 +34,6 @@ inline std::vector<float> bilinear_upsample(const float *src, int hi, int wi,
     return dst;
 }
 
-/// Tight box around mask>0 pixels (w = xmax-xmin, h = ymax-ymin), matching
-/// sam2_base's BoundingBox(x=x_min,y=y_min,x2=x_max,y2=y_max).
 inline MaskBox mask_to_box(const float *mask, int h, int w, float thresh = 0.f)
 {
     int xmin = w, ymin = h, xmax = -1, ymax = -1;
@@ -57,15 +46,13 @@ inline MaskBox mask_to_box(const float *mask, int h, int w, float thresh = 0.f)
                 if (y > ymax) ymax = y;
             }
     MaskBox b;
-    if (xmax < 0) return b;  // empty
+    if (xmax < 0) return b;
     b.x = (float)xmin; b.y = (float)ymin;
     b.w = (float)(xmax - xmin); b.h = (float)(ymax - ymin);
     b.valid = true;
     return b;
 }
 
-/// 3-layer MLP with ReLU between layers, no activation after the last (SAM2 MLP
-/// default). weights row-major [out,in]; in==out==dim for obj_ptr_proj.
 inline std::vector<float> mlp3_relu(const float *x, int dim,
                                     const float *w0, const float *b0,
                                     const float *w1, const float *b1,
@@ -89,4 +76,4 @@ inline std::vector<float> mlp3_relu(const float *x, int dim,
     return h0;
 }
 
-}  // namespace nvmm
+}

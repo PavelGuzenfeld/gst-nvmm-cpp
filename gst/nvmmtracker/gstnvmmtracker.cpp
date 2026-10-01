@@ -13,17 +13,15 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_tracker_debug);
 
 struct _GstNvmmTracker {
     GstBaseTransform parent;
-    gdouble        iou_threshold;   /* property */
-    gint           max_age;         /* property */
-    nvmm::Tracker *tracker;         /* created in start() from the properties */
+    gdouble        iou_threshold;
+    gint           max_age;
+    nvmm::Tracker *tracker;
 };
 
 G_DEFINE_TYPE(GstNvmmTracker, gst_nvmm_tracker, GST_TYPE_BASE_TRANSFORM)
 
 enum { PROP_0, PROP_IOU_THRESHOLD, PROP_MAX_AGE };
 
-/* Pixel-format-agnostic: the tracker only touches metadata, so it passes any
-   NVMM frame through unchanged (same caps in/out). */
 static GstStaticPadTemplate sink_tmpl = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS("video/x-raw(memory:NVMM)"));
@@ -103,7 +101,7 @@ static void gst_nvmm_tracker_class_init(GstNvmmTrackerClass *klass) {
     bt->start        = gst_nvmm_tracker_start;
     bt->stop         = gst_nvmm_tracker_stop;
     bt->transform_ip = gst_nvmm_tracker_transform_ip;
-    bt->passthrough_on_same_caps = FALSE;  /* transform_ip must run every buffer */
+    bt->passthrough_on_same_caps = FALSE;
 
     GST_DEBUG_CATEGORY_INIT(gst_nvmm_tracker_debug, "nvmmtracker", 0,
                             "NVMM detection tracker");

@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION
+#include "config.h"
 
 #include "gstnvmmcompositor.h"
 
@@ -19,11 +19,9 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_compositor_debug);
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-/* ===================== Request sink pad ===================== */
-
 struct _GstNvmmCompositorPad {
     GstAggregatorPad parent;
-    gint xpos, ypos, width, height;  /* placement in the output; 0 w/h = fill */
+    gint xpos, ypos, width, height;
 };
 
 G_DEFINE_TYPE(GstNvmmCompositorPad, gst_nvmm_compositor_pad, GST_TYPE_AGGREGATOR_PAD)
@@ -79,8 +77,6 @@ gst_nvmm_compositor_pad_init(GstNvmmCompositorPad* pad)
     pad->xpos = pad->ypos = pad->width = pad->height = 0;
 }
 
-/* ===================== Compositor ===================== */
-
 struct _GstNvmmCompositor {
     GstAggregator parent;
     gint out_width, out_height;
@@ -125,7 +121,6 @@ gst_nvmm_compositor_aggregate(GstAggregator* agg, gboolean timeout)
     auto* self = GST_NVMM_COMPOSITOR(agg);
     (void)timeout;
 
-    /* Negotiate src caps once, from the configured output size. */
     if (!self->src_caps_set) {
         GstCaps* caps = gst_caps_from_string(
             "video/x-raw(memory:NVMM), format=(string)NV12");
@@ -137,11 +132,6 @@ gst_nvmm_compositor_aggregate(GstAggregator* agg, gboolean timeout)
         self->src_caps_set = TRUE;
     }
 
-    /* Allocate the output NVMM frame. Each pad writes only its dst_rect via
-       VIC, so regions no pad covers are left at the allocator's initial
-       contents (undefined). The element therefore assumes the request pads
-       tile the full output (mosaic) — for partial layouts, add a full-frame
-       background pad behind the others. */
     GstMemory* omem = gst_nvmm_allocator_alloc_video(
         self->allocator, GST_VIDEO_FORMAT_NV12, self->out_width, self->out_height);
     if (!omem) {
@@ -200,7 +190,7 @@ gst_nvmm_compositor_aggregate(GstAggregator* agg, gboolean timeout)
     }
     if (!any) {
         gst_buffer_unref(outbuf);
-        return GST_FLOW_OK;  /* nothing ready yet */
+        return GST_FLOW_OK;
     }
 
     GST_BUFFER_PTS(outbuf) = pts;
@@ -279,8 +269,6 @@ gst_nvmm_compositor_init(GstNvmmCompositor* self)
     self->allocator = gst_nvmm_allocator_new(0);
     self->src_caps_set = FALSE;
 }
-
-/* ===================== Plugin ===================== */
 
 static gboolean
 plugin_init(GstPlugin* plugin)

@@ -41,7 +41,6 @@ gst_nvmm_interpolation_get_type(void)
 {
     static GType type = 0;
     if (g_once_init_enter(&type)) {
-        /* Values match nvmm::Interpolation / NvBufSurfTransformInter_*. */
         static const GEnumValue values[] = {
             {0, "Nearest neighbour", "nearest"},
             {1, "Bilinear", "bilinear"},
@@ -64,7 +63,6 @@ gst_nvmm_compute_mode_get_type(void)
 {
     static GType type = 0;
     if (g_once_init_enter(&type)) {
-        /* Values match nvmm::ComputeMode / NvBufSurfTransformCompute_*. */
         static const GEnumValue values[] = {
             {0, "Default (driver picks; VIC on Tegra)", "default"},
             {1, "GPU", "gpu"},
@@ -103,7 +101,6 @@ struct _GstNvmmConvertPrivate {
 
 G_DEFINE_TYPE_WITH_PRIVATE(GstNvmmConvert, gst_nvmm_convert, GST_TYPE_BASE_TRANSFORM)
 
-/* Forward declarations */
 static gboolean gst_nvmm_convert_stop(GstBaseTransform* trans);
 static void gst_nvmm_convert_finalize(GObject* object);
 
@@ -149,7 +146,6 @@ static void gst_nvmm_convert_get_property(GObject* object, guint prop_id,
     }
 }
 
-/* Remove format info and rangify size — allows format conversion + scaling */
 static GstCaps*
 remove_format_and_rangify(GstCaps* caps)
 {
@@ -160,10 +156,8 @@ remove_format_and_rangify(GstCaps* caps)
         GstCapsFeatures* f = gst_caps_features_copy(
             gst_caps_get_features(caps, i));
 
-        /* Remove format — we can convert between any supported format */
         gst_structure_remove_fields(s, "format", "colorimetry", "chroma-site",
                                     NULL);
-        /* Rangify size — we can scale to any dimension */
         gst_structure_set(s,
             "width", GST_TYPE_INT_RANGE, 1, 8192,
             "height", GST_TYPE_INT_RANGE, 1, 8192,
@@ -209,7 +203,6 @@ gst_nvmm_convert_fixate_caps(GstBaseTransform* trans,
     othercaps = gst_caps_make_writable(othercaps);
     outs = gst_caps_get_structure(othercaps, 0);
 
-    /* Prefer input format if output doesn't specify one */
     if (direction == GST_PAD_SINK) {
         const gchar* in_fmt = gst_structure_get_string(ins, "format");
         if (in_fmt && !gst_structure_has_field(outs, "format")) {
@@ -217,13 +210,11 @@ gst_nvmm_convert_fixate_caps(GstBaseTransform* trans,
         }
     }
 
-    /* Fixate dimensions: prefer crop size if set, otherwise input size */
     gint in_w = 0, in_h = 0;
     gst_structure_get_int(ins, "width", &in_w);
     gst_structure_get_int(ins, "height", &in_h);
 
     if (direction == GST_PAD_SINK) {
-        /* If crop is configured, output dimensions = crop dimensions */
         uint32_t cw = self->priv->crop_w.load();
         uint32_t ch = self->priv->crop_h.load();
         if (cw > 0 && ch > 0) {
@@ -232,12 +223,10 @@ gst_nvmm_convert_fixate_caps(GstBaseTransform* trans,
             gst_structure_fixate_field_nearest_int(outs, "height",
                 static_cast<int>(ch));
         } else if (in_w > 0 && in_h > 0) {
-            /* No crop: prefer input dimensions */
             gst_structure_fixate_field_nearest_int(outs, "width", in_w);
             gst_structure_fixate_field_nearest_int(outs, "height", in_h);
         }
     } else {
-        /* SRC→SINK: prefer output dimensions as input dimensions */
         if (in_w > 0 && in_h > 0) {
             gst_structure_fixate_field_nearest_int(outs, "width", in_w);
             gst_structure_fixate_field_nearest_int(outs, "height", in_h);
@@ -284,14 +273,11 @@ static gboolean gst_nvmm_convert_set_caps(GstBaseTransform* trans,
                     gst_video_format_to_string(
                         GST_VIDEO_INFO_FORMAT(&self->priv->src_info)));
 
-    /* Enable passthrough when caps match and no crop/flip */
     gboolean same = gst_caps_is_equal(incaps, outcaps);
     gboolean no_transform = (self->priv->crop_w.load() == 0 ||
                              self->priv->crop_h.load() == 0) &&
                             self->priv->flip.load() == 0;
     gst_base_transform_set_passthrough(trans, same && no_transform);
-
-    /* Pool setup is handled by decide_allocation */
 
     return TRUE;
 }
@@ -303,13 +289,11 @@ gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
 {
     auto* self = GST_NVMM_CONVERT(trans);
 
-    /* Passthrough: reuse input buffer */
     if (gst_base_transform_is_passthrough(trans)) {
         *outbuf = inbuf;
         return GST_FLOW_OK;
     }
 
-    /* Acquire buffer from the NVMM pool */
     if (!self->priv->pool) {
         GST_ERROR_OBJECT(self, "No output buffer pool");
         return GST_FLOW_ERROR;
@@ -322,7 +306,6 @@ gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
         return ret;
     }
 
-    /* Copy timestamps */
     gst_buffer_copy_into(*outbuf, inbuf,
         static_cast<GstBufferCopyFlags>(GST_BUFFER_COPY_TIMESTAMPS | GST_BUFFER_COPY_FLAGS),
         0, static_cast<gsize>(-1));
@@ -330,20 +313,15 @@ gst_nvmm_convert_prepare_output_buffer(GstBaseTransform* trans,
     return GST_FLOW_OK;
 }
 
-/* Extract NvBufSurface from a GstBuffer — works with both our allocator
-   and NVIDIA's nvvidconv/nvv4l2 allocator. NVIDIA's convention: the mapped
-   data pointer IS the NvBufSurface*. */
 static NvBufSurface*
 get_nvbuf_surface(GstBuffer* buf)
 {
     GstMemory* mem = gst_buffer_peek_memory(buf, 0);
 
-    /* Try our allocator first */
     if (gst_is_nvmm_memory(mem)) {
         return static_cast<NvBufSurface*>(gst_nvmm_memory_get_surface(mem));
     }
 
-    /* NVIDIA convention: map the buffer, data pointer = NvBufSurface* */
     GstMapInfo map;
     if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
         auto* surface = reinterpret_cast<NvBufSurface*>(map.data);
@@ -367,7 +345,6 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
         return GST_FLOW_ERROR;
     }
 
-    /* Wrap raw surfaces — we don't own these, so release() after use */
     nvmm::NvmmBuffer src_buf{src_surface};
     nvmm::NvmmBuffer dst_buf{dst_surface};
 
@@ -384,7 +361,6 @@ static GstFlowReturn gst_nvmm_convert_transform(GstBaseTransform* trans,
 
     auto result = nvmm::NvmmTransform::transform(src_buf, dst_buf, params);
 
-    /* Release ownership — these surfaces belong to the pipeline allocator */
     src_buf.release();
     dst_buf.release();
 
@@ -404,10 +380,8 @@ gst_nvmm_convert_propose_allocation(GstBaseTransform* trans,
     (void)trans;
     (void)decide_query;
 
-    /* Tell upstream we support video meta (non-standard strides) */
     gst_query_add_allocation_meta(query, GST_VIDEO_META_API_TYPE, NULL);
 
-    /* Propose an NVMM buffer pool for upstream to use */
     GstCaps* caps;
     gst_query_parse_allocation(query, &caps, NULL);
     if (caps) {
@@ -435,13 +409,11 @@ gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
 {
     auto* self = GST_NVMM_CONVERT(trans);
 
-    /* If passthrough, no output pool needed */
     if (gst_base_transform_is_passthrough(trans)) {
         return GST_BASE_TRANSFORM_CLASS(gst_nvmm_convert_parent_class)
             ->decide_allocation(trans, query);
     }
 
-    /* Check if downstream provided a pool we can use */
     guint n_pools = gst_query_get_n_allocation_pools(query);
     GstBufferPool* pool = NULL;
     guint size = 0, min = 2, max = 8;
@@ -450,7 +422,6 @@ gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
         gst_query_parse_nth_allocation_pool(query, 0, &pool, &size, &min, &max);
     }
 
-    /* If no pool from downstream, create our NVMM pool */
     if (!pool) {
         pool = gst_nvmm_buffer_pool_new();
 
@@ -464,7 +435,6 @@ gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
         }
     }
 
-    /* Configure and activate */
     GstStructure* config = gst_buffer_pool_get_config(pool);
     GstCaps* outcaps;
     gst_query_parse_allocation(query, &outcaps, NULL);
@@ -472,7 +442,6 @@ gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
                                        min < 2 ? 2 : min, max < 4 ? 8 : max);
     gst_buffer_pool_set_config(pool, config);
 
-    /* Replace the pool in our private data */
     if (self->priv->pool) {
         gst_buffer_pool_set_active(self->priv->pool, FALSE);
         gst_object_unref(self->priv->pool);
@@ -480,7 +449,6 @@ gst_nvmm_convert_decide_allocation(GstBaseTransform* trans,
     self->priv->pool = pool;
     gst_buffer_pool_set_active(self->priv->pool, TRUE);
 
-    /* Update the query */
     if (n_pools > 0) {
         gst_query_set_nth_allocation_pool(query, 0, pool, size, min, max);
     } else {
@@ -591,7 +559,7 @@ static void gst_nvmm_convert_init(GstNvmmConvert* self) {
     self->priv->crop_w = 0;
     self->priv->crop_h = 0;
     self->priv->flip = 0;
-    self->priv->interpolation = 6;  /* NvBufSurfTransformInter_Default */
-    self->priv->compute = 0;        /* NvBufSurfTransformCompute_Default */
+    self->priv->interpolation = 6;
+    self->priv->compute = 0;
     self->priv->pool = NULL;
 }

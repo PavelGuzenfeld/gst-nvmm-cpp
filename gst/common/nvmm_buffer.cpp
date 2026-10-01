@@ -61,7 +61,7 @@ MemoryType from_nv_memtype(NvBufSurfaceMemType mt) {
     return MemoryType::kDefault;
 }
 
-}  // namespace
+}
 
 NvmmBuffer::NvmmBuffer(NvBufSurface* surface) noexcept : surface_(surface) {}
 
@@ -116,8 +116,6 @@ Result<NvmmBuffer> NvmmBuffer::create(const SurfaceParams& params) {
                          "NvBufSurfaceCreate returned " + std::to_string(ret)};
     }
 
-    // NvBufSurfaceCreate initializes numFilled to 0; set it so that
-    // subsequent Map/Transform calls accept buffer index 0.
     surface->numFilled = surface->batchSize;
 
     return NvmmBuffer{surface};
@@ -183,7 +181,6 @@ Result<void> NvmmBuffer::unmap() {
         return Result<void>{};
     }
 
-    // Sync only the plane that was actually mapped
     NvBufSurfaceSyncForDevice(surface_, 0, mapped_plane_);
     int ret = NvBufSurfaceUnMap(surface_, 0, mapped_plane_);
     if (ret != 0) {
@@ -199,7 +196,6 @@ Result<int> NvmmBuffer::export_fd() const {
         return NvmmError{ErrorCode::kInvalidParam, "null surface"};
     }
 
-    // On Jetson NVMM (SURFACE_ARRAY/HANDLE), bufferDesc is the DMA-buf fd
     int fd = static_cast<int>(surface_->surfaceList[0].bufferDesc);
     if (fd < 0) {
         return NvmmError{ErrorCode::kDmaBufFailed, "no DMA-buf fd available"};
@@ -248,4 +244,4 @@ uint32_t NvmmBuffer::data_size() const noexcept {
     return surface_ ? surface_->surfaceList[0].dataSize : 0;
 }
 
-}  // namespace nvmm
+}

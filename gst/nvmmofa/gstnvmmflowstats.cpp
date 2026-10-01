@@ -9,10 +9,10 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_flowstats_debug);
 
 struct _GstNvmmFlowStats {
     GstBaseSink parent;
-    gboolean silent;        /* property: suppress per-frame lines */
-    guint64 frames;         /* frames seen */
+    gboolean silent;
+    guint64 frames;
     guint64 frames_with_flow;
-    double sum_mean_mag;    /* accumulated per-frame mean magnitude */
+    double sum_mean_mag;
 };
 
 G_DEFINE_TYPE(GstNvmmFlowStats, gst_nvmm_flowstats, GST_TYPE_BASE_SINK)
@@ -39,12 +39,11 @@ gst_nvmm_flowstats_render(GstBaseSink *sink, GstBuffer *buf)
     if (!gst_memory_map(m->mv, &map, GST_MAP_READ))
         return GST_FLOW_OK;
 
-    /* Tightly-packed mv_width*mv_height cells, two int16 (dx, dy) in S10.5. */
     const int16_t *v = reinterpret_cast<const int16_t *>(map.data);
     const gsize cells = (gsize)m->mv_width * m->mv_height;
     double sum = 0.0, maxmag = 0.0;
     for (gsize i = 0; i < cells; i++) {
-        const double dx = v[2 * i]     / 32.0;  /* S10.5 -> pixels */
+        const double dx = v[2 * i]     / 32.0;
         const double dy = v[2 * i + 1] / 32.0;
         const double mag = std::sqrt(dx * dx + dy * dy);
         sum += mag;

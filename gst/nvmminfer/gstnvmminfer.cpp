@@ -1,4 +1,4 @@
-#include "config.h"  // PACKAGE_VERSION, HAVE_TENSORRT
+#include "config.h"
 
 #include "gstnvmminfer.h"
 #include "trt_engine.hpp"
@@ -20,8 +20,6 @@ GST_DEBUG_CATEGORY_STATIC(gst_nvmm_infer_debug);
 #define PACKAGE "gst-nvmm-cpp"
 #endif
 
-/* ---- color-order enum ---- */
-
 enum { NVMM_INFER_RGB = 0, NVMM_INFER_BGR = 1 };
 
 #define GST_TYPE_NVMM_INFER_COLOR_ORDER (gst_nvmm_infer_color_order_get_type())
@@ -41,50 +39,38 @@ gst_nvmm_infer_color_order_get_type(void)
     return t;
 }
 
-/* ---- element ---- */
-
 struct _GstNvmmInfer {
     GstBaseTransform parent;
 
-    /* properties */
     gchar   *engine_file;
-    gdouble  net_scale;     /* multiply pixels by this (YOLO: 1/255) */
-    gint     color_order;   /* NVMM_INFER_{RGB,BGR} */
-    gint     dla_core;      /* -1 = GPU / as-built; 0/1 = DLA core (onnx-build path) */
+    gdouble  net_scale;
+    gint     color_order;
+    gint     dla_core;
     gdouble  conf_threshold;
     gdouble  iou_threshold;
-    guint    infer_interval; /* run the network every Nth frame (1 = every frame) */
-    guint    infer_gate_frames; /* require this many consecutive inferred frames WITH a
-                                   detection before decimating; 0 = ungated */
+    guint    infer_interval;
+    guint    infer_gate_frames;
 
-    /* runtime state */
     nvmm::TrtEngine    *engine;
     nvmm::Preprocessor *pre;
     cudaStream_t        stream;
     gint                width, height;
 
-    /* device I/O + introspected geometry */
     float  *d_input;
     float  *d_output;
-    std::vector<float> *host_out;   /* output copied to host for parsing */
+    std::vector<float> *host_out;
     std::string *in_name, *out_name;
     int     net_w, net_h;
     int     num_classes, num_proposals;
     guint64 frame_no;
-    guint64 seen_frames;    /* every frame reaching transform_ip; drives infer-interval.
-                               Separate from frame_no, which counts only inferred
-                               frames (it is the det-meta frame_number). */
-    guint   acq_run;        /* consecutive inferred frames that produced >=1 detection */
+    guint64 seen_frames;
+    guint   acq_run;
 
-    /* performance measurement (property measure-latency) */
     gboolean   measure;
-    cudaEvent_t ev0, ev1, ev2, ev3;  /* pre-start, pre-end, infer-end, copy-end */
-    gdouble    acc_pre, acc_infer, acc_copy, acc_parse;  /* ms summed over window */
-    guint      perf_frames;        /* INFERRED frames in the window */
-    guint      perf_stream_frames; /* ALL frames in the window; differs once
-                                      infer-interval skips, and the two must be
-                                      reported separately or the rate is 1/N of
-                                      the real stream rate */
+    cudaEvent_t ev0, ev1, ev2, ev3;
+    gdouble    acc_pre, acc_infer, acc_copy, acc_parse;
+    guint      perf_frames;
+    guint      perf_stream_frames;
     gint64     window_start_us;
 };
 
@@ -94,8 +80,6 @@ enum { PROP_0, PROP_ENGINE_FILE, PROP_NET_SCALE_FACTOR, PROP_COLOR_ORDER, PROP_D
        PROP_CONF_THRESHOLD, PROP_IOU_THRESHOLD, PROP_MEASURE_LATENCY, PROP_INFER_INTERVAL,
        PROP_INFER_GATE_FRAMES };
 
-/* Detector input is fed from decoded NV12 NVMM video. Frame travels through
-   unchanged; only detection meta is attached. */
 static GstStaticPadTemplate sink_tmpl = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS("video/x-raw(memory:NVMM), format=(string)NV12, "
@@ -135,7 +119,7 @@ gst_nvmm_infer_set_caps(GstBaseTransform *bt, GstCaps *incaps, GstCaps *)
     return TRUE;
 }
 
-static gboolean gst_nvmm_infer_stop(GstBaseTransform *bt);  /* unwind failed start */
+static gboolean gst_nvmm_infer_stop(GstBaseTransform *bt);
 
 static gboolean
 gst_nvmm_infer_start(GstBaseTransform *bt)
@@ -177,7 +161,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     }
     self->engine = eng.release();
 
-    /* Introspect + log the engine's I/O so a misbuilt engine is obvious. */
     GST_INFO_OBJECT(self, "loaded engine \"%s\": %zu I/O tensors",
                     self->engine_file, self->engine->tensors().size());
     for (const auto &t : self->engine->tensors()) {
@@ -186,9 +169,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
                         nvmm::dims_str(t.dims).c_str(), nvmm::dtype_str(t.dtype), t.bytes);
     }
 
-    /* Exactly one input + one output: this parser binds only input0()/output0(),
-       so a multi-head engine (e.g. an NMS-plugin export) would leave tensors
-       unbound and enqueueV3 would fail. Reject it up front. */
     size_t n_in = 0, n_out = 0;
     for (const auto &t : self->engine->tensors()) (t.is_input ? n_in : n_out)++;
     if (n_in != 1 || n_out != 1) {
@@ -207,9 +187,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         gst_nvmm_infer_stop(bt);
         return FALSE;
     }
-    /* This path feeds float32 (NPP) and parses float32; reject quantized I/O
-       bindings (INT8/FP16-IO engines) loudly rather than reading garbage.
-       Note: trtexec --fp16 keeps FP32 I/O bindings, so fp16 engines pass. */
     if (in->dtype != nvinfer1::DataType::kFLOAT ||
         out->dtype != nvinfer1::DataType::kFLOAT) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
@@ -218,7 +195,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
         gst_nvmm_infer_stop(bt);
         return FALSE;
     }
-    /* Detector input must be 1x3xHxW (NCHW). */
     if (in->dims.nbDims != 4 || in->dims.d[1] != 3) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
                           ("input \"%s\" is %s, expected 1x3xHxW (NCHW)",
@@ -229,9 +205,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     self->net_h = (int)in->dims.d[2];
     self->net_w = (int)in->dims.d[3];
 
-    /* YOLO head: [1, 4+num_classes, num_proposals] (channels-first). Require
-       channels < proposals to reject a transposed [1, proposals, 4+classes]
-       export, which would otherwise pass (d[1] huge) and over-read the heap. */
     if (out->dims.nbDims != 3 || out->dims.d[1] <= 4 ||
         out->dims.d[1] >= out->dims.d[2]) {
         GST_ELEMENT_ERROR(self, RESOURCE, SETTINGS,
@@ -243,8 +216,6 @@ gst_nvmm_infer_start(GstBaseTransform *bt)
     }
     self->num_classes   = (int)out->dims.d[1] - 4;
     self->num_proposals = (int)out->dims.d[2];
-    /* COCO-80 label table is assumed by the parser; warn on a mismatch so the
-       boxes-right-but-labels-wrong case isn't silent. */
     if (self->num_classes != 80)
         GST_WARNING_OBJECT(self, "engine has %d classes, not 80 — COCO labels "
                            "will be wrong (boxes still valid)", self->num_classes);
@@ -278,22 +249,7 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 {
     auto *self = GST_NVMM_INFER(bt);
 
-    /* infer-interval: run the network on every Nth frame only. A skipped frame passes
-       through with NO detection meta -- downstream already handles a frame the detector
-       found nothing in (nvmmfusekf gates on has_yolo), so no new code path is needed.
-       Deliberately never re-attaches the previous frame's dets: stale meta would assert
-       a box for a frame that was never inferred, dragging the fused KF toward an old
-       position and letting flush-BB publish a stale tight box.
-
-       infer-gate-frames holds the interval OFF until detections are flowing steadily
-       (acq_run consecutive inferred frames with >=1 detection). No detections is
-       precisely when the tracker is acquiring or recovering from loss, and that is
-       where decimation did its damage: at N=3 ungated, 3 of 12 GT sequences never
-       acquired at all. Note this gates on ANY detection, not target-class -- nvmminfer
-       does not know the target class (nvmmdetgate/nvmmfusekf own that), so it is a
-       proxy, not an exact track-state signal. */
-    self->perf_stream_frames++;  /* count BEFORE the skip: the perf window reports a
-                                    stream rate, and skipped frames are still frames */
+    self->perf_stream_frames++;
 
     const gboolean gate_open = self->infer_gate_frames == 0 ||
                                self->acq_run >= self->infer_gate_frames;
@@ -309,8 +265,6 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
 
     std::string err;
 
-    /* Lazy preprocess config: needs both the network size (start) and the frame
-       size (set_caps). Letterbox geometry is fixed once the frame size is known. */
     if (!self->pre->configured()) {
         if (self->width <= 0 || self->height <= 0) {
             GST_WARNING_OBJECT(self, "frame size unknown; skipping");
@@ -341,8 +295,6 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     }
     if (m) cudaEventRecord(self->ev2, self->stream);
 
-    /* Copy the output back to host and wait for the whole stream (preprocess +
-       inference + copy) to complete. */
     const size_t out_bytes = self->host_out->size() * sizeof(float);
     cudaError_t ce = cudaMemcpyAsync(self->host_out->data(), self->d_output, out_bytes,
                                      cudaMemcpyDeviceToHost, self->stream);
@@ -354,7 +306,6 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     }
     const gint64 parse_t0 = m ? g_get_monotonic_time() : 0;
 
-    /* Decode + NMS -> det_meta (boxes in original-frame pixel space). */
     NvmmFrameMeta fm{};
     fm.frame_number = self->frame_no++;
     fm.infer_width  = (guint32)lb.frame_w;
@@ -368,9 +319,6 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
     fm.num_objects = nvmm::yolo_parse(self->host_out->data(), yp, lb, fm.objects, &truncated);
     fm.flags = truncated ? NVMM_FRAME_META_FLAG_TRUNCATED : 0u;
 
-    /* Acquisition-gate state: a run of inferred frames that each produced a detection.
-       Reset on the first empty frame, so losing the target immediately restores
-       every-frame inference for fast (re)acquisition. */
     if (fm.num_objects > 0) {
         if (self->acq_run < G_MAXUINT) self->acq_run++;
     } else {
@@ -394,14 +342,11 @@ gst_nvmm_infer_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
         self->acc_pre   += pre;
         self->acc_infer += inf;
         self->acc_copy  += cpy;
-        self->acc_parse += (g_get_monotonic_time() - parse_t0) / 1000.0;  // us -> ms
+        self->acc_parse += (g_get_monotonic_time() - parse_t0) / 1000.0;
         if (++self->perf_frames >= 60) {
             const gint64 now = g_get_monotonic_time();
             const double secs = (now - self->window_start_us) / 1e6;
             const double n = self->perf_frames;
-            /* Two rates, because infer-interval decouples them: per-stage costs are
-               per INFERRED frame, while throughput must be per STREAM frame. Reporting
-               only the former reads as 1/interval of the true rate. */
             GST_INFO_OBJECT(self,
                 "perf over %d inferred / %u stream frames: pre=%.2f infer=%.2f "
                 "copy=%.2f parse=%.2f inner-total=%.2f ms | %.1f inferred/s | "
@@ -426,8 +371,8 @@ gst_nvmm_infer_stop(GstBaseTransform *bt)
     auto *self = GST_NVMM_INFER(bt);
     delete self->engine;
     self->engine = nullptr;
-    delete self->pre;                       /* releases its RGBA surface + planes */
-    self->pre = new nvmm::Preprocessor();   /* fresh, so a re-start reconfigures */
+    delete self->pre;
+    self->pre = new nvmm::Preprocessor();
     if (self->d_input)  { cudaFree(self->d_input);  self->d_input = nullptr; }
     if (self->d_output) { cudaFree(self->d_output); self->d_output = nullptr; }
     if (self->measure) {
@@ -599,12 +544,8 @@ gst_nvmm_infer_init(GstNvmmInfer *self)
     self->perf_frames = 0;
     self->perf_stream_frames = 0;
     self->window_start_us = 0;
-    /* In-place: same caps in/out, the frame's pixels are never copied —
-       transform_ip gets the writable buffer and only attaches detection meta. */
     gst_base_transform_set_in_place(GST_BASE_TRANSFORM(self), TRUE);
 }
-
-/* ---- plugin ---- */
 
 static gboolean
 plugin_init(GstPlugin *plugin)

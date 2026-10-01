@@ -1,9 +1,6 @@
-/// xfeat_matcher.cpp — see xfeat_matcher.hpp.
-/// Ported from ../gst-nvmm-ostrack/gst/gstnvmmostrack.cpp (init_xfeat/init_lightglue/
-/// xfeat_extract/register_point), substituting nvmm::TrtEngine for raw TensorRT.
 #include "xfeat_matcher.hpp"
 
-#include "xfeat_sparse.hpp"   // get_kpts_heatmap / nms / score_and_sort / grid_sample_bicubic
+#include "xfeat_sparse.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -11,12 +8,11 @@
 namespace nvmm {
 
 namespace {
-// cudaMalloc-or-fail helper.
 bool cu_malloc(void** p, size_t bytes, std::string& err, const char* what) {
     if (cudaMalloc(p, bytes) != cudaSuccess) { err = std::string("cudaMalloc failed: ") + what; return false; }
     return true;
 }
-}  // namespace
+}
 
 XfeatMatcher::~XfeatMatcher() { free_buffers(); }
 
@@ -37,10 +33,6 @@ bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
 
     if (cudaStreamCreate(&stream_) != cudaSuccess) { err = "cudaStreamCreate failed"; return false; }
 
-    // XFeat IO (static shapes): size each device buffer from the engine's
-    // TensorInfo::bytes so a half-precision engine still binds (NOTE: an fp16 XFeat
-    // engine would also need the D2H reads + host post-proc in extract() to handle
-    // the output dtype — those currently assume fp32).
     auto xbytes = [&](const char* nm) -> size_t {
         for (const auto& t : xf_->tensors()) if (t.name == nm) return t.bytes;
         return 0;
@@ -60,7 +52,6 @@ bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
         err = "xfeat tensor bind failed (name mismatch vs engine)"; return false;
     }
 
-    // LightGlue IO (allocated to kTopK; shapes set per match()).
     if (!cu_malloc(&d_d0_, (size_t)kTopK * 64 * f4, err, "lg desc0")) return false;
     if (!cu_malloc(&d_d1_, (size_t)kTopK * 64 * f4, err, "lg desc1")) return false;
     if (!cu_malloc(&d_k0_, (size_t)kTopK * 2  * f4, err, "lg nkpts0")) return false;
@@ -74,7 +65,6 @@ bool XfeatMatcher::init(const std::string& engine_dir, std::string& err) {
         err = "lightglue tensor bind failed (name mismatch vs engine)"; return false;
     }
 
-    // RGBA VIC stretch destination.
     NvBufSurfaceCreateParams cp{};
     cp.width = kXW; cp.height = kXH;
     cp.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
@@ -90,7 +80,6 @@ bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err)
     out.kpts.clear(); out.descs.clear();
 
     const uint32_t W = src->surfaceList[0].width, H = src->surfaceList[0].height;
-    // VIC stretch full-frame -> 480x256 RGBA (non-aspect-preserving, matches reference).
     NvBufSurfTransformRect sr{0, 0, W, H}, dr{0, 0, (uint32_t)kXW, (uint32_t)kXH};
     NvBufSurfTransformParams tp{};
     tp.src_rect = &sr; tp.dst_rect = &dr;
@@ -102,7 +91,6 @@ bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err)
     const uint8_t* rgba = (const uint8_t*)rgba_->surfaceList[0].mappedAddr.addr[0];
     const int pitch = rgba_->surfaceList[0].pitch;
 
-    // Deinterleave RGBA -> planar RGB /255 (VIC px[0]=R). CNN takes RGB, no mean/std.
     std::vector<float> in((size_t)3 * kXH * kXW);
     const int plane = kXH * kXW;
     for (int y = 0; y < kXH; ++y)
@@ -129,9 +117,8 @@ bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err)
     auto K1h = nvmm::xfeat::get_kpts_heatmap(K.data(), kXHC, kXWC);
     auto kp = nvmm::xfeat::nms(K1h.data(), kXH, kXW, 0.05f, 5);
     auto sorted = nvmm::xfeat::score_and_sort(kp, K1h.data(), kXH, kXW, Hh.data(), kXHC, kXWC, kXH, kXW);
-    if ((int)sorted.size() > kTopK) sorted.resize(kTopK);   // Top-K cap
+    if ((int)sorted.size() > kTopK) sorted.resize(kTopK);
 
-    // L2-normalize feats over the 64 channels at each grid cell.
     std::vector<float> M1n(F.size());
     for (int h = 0; h < kXHC; ++h)
         for (int x = 0; x < kXWC; ++x) {
@@ -142,7 +129,7 @@ bool XfeatMatcher::extract(NvBufSurface* src, XfeatFrame& out, std::string& err)
                 M1n[((size_t)c * kXHC + h) * kXWC + x] = (float)(F[((size_t)c * kXHC + h) * kXWC + x] / nr);
         }
 
-    const double rh = kRH / kXH;   // y rescale net(256)->reg(270); x scale = kRW/kXW = 1
+    const double rh = kRH / kXH;
     out.kpts.reserve(sorted.size());
     out.descs.reserve(sorted.size());
     std::array<float, 64> dn;
@@ -162,7 +149,7 @@ bool XfeatMatcher::match(const XfeatFrame& a, const XfeatFrame& b,
                          std::vector<nvmm::motion::MatchPair>& out, std::string& err) {
     out.clear();
     const int N0 = (int)a.kpts.size(), N1 = (int)b.kpts.size();
-    if (N0 < 9 || N1 < 9) return true;                 // no verdict (not an error)
+    if (N0 < 9 || N1 < 9) return true;
     if (N0 > kTopK || N1 > kTopK) { err = "xfeat match: N exceeds kTopK"; return false; }
 
     std::vector<nvmm::xfeat::Pt2> nk0, nk1;
@@ -198,8 +185,8 @@ bool XfeatMatcher::match(const XfeatFrame& a, const XfeatFrame& b,
     auto matches = nvmm::xfeat::filter_matches(sim.data(), z0.data(), z1.data(), N0, N1, 0.1);
     out.reserve(matches.size());
     for (const auto& m : matches)
-        out.push_back({ m.i, a.kpts[m.i], b.kpts[m.j] });   // idx = anchor (A) keypoint index
+        out.push_back({ m.i, a.kpts[m.i], b.kpts[m.j] });
     return true;
 }
 
-}  // namespace nvmm
+}

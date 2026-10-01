@@ -48,7 +48,7 @@ NvBufSurfTransform_Compute to_nv_compute(ComputeMode m) {
     return NvBufSurfTransformCompute_Default;
 }
 
-}  // namespace
+}
 
 Result<void> NvmmTransform::transform(
     const NvmmBuffer& src, NvmmBuffer& dst, const TransformParams& params) {
@@ -84,15 +84,11 @@ Result<void> NvmmTransform::transform(
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FLIP;
     }
 
-    // Only request an explicit filter when the caller overrides the default,
-    // so default behaviour is unchanged from before this knob existed.
     if (params.interpolation != Interpolation::kDefault) {
         xform.transform_filter = to_nv_inter(params.interpolation);
         xform.transform_flag |= NVBUFSURF_TRANSFORM_FILTER;
     }
 
-    // Select the compute engine (VIC vs GPU) when the caller overrides the
-    // default. Session params are process-global, so only touch them on override.
     if (params.compute != ComputeMode::kDefault) {
         NvBufSurfTransformConfigParams cfg{};
         cfg.compute_mode = to_nv_compute(params.compute);
@@ -124,4 +120,4 @@ Result<void> NvmmTransform::convert(const NvmmBuffer& src, NvmmBuffer& dst) {
     return transform(src, dst, TransformParams{});
 }
 
-}  // namespace nvmm
+}

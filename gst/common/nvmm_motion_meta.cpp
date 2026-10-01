@@ -35,11 +35,9 @@ nvmm_motion_meta_free(GstMeta *meta, GstBuffer *)
 }
 
 static gboolean
-nvmm_motion_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * /*buffer*/,
-                           GQuark type, gpointer /*data*/)
+nvmm_motion_meta_transform(GstBuffer *dest, GstMeta *meta, GstBuffer * ,
+                           GQuark type, gpointer )
 {
-    /* Copy-transforms only; motion entries index into the det meta, which is
-       likewise dropped on non-copy transforms, so the pairing stays intact. */
     if (!GST_META_TRANSFORM_IS_COPY(type))
         return FALSE;
     auto *m = reinterpret_cast<GstNvmmMotionMeta *>(meta);

@@ -1,7 +1,3 @@
-# nvmmdetgate — autonomous target-seed gate (YOLO ∩ independent motion). Uses the
-# shared XFeat+LightGlue matcher (TRT) + the TrtEngine wrapper (compiled in, not
-# linked), like nvmmsamurai. Gated on TRT + real NVMM (Jetson-only) with the other
-# inference-graph elements.
 gstnvmmdetgate = library('gstnvmmdetgate',
   files(
     'gstnvmmdetgate.cpp',
@@ -17,7 +13,7 @@ gstnvmmdetgate = library('gstnvmmdetgate',
   dependencies : [
     nvmm_common_dep, gstnvmmalloc_dep,
     gst_base_dep,
-    trt_dep, nvbufsurftransform_dep,   # trt_dep brings nvinfer + cudart + NPP
+    trt_dep, nvbufsurftransform_dep,
   ],
   cpp_args : ['-Werror'],
   install : true,

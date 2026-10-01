@@ -11,12 +11,10 @@ uint32_t compute_box_motion(const int16_t *flow, int mv_w, int mv_h, int grid,
                             float threshold_px, MotionEntry *out) {
     if (!flow || mv_w <= 0 || mv_h <= 0 || grid <= 0 || !objects || !out || n == 0)
         return 0;
-    constexpr float kS105 = 1.0f / 32.0f;  // S10.5 fixed point -> pixels
+    constexpr float kS105 = 1.0f / 32.0f;
 
     for (uint32_t i = 0; i < n; i++) {
         const NvmmDetObject &o = objects[i];
-        // Frame-pixel box -> inclusive cell range, clamped to the field. A box
-        // smaller than a cell (or clamped to an edge) still covers >= 1 cell.
         const float x1 = std::min(std::max(o.left, 0.f), (float)frame_w - 1);
         const float y1 = std::min(std::max(o.top, 0.f), (float)frame_h - 1);
         const float x2 = std::min(std::max(o.left + o.width - 1, x1), (float)frame_w - 1);
@@ -42,4 +40,4 @@ uint32_t compute_box_motion(const int16_t *flow, int mv_w, int mv_h, int grid,
     return n;
 }
 
-}  // namespace nvmm
+}
