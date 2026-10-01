@@ -153,6 +153,8 @@ static void test_alloc_video_invalid() {
     PASS();
 }
 
+/// Jetson pitch alignment makes the real strides differ from GstVideoInfo's
+/// defaults (640-wide NV12 has a 768 pitch).
 static void test_pool_video_meta_real_strides() {
     GstBufferPool* pool = gst_nvmm_buffer_pool_new();
     ASSERT_NOT_NULL(pool);
@@ -193,6 +195,7 @@ static void test_pool_video_meta_real_strides() {
     PASS();
 }
 
+/// NO_SHARE would make make_writable deep-copy, so tee fan-out would stop being zero-copy.
 static void test_memory_is_shareable() {
     GstAllocator* alloc = gst_nvmm_allocator_new(0);
     GstMemory* mem = gst_nvmm_allocator_alloc_video(alloc,

@@ -36,6 +36,7 @@ static int tests_failed = 0;
 #include "shm_protocol.h"
 typedef NvmmShmHeader ShmHeader;
 
+/// Sequential, because each segment is ~33MB and Docker's /dev/shm is small.
 static void test_multiple_shm_segments() {
     const char *names[] = {"/test_int_multi_0", "/test_int_multi_1"};
 

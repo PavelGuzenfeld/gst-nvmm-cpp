@@ -122,11 +122,7 @@ test_samurai_view = executable('test_samurai_view',
   include_directories : [include_directories('../gst/nvmmsamurai')],
 )
 
-# Strict flags for the host-only GMC tests (element already builds -Werror; hold the
-# unit/fuzz tests to the same bar). -Wshadow is free signal here (clean already).
-# -Wconversion / -Wdouble-promotion were tried and dropped: on this numeric code they
-# only fire on intentional double-precision paths (float pixel * double Hann window)
-# and trivial int->float test literals — no real bug, just cast-churn to silence.
+# -Wconversion and -Wdouble-promotion only flag intentional double paths here.
 gmc_test_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
 
 test_gmc_backend = executable('test_gmc_backend',
@@ -135,10 +131,7 @@ test_gmc_backend = executable('test_gmc_backend',
   cpp_args : gmc_test_args,
 )
 
-# Fuzz + sanitizer harness for the GMC estimator core (phase_correlation.hpp +
-# samurai_gmc.hpp). Standalone LCG sweep; registered as a test so scripts/
-# run-sanitizers.sh exercises it under ASan+UBSan. (libFuzzer variant: build
-# tests/fuzz_gmc.cpp with clang -DGMC_LIBFUZZER -fsanitize=fuzzer — see its header.)
+# Plain build is the ASan+UBSan sweep; scripts/run-fuzz.sh builds the libFuzzer one.
 test_fuzz_gmc = executable('test_fuzz_gmc',
   ['fuzz_gmc.cpp'],
   include_directories : [common_inc, include_directories('../gst/nvmmsamurai')],
@@ -162,24 +155,16 @@ if have_tensorrt and have_nvbufsurface
     include_directories : [include_directories('../gst/nvmmsamurai')],
     dependencies : [trt_dep],
     cuda_args : samurai_cuda_base_args,
-    # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
-    # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via trt_dep;
-    # the kernels use no relocatable device code.
+    # nvcc rejects the unwrapped -Wl,-rpath meson emits for mixed C++/CUDA links.
     link_language : 'cpp',
   )
-  # Raw cudaMalloc — the same allocator that OOMs under TSan's shadow space, so
-  # tag 'nvidia_hwlib' (the on-device TSan run skips that suite). This is a
-  # real-GPU test; it only exists on the Jetson build.
+  # cudaMalloc OOMs under TSan's shadow reservation.
   test('samurai_kernels', samurai_kernel_probe, protocol : 'exitcode',
     suite : 'nvidia_hwlib')
 endif
 
-# On a real-API (non-mock) build these two exercise closed NVIDIA libs that
-# ThreadSanitizer flags but we cannot fix: libnvbufsurftransform double-locks /
-# unlocks its own global mutex, and the CUDA allocator OOMs under TSan's shadow
-# reservation. Tag them 'nvidia_hwlib' so the on-device TSan run skips them
-# (run-sanitizers.sh passes --no-suite nvidia_hwlib). On the mock build they use
-# the mock NvBufSurface, are fully TSan-clean, and stay in the default suite.
+# On real NVMM, libnvbufsurftransform double-locks its own mutex and cudaMalloc
+# OOMs under TSan; the on-device TSan run skips nvidia_hwlib.
 hwlib_suite = build_mock ? [] : ['nvidia_hwlib']
 test('nvmm_buffer', test_buffer, protocol : 'exitcode', suite : hwlib_suite)
 test('nvmm_transform', test_transform, protocol : 'exitcode', suite : hwlib_suite)
@@ -189,15 +174,12 @@ test('fuzz_shm_header', test_fuzz_shm, protocol : 'exitcode', args : ['200000'],
 test('optical_flow_meta', test_ofa_meta, protocol : 'exitcode')
 test('nvmm_det_meta', test_det_meta, protocol : 'exitcode')
 test('nvmm_track_meta', test_track_meta, protocol : 'exitcode')
-# pure_cpp: header-only, dependency-free (no GLib/GStreamer/CUDA), so LeakSanitizer
-# can run with detect_leaks=1 here without the GLib/GStreamer shutdown-leak noise
-# that forces detect_leaks=0 for the rest of the suite (see run-sanitizers.sh).
+# No GLib, so run-sanitizers.sh can run this suite with detect_leaks=1.
 test('kalman_box', test_kalman_box, protocol : 'exitcode', suite : 'pure_cpp')
 test('phase_correlation', test_phase_correlation, protocol : 'exitcode', suite : 'pure_cpp')
 test('xfeat_motion', test_xfeat_motion, protocol : 'exitcode', suite : 'pure_cpp')
 test('gmc_backend', test_gmc_backend, protocol : 'exitcode', suite : 'pure_cpp')
-# Also in 'fuzz': 12.4s of the suite's 14.3s wall, and the mutation gate runs the
-# suite once per mutant, so it excludes that suite with --no-suite fuzz.
+# 'fuzz' because the mutation gate skips it per mutant: most of the suite's wall time.
 test('fuzz_gmc', test_fuzz_gmc, protocol : 'exitcode', timeout : 300,
   suite : ['pure_cpp', 'fuzz'])
 test('gmc_mask', test_gmc_mask, protocol : 'exitcode', suite : 'pure_cpp')
@@ -245,9 +227,7 @@ test_compositor = executable('test_nvmm_compositor',
   cpp_args : build_mock ? ['-DNVMM_MOCK_API'] : [],
 )
 
-# These tests dlopen the plugin .so via the GStreamer factory, so they go in
-# the 'plugin' suite — excluded under TSan (a sanitized .so can't be loaded by
-# the unsanitized plugin scanner). See scripts/run-sanitizers.sh.
+# A TSan-built plugin .so cannot be loaded by the unsanitized plugin scanner.
 test('nvmm_compositor', test_compositor, protocol : 'exitcode',
   is_parallel : false, suite : 'plugin',
   env : ['GST_PLUGIN_PATH=' + compositor_plugin_path])
@@ -306,9 +286,7 @@ if have_analytics_cuda
     include_directories : [analytics_inc],
     dependencies : [analytics_cuda_dep],
     cuda_args : analytics_cuda_args,
-    # Link via g++, not nvcc: meson's CUDA linker for a mixed C++/CUDA target
-    # emits -Wl,-rpath unwrapped and nvcc rejects it. cudart arrives via
-    # analytics_cuda_dep; the kernels use no relocatable device code.
+    # nvcc rejects the unwrapped -Wl,-rpath meson emits for mixed C++/CUDA links.
     link_language : 'cpp',
   )
   test('analytics_kernels', analytics_kernel_probe, protocol : 'exitcode',

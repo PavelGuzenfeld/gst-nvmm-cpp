@@ -27,6 +27,8 @@ nvmm::img::Image<uint8_t> make_scene(int w, int h, unsigned seed) {
     return f;
 }
 
+/// FMA contraction differs between host and device, so knife-edge mask pixels may
+/// flip; bound the flip fraction and demand tight agreement everywhere else.
 void parity_case(int w, int h, unsigned seed, int diff_blur) {
     nvmm::img::Image<uint8_t> cur = make_scene(w, h, seed);
     scene::Rng rng(seed * 31 + 7);
@@ -122,6 +124,8 @@ void strided_view_upload() {
 
 }
 
+/// Driven from main(), not TEST: static init across TUs would race the .cu TU's
+/// CUDA symbol registration ("invalid device symbol").
 int main() {
     printf("== analytics CUDA kernel parity ==\n");
     RUN_TEST(parity_256_with_output_blur);

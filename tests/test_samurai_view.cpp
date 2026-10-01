@@ -11,10 +11,11 @@ namespace {
 constexpr int W = 1920, H = 1080, CROP = 512;
 
 struct Case {
-    float bx, by, bw, bh;
-    float ex, ey;
+    float box_x, box_y, box_w, box_h;
+    float want_view_x, want_view_y;
 };
 
+/// From the Python samurai.tracker.get_view_around_bbox (view_golden.py).
 const Case kCases[] = {
     {1015, 446, 18, 12, 768, 196},
     {0,    0,   10, 10, 0,   0},
@@ -29,9 +30,9 @@ const Case kCases[] = {
 
 TEST(view_matches_python_golden) {
     for (const Case &c : kCases) {
-        SamuraiView v = get_view_around_bbox(c.bx, c.by, c.bw, c.bh, CROP, W, H);
-        ASSERT_NEAR(v.x, c.ex, 1e-4);
-        ASSERT_NEAR(v.y, c.ey, 1e-4);
+        SamuraiView v = get_view_around_bbox(c.box_x, c.box_y, c.box_w, c.box_h, CROP, W, H);
+        ASSERT_NEAR(v.x, c.want_view_x, 1e-4);
+        ASSERT_NEAR(v.y, c.want_view_y, 1e-4);
         ASSERT_NEAR(v.width, (float)CROP, 1e-4);
         ASSERT_NEAR(v.height, (float)CROP, 1e-4);
     }
@@ -39,7 +40,7 @@ TEST(view_matches_python_golden) {
 
 TEST(view_stays_in_frame) {
     for (const Case &c : kCases) {
-        SamuraiView v = get_view_around_bbox(c.bx, c.by, c.bw, c.bh, CROP, W, H);
+        SamuraiView v = get_view_around_bbox(c.box_x, c.box_y, c.box_w, c.box_h, CROP, W, H);
         ASSERT_TRUE(v.x >= 0.f && v.y >= 0.f);
         ASSERT_TRUE(v.x + v.width <= (float)W);
         ASSERT_TRUE(v.y + v.height <= (float)H);

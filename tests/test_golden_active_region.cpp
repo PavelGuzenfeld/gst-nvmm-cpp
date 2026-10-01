@@ -22,6 +22,7 @@ cv::Rect reference_active_region(const cv::Mat &gray, int bar_range)
     return cv::Rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
 }
 
+/// Both sides do integer min/max, so the rectangle must match exactly.
 TEST(rect_matches_reference_exactly) {
     scene::Rng rng(31);
     for (int trial = 0; trial < 40; trial++) {

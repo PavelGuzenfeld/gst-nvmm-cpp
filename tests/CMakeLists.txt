@@ -63,7 +63,7 @@ nvmm_add_test(test_integration
     ENV "GST_PLUGIN_PATH=${_plugin_path_with_convert}"
 )
 
-# Make sink/appsrc/integration tests run sequentially (they touch shared /dev/shm)
+# They share /dev/shm.
 set_tests_properties(test_nvmm_sink test_nvmm_appsrc test_gstcheck_elements test_integration
     PROPERTIES RUN_SERIAL TRUE
 )

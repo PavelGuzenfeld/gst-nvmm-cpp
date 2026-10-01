@@ -7,6 +7,8 @@
 static int tests_passed = 0;
 static int tests_failed = 0;
 
+/// Runs from a static constructor, before main(). ASSERT_* throw rather than
+/// return, so a failed assert can never fall through to the PASS count.
 #define TEST(name) \
     static void test_##name(); \
     struct test_reg_##name { test_reg_##name() { \

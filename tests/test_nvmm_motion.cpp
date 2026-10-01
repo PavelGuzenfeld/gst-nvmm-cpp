@@ -10,6 +10,7 @@ namespace {
 constexpr int GRID = 4, MVW = 8, MVH = 8;
 constexpr int FW = MVW * GRID, FH = MVH * GRID;
 
+/// Flow is int16 S10.5 (px = raw / 32). Cells x >= 4 move 2 px right.
 std::vector<int16_t> half_moving_field() {
     std::vector<int16_t> f(MVW * MVH * 2, 0);
     for (int y = 0; y < MVH; y++)

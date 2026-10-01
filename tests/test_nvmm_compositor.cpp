@@ -19,6 +19,8 @@ static int tests_failed = 0;
 
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
+/// aggregate() needs real NVMM buffers; compositing itself is covered by the
+/// on-device runs in docs/validation.md.
 static void test_compositor_creates() {
     GstElement *comp = gst_element_factory_make("nvmmcompositor", "test-comp");
     ASSERT_NOT_NULL(comp);

@@ -12,6 +12,7 @@ namespace {
 constexpr int N = 8400;
 constexpr int C = 80;
 
+/// Output is channels-first: output[ch * N + i], ch 0..3 = cx, cy, w, h, 4 + cls = score.
 void set_prop(std::vector<float> &o, int i, float cx, float cy, float w, float h,
               int cls, float score) {
     o[0 * N + i] = cx; o[1 * N + i] = cy; o[2 * N + i] = w; o[3 * N + i] = h;

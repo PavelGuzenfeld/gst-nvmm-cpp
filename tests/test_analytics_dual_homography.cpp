@@ -54,6 +54,8 @@ TEST(independent_mover_peaks_orb_pipeline) {
     check_mover_dominates(nvmm::motion::FeaturePipeline::orb);
 }
 
+/// The mover bar is lower than the pan-only scene's: min-combining against the
+/// H2-warped reference also bounds the mover's absolute residual.
 TEST(genuine_parallax_plane_absorbed_mover_survives) {
     Image<uint8_t> B = scene::textured_bg(256, 42);
     Image<uint8_t> F = scene::textured_bg(256, 4242);

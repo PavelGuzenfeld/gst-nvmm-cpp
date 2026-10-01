@@ -7,6 +7,7 @@
 
 namespace {
 
+/// Input amplitude is 20, so an unamplified output has peak-to-peak 40.
 float steady_pp(float f0, float low, float high, float alpha) {
     nvmm::motion::MagnifyParams p; p.fps = 30.f; p.low_hz = low; p.high_hz = high; p.alpha = alpha;
     nvmm::motion::MotionMagnifier mag(p);

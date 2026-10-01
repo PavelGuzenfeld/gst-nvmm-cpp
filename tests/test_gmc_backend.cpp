@@ -52,6 +52,8 @@ int main() {
     for (auto &v : g_base) { s = s * 1664525u + 1013904223u; v = (uint8_t)((s >> 24) & 0xFF); }
 
     nvmm::PhaseCorrelator pc(N, N);
+    /// NCC and FFT have different native sign conventions. A flipped sign fed to
+    /// kf.shift() doubles camera motion instead of cancelling it.
     const int shifts[][2] = {{0, 0}, {2, 0}, {0, 3}, {3, -2}, {-4, 5}, {6, -3}};
     for (auto &sh : shifts) {
         const int sx = sh[0], sy = sh[1];

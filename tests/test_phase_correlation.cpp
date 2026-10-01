@@ -15,6 +15,9 @@ float at(int x, int y) {
 }
 }
 
+/// Sub-pixel precision was certified against cv::phaseCorrelate (0.009 px). The
+/// 0.15 px bound only has to catch sign flips, a missing fft-shift and a wrong
+/// peak, which are all whole-pixel errors.
 int main() {
     g_base.resize((size_t)W * H);
     uint32_t s = 0x9e3779b9u;

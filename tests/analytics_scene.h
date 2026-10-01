@@ -7,6 +7,7 @@
 
 namespace scene {
 
+/// Sequences differ from cv::RNG, so tests assert behavioural ranges, not pixels.
 class Rng {
 public:
     explicit Rng(unsigned seed) : s_(seed ? seed : 1u) {}
@@ -48,6 +49,7 @@ inline void gaussian_blur_u8(nvmm::img::Image<uint8_t> &im, int k)
         for (int x = 0; x < im.width(); x++) im.at(y, x) = clamp_u8(f.at(y, x));
 }
 
+/// cv BORDER_REFLECT: fedcba|abcdefgh|hgfedcb.
 inline int reflect(int i, int n)
 {
     while (i < 0 || i >= n) i = i < 0 ? -i - 1 : 2 * n - 1 - i;

@@ -31,6 +31,8 @@ private:
     bool init_ = false;
 };
 
+/// 1e-2 after 120 frames: the recurrence is identical, but cv::Mat temporaries change
+/// the rounding order and the IIR state compounds it. Blur's 2e-3/frame feeds the same bound.
 void run_case(int blur) {
     nvmm::motion::MagnifyParams p;
     p.fps = 30.f; p.low_hz = 1.f; p.high_hz = 6.f; p.alpha = 8.f; p.blur = blur;

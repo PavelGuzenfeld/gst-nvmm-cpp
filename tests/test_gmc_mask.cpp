@@ -20,6 +20,8 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
 }
 
+/// A diverged Kalman state hands the mapper NaN/Inf; its isfinite guard is what
+/// keeps the double->int cast from being UB.
 int main() {
     check(!gmc_map_box_to_patch(kNaN, 0, 10, 10, 1920, 1080, 512, 128).overlaps,
           "NaN left -> no overlap");

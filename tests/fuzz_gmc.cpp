@@ -29,6 +29,8 @@ bool fuzz_gmc_once(const uint8_t *data, size_t size) {
            std::isfinite(g.dx) && std::isfinite(g.dy) && std::isfinite(g.conf);
 }
 
+/// The raw ints bypass the mapper to prove the masker's own clamp is OOB-safe.
+/// Nothing is asserted: ASan and UBSan are the oracle.
 bool fuzz_gmc_mask_once(const uint8_t *data, size_t size) {
     if (size < 48) return true;
     double box[4];
@@ -55,6 +57,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 }
 #else
 #include <cstdio>
+/// Deterministic so a failure reproduces. 3000 iterations keeps run-sanitizers.sh
+/// under its timeout; scripts/run-fuzz.sh is the coverage-guided build.
 int main() {
     uint32_t s = 0x12345678u;
     std::vector<uint8_t> buf;

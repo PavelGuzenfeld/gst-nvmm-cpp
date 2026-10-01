@@ -55,6 +55,8 @@ nvmm::img::Image<uint8_t> make_scene(unsigned seed) {
     return f;
 }
 
+/// The threshold is a hard nonlinearity: a ~1e-3 blur difference near grad_thresh
+/// legitimately flips a pixel, so the bound is a 0.2% disagreement rate.
 TEST(mask_stage_disagreement_below_bound) {
     for (unsigned seed : {3u, 17u, 99u}) {
         nvmm::img::Image<uint8_t> cur = make_scene(seed);
@@ -67,6 +69,8 @@ TEST(mask_stage_disagreement_below_bound) {
     }
 }
 
+/// 0.05 wherever both masks kept the pixel; mask-edge flips fed through the output
+/// blur may exceed it on at most 0.5% of pixels.
 TEST(component_matches_reference) {
     nvmm::img::Image<uint8_t> cur = make_scene(7);
     scene::Rng rng(1234);

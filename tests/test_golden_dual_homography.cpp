@@ -110,6 +110,8 @@ cv::Mat independent_motion_residual(const cv::Mat &cur, const cv::Mat &ref_a,
 
 }
 
+/// Valid regions differ by construction, so up to 3% of pixels may differ by > 1.0. In
+/// both interiors the bound is 2.0: OpenCV warps through 5-bit fixed-point bilinear into U8.
 TEST(fused_residual_matches_warp_chain_for_fixed_H) {
     img::Image<uint8_t> cur_i = scene::textured_bg(256, 21);
     img::Image<uint8_t> ref_i = scene::translate(cur_i, 5.3, -3.7);
@@ -145,6 +147,8 @@ TEST(fused_residual_matches_warp_chain_for_fixed_H) {
     ASSERT_TRUE(worst_interior <= 2.0);
 }
 
+/// OpenCV's RANSAC is randomized, so both fits are scored by reprojection error against
+/// the planted H: ours <= max(0.35 px, 2x OpenCV's).
 TEST(ransac_quality_comparable_to_findHomography) {
     motion::detail::Mat3 Ht;
     Ht.m[0] = 1.01; Ht.m[1] = 0.02;  Ht.m[2] = 6.0;
@@ -196,6 +200,8 @@ TEST(ransac_quality_comparable_to_findHomography) {
     ASSERT_TRUE(ours <= std::max(0.35, 2.0 * cvs));
 }
 
+/// Ours keeps at least half the reference's mover/background ratio and clears twice
+/// the downstream gate threshold (12).
 TEST(component_separation_comparable_to_reference) {
     img::Image<uint8_t> bg = scene::textured_bg(256, 12345);
     img::Image<uint8_t> cur = bg;

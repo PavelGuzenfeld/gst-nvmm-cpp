@@ -19,6 +19,7 @@ nvmm::img::Image<uint8_t> random_frame(int w, int h, unsigned seed) {
     return f;
 }
 
+/// 1e-6: same fixed tables and sigma formula; only float-vs-double rounding differs.
 TEST(gaussian_kernel_matches_getGaussianKernel) {
     for (int k : {1, 3, 5, 7, 9, 15, 31}) {
         const std::vector<float> ours = nvmm::img::gaussian_kernel(k);
@@ -28,6 +29,8 @@ TEST(gaussian_kernel_matches_getGaussianKernel) {
     }
 }
 
+/// 2e-3 absolute on inputs up to ~1442, the Sobel magnitude ceiling. Same kernel and
+/// REFLECT_101 border; only the accumulation order differs from OpenCV's SIMD engine.
 TEST(gaussian_blur_matches_GaussianBlur_float) {
     nvmm::img::Image<uint8_t> u8 = random_frame(157, 121, 11);
     nvmm::img::Image<float> in(u8.width(), u8.height());
@@ -46,6 +49,7 @@ TEST(gaussian_blur_matches_GaussianBlur_float) {
     }
 }
 
+/// 2e-3 absolute: integer taps are exact; the gap is cv::magnitude's vectorised sqrt.
 TEST(sobel_magnitude_matches_cv_chain) {
     nvmm::img::Image<uint8_t> f = random_frame(200, 150, 23);
     nvmm::img::Image<float> ours(200, 150);

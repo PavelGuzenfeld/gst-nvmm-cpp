@@ -14,6 +14,7 @@ static int tests_failed = 0;
                     tests_failed++; return; } } while(0)
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
 
+/// Each cell is (dx, dy) as int16 S10.5: px = raw / 32.
 static GstMemory *make_flow(gint w, gint h, int16_t dx, int16_t dy) {
     GstMemory *mem = gst_allocator_alloc(nullptr, (gsize)w * h * 4, nullptr);
     GstMapInfo map;

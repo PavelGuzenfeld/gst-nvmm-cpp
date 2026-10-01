@@ -10,6 +10,7 @@
 
 namespace {
 
+/// Declared first: within one TU, static objects initialize in declaration order.
 struct GstInit { GstInit() { gst_init(nullptr, nullptr); } } _gst_init;
 
 NvmmClassEntry entry(gint32 id, gfloat conf, guint32 fresh, const char *label) {

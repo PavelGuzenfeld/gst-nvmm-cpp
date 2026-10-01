@@ -49,6 +49,8 @@ static void test_sink_properties() {
     PASS();
 }
 
+/// The consumer holds up to RELEASE_DELAY (12) buffers in flight, so a pool under
+/// 13 starves the producer.
 static void test_sink_pool_size_guarded() {
     GstElement *sink = gst_element_factory_make("nvmmsink", NULL);
     ASSERT_NOT_NULL(sink);
