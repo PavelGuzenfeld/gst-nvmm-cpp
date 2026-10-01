@@ -10,40 +10,10 @@
 #include <cmath>
 #include <vector>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "test_harness.h"
-
-namespace {
-
-/// Input amplitude is 20, so an unamplified output has peak-to-peak 40. Defined first:
-/// on a fresh heap glibc aborts on a one-row overrun in the magnifier; later it may not.
-float steady_pp(float f0, float low, float high, float alpha) {
-    nvmm::motion::MagnifyParams p; p.fps = 30.f; p.low_hz = low; p.high_hz = high; p.alpha = alpha;
-    nvmm::motion::MotionMagnifier mag(p);
-    const int N = 150, settle = 100;
-    float lo = 1e9f, hi = -1e9f;
-    for (int n = 0; n < N; n++) {
-        const float v = 128.f + 20.f * std::sin(2.f * 3.14159265f * f0 * n / p.fps);
-        nvmm::img::Image<uint8_t> f(16, 16, scene::clamp_u8(v));
-        nvmm::img::Image<float> out = mag.process(f);
-        const float c = out.at(8, 8);
-        if (n >= settle) { lo = std::min(lo, c); hi = std::max(hi, c); }
-    }
-    return hi - lo;
-}
-
-TEST(in_band_oscillation_is_amplified) {
-    float pp = steady_pp(4.f, 2.f, 8.f, 10.f);
-    printf("[in-band pp=%.1f vs input 40] ", pp);
-    ASSERT_TRUE(pp > 80.0f);
-}
-
-TEST(out_of_band_oscillation_is_not_amplified) {
-    float pp = steady_pp(0.2f, 2.f, 8.f, 10.f);
-    printf("[out-of-band pp=%.1f vs input 40] ", pp);
-    ASSERT_TRUE(pp < 60.0f);
-}
-
-}
 
 namespace {
 
@@ -324,6 +294,56 @@ TEST(confirms_independent_mover_not_static_clutter) {
     printf("[first_confirm_idx=%d] ", confirmed_idx);
     ASSERT_TRUE(confirmed_idx == 0);
     ASSERT_TRUE(gate.locked());
+}
+
+}
+
+namespace {
+
+/// Input amplitude is 20, so an unamplified output has peak-to-peak 40.
+float steady_pp(float f0, float low, float high, float alpha) {
+    nvmm::motion::MagnifyParams p; p.fps = 30.f; p.low_hz = low; p.high_hz = high; p.alpha = alpha;
+    nvmm::motion::MotionMagnifier mag(p);
+    const int N = 150, settle = 100;
+    float lo = 1e9f, hi = -1e9f;
+    for (int n = 0; n < N; n++) {
+        const float v = 128.f + 20.f * std::sin(2.f * 3.14159265f * f0 * n / p.fps);
+        nvmm::img::Image<uint8_t> f(16, 16, scene::clamp_u8(v));
+        nvmm::img::Image<float> out = mag.process(f);
+        const float c = out.at(8, 8);
+        if (n >= settle) { lo = std::min(lo, c); hi = std::max(hi, c); }
+    }
+    return hi - lo;
+}
+
+TEST(in_band_oscillation_is_amplified) {
+    float pp = steady_pp(4.f, 2.f, 8.f, 10.f);
+    printf("[in-band pp=%.1f vs input 40] ", pp);
+    ASSERT_TRUE(pp > 80.0f);
+}
+
+TEST(out_of_band_oscillation_is_not_amplified) {
+    float pp = steady_pp(0.2f, 2.f, 8.f, 10.f);
+    printf("[out-of-band pp=%.1f vs input 40] ", pp);
+    ASSERT_TRUE(pp < 60.0f);
+}
+
+/// The frame's last row ends where a PROT_NONE page begins, so reading one row past
+/// frame.height faults deterministically instead of reading whatever the heap holds.
+TEST(magnifier_reads_no_row_past_the_frame) {
+    const long page = sysconf(_SC_PAGESIZE);
+    void *mem = mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_TRUE(mem != MAP_FAILED);
+    uint8_t *guard = static_cast<uint8_t *>(mem) + page;
+    ASSERT_EQ(mprotect(guard, page, PROT_NONE), 0);
+    constexpr int kW = 16, kH = 16;
+    uint8_t *pixels = guard - kW * kH;
+    std::fill(pixels, guard, (uint8_t)128);
+
+    nvmm::motion::MotionMagnifier mag;
+    const nvmm::img::View<const uint8_t> frame(pixels, kW, kH, kW);
+    for (int n = 0; n < 2; n++) ASSERT_EQ(mag.process(frame).height(), kH);
+    munmap(mem, 2 * page);
 }
 
 }
