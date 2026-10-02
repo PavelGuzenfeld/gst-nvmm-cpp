@@ -31,7 +31,12 @@ static std::vector<float> host(const float *d, size_t n)
 }
 static double maxabs(const std::vector<float> &a, const std::vector<float> &b)
 {
-    double m = 0; for (size_t i = 0; i < a.size(); i++) m = std::fmax(m, std::fabs((double)a[i] - b[i]));
+    double m = 0;
+    for (size_t i = 0; i < a.size(); i++) {
+        const double d = std::fabs((double)a[i] - b[i]);
+        if (std::isnan(d)) return d;
+        m = std::fmax(m, d);
+    }
     return m;
 }
 
