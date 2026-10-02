@@ -50,5 +50,13 @@ exclude_paths = [
 ]
 
 [[model_exclude]]
+path = "gst/nvmmsamurai/samurai_tracker.cpp"
+reason = "tracker glue around TensorRT engines and CUDA kernels; no estimation or filter state of its own"
+
+[[model_exclude]]
+path = "gst/nvmmdetgate/detgate.hpp"
+reason = "detection gating by motion and confidence thresholds; no estimation state, dt or physical units"
+
+[[model_exclude]]
 path = "analytics/dual_homography.hpp"
 reason = "pixel-correspondence RANSAC plane selection; no estimation or filter state, no dt, no physical units"
