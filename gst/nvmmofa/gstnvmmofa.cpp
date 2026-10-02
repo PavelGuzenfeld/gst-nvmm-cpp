@@ -117,14 +117,16 @@ wrap_ofa(NvBufSurface *surf)
     return img;
 }
 
+/// Payload before images: with the OFA payload alive, VPI 3.2.4 reads freed memory
+/// in NvMediaIOFAImageUnRegister on teardown (#118).
 static void
 release_state(GstNvmmOfa *self)
 {
+    if (self->stream)   { vpiStreamDestroy(self->stream);  self->stream = nullptr; }
+    if (self->payload)  { vpiPayloadDestroy(self->payload); self->payload = nullptr; }
     if (self->prev)     { vpiImageDestroy(self->prev);     self->prev = nullptr; }
     if (self->prev_buf) { gst_buffer_unref(self->prev_buf); self->prev_buf = nullptr; }
     if (self->mv)       { vpiImageDestroy(self->mv);       self->mv = nullptr; }
-    if (self->payload)  { vpiPayloadDestroy(self->payload); self->payload = nullptr; }
-    if (self->stream)   { vpiStreamDestroy(self->stream);  self->stream = nullptr; }
     self->configured = FALSE;
 }
 
