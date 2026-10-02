@@ -200,10 +200,20 @@ TEST(ransac_quality_comparable_to_findHomography) {
     ASSERT_TRUE(ours <= std::max(0.35, 2.0 * cvs));
 }
 
-/// Ours keeps at least half the reference's mover/background ratio and clears twice
-/// the downstream gate threshold (12).
-TEST(component_separation_comparable_to_reference) {
-    img::Image<uint8_t> bg = scene::textured_bg(256, 12345);
+constexpr unsigned kLegacySeed = 12345;
+constexpr unsigned kFirstHeldOutSeed = 21;
+constexpr unsigned kLastHeldOutSeed = 60;
+constexpr double kMinRatioSmallMotionSweepMin0p986 = 0.9;
+constexpr double kMinRatioOrbSweepMin0p777 = 0.7;
+
+struct SeedOutcome {
+    float mover[2];
+    double ratio_vs_reference[2];
+};
+
+SeedOutcome separation_vs_reference(unsigned seed)
+{
+    img::Image<uint8_t> bg = scene::textured_bg(256, seed);
     img::Image<uint8_t> cur = bg;
     img::Image<uint8_t> ref_a = scene::translate(bg, 6, 4);
     img::Image<uint8_t> ref_b = scene::translate(bg, 12, 8);
@@ -231,24 +241,45 @@ TEST(component_separation_comparable_to_reference) {
             }
     const double ref_ratio = ref_mover / (bg_median(rv) + 1.0);
 
+    SeedOutcome out{};
     for (int pl = 0; pl < 2; pl++) {
         motion::DualHomographyParams p;
         p.pipeline = pl == 0 ? motion::FeaturePipeline::small_motion
                              : motion::FeaturePipeline::orb;
         img::Image<float> res = motion::independent_motion_residual(cur, ref_a, ref_b, p);
         ASSERT_TRUE(!res.empty());
-        const float mover = img::window_max(res.view(), 180, 180, 10);
+        out.mover[pl] = img::window_max(res.view(), 180, 180, 10);
         std::vector<float> ov;
         for (int y = 30; y < 226; y += 12)
             for (int x = 30; x < 226; x += 12)
                 if (std::abs(y - 180) > 25)
                     ov.push_back(img::window_max(res.view(), (float)x, (float)y, 3));
-        const double our_ratio = mover / (bg_median(ov) + 1.0);
-        printf("[p%d mover=%.1f ratio=%.1f (ref mover=%.1f ratio=%.1f)] ",
-               pl, mover, our_ratio, ref_mover, ref_ratio);
-        ASSERT_TRUE(mover > 24.0f);
-        ASSERT_TRUE(our_ratio >= 0.5 * ref_ratio);
+        out.ratio_vs_reference[pl] = (out.mover[pl] / (bg_median(ov) + 1.0)) / ref_ratio;
     }
+    return out;
+}
+
+/// Bounds sit below a 1-60 sweep after the #104 stray fix (small_motion min 0.986x, orb min
+/// 0.777x of the reference ratio); before it 17 of seeds 21-60 fell under 0.9x on small_motion.
+/// The mover must also clear twice the downstream gate threshold (12).
+TEST(component_separation_comparable_to_reference_on_held_out_seeds) {
+    std::vector<unsigned> seeds{kLegacySeed};
+    for (unsigned s = kFirstHeldOutSeed; s <= kLastHeldOutSeed; s++) seeds.push_back(s);
+
+    const double bounds[2] = {kMinRatioSmallMotionSweepMin0p986, kMinRatioOrbSweepMin0p777};
+    int failing = 0;
+    for (unsigned seed : seeds) {
+        const SeedOutcome o = separation_vs_reference(seed);
+        for (int pl = 0; pl < 2; pl++) {
+            const bool ok = o.mover[pl] > 24.0f && o.ratio_vs_reference[pl] >= bounds[pl];
+            if (!ok) {
+                printf("\n    seed %u p%d mover=%.1f ratio_vs_ref=%.3f (need >= %.3f) ",
+                       seed, pl, o.mover[pl], o.ratio_vs_reference[pl], bounds[pl]);
+                failing++;
+            }
+        }
+    }
+    ASSERT_EQ(failing, 0);
 }
 
 }
