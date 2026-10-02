@@ -1,0 +1,240 @@
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 15
+column = 8
+old = """h > frame_h"""
+new = """h >= frame_h"""
+reason = """Equivalent: at h == frame_h the mutant assigns (float)frame_h, which already equals h. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 16
+column = 8
+old = """w > frame_w"""
+new = """w >= frame_w"""
+reason = """Equivalent: at w == frame_w the mutant assigns (float)frame_w, which already equals w. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 22
+column = 8
+old = """xs < 0.f"""
+new = """xs <= 0.f"""
+reason = """Equivalent: at xs == 0 the mutant sets dx = -0, and 0 + -0 is +0. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 23
+column = 8
+old = """xe >= frame_w"""
+new = """xe > frame_w"""
+reason = """Equivalent: at xe == frame_w the original sets dx = 0, and dx is already 0 because xs < 0 together with xe == frame_w would need w > frame_w. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 24
+column = 8
+old = """ys < 0.f"""
+new = """ys <= 0.f"""
+reason = """Equivalent: at ys == 0 the mutant sets dy = -0, and 0 + -0 is +0. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_view.hpp"
+line = 25
+column = 8
+old = """ye >= frame_h"""
+new = """ye > frame_h"""
+reason = """Equivalent: at ye == frame_h the original sets dy = 0, and dy is already 0 because ys < 0 together with ye == frame_h would need h > frame_h. Probe: get_view_around_bbox swept over crop -2..4096, frames 1..3000, boxes on a 0.25 px grid plus 200k random cases; 19247552 output bytes bit-identical to the unmutated build (sha256 d886a32fe7dc05b0)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 22
+column = 23
+old = """sy > 0"""
+new = """sy >= 0"""
+reason = """Equivalent: at sy == 0 both branches give y0 = 0. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 22
+column = 50
+old = """sy < 0"""
+new = """sy <= 0"""
+reason = """Equivalent: at sy == 0 both branches give y1 = n. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 24
+column = 27
+old = """sx > 0"""
+new = """sx >= 0"""
+reason = """Equivalent: at sx == 0 both branches give x0 = 0. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 24
+column = 54
+old = """sx < 0"""
+new = """sx <= 0"""
+reason = """Equivalent: at sx == 0 both branches give x1 = n. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 34
+column = 16
+old = """sa > 0 && sb > 0"""
+new = """sa > 0 || sb > 0"""
+reason = """Equivalent: a zero energy means every term of that side is exactly 0, so s is 0, ncc is 0/0 = NaN and NaN > best_ncc is false. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 34
+column = 16
+old = """sa > 0"""
+new = """sa >= 0"""
+reason = """Equivalent: sa == 0 makes s 0 and ncc 0/0 = NaN, which never beats best_ncc. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_gmc.hpp"
+line = 34
+column = 26
+old = """sb > 0"""
+new = """sb >= 0"""
+reason = """Equivalent: sb == 0 makes s 0 and ncc 0/0 = NaN, which never beats best_ncc. Probe: estimate_shift over n 1..16, search 0..6, eight patch kinds (noise, flat, half flat, single pixel, binary, ramps), 12 reps each; 44928 output bytes bit-identical to the unmutated build (sha256 b080b735536bda43)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 23
+column = 41
+old = """sq <= 0"""
+new = """sq < 0"""
+reason = """Equivalent: sq == 0 makes s2p +inf, so cx or hw is inf or NaN and the int-range guard rejects the box with the same zero result. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 23
+column = 52
+old = """patch_n <= 0"""
+new = """patch_n < 0"""
+reason = """Equivalent: patch_n == 0 makes s2p 0, so every coordinate is 0 and overlaps is false, the same zero box as the early return; an inf input gives NaN and the range guard rejects it. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 43
+column = 9
+old = """x0 < 0"""
+new = """x0 <= 0"""
+reason = """Equivalent: at x0 == 0 the clamp assigns 0. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 43
+column = 14
+old = """0"""
+new = """1"""
+reason = """Equivalent: x0 < 1 only adds x0 == 0, which the clamp maps to 0. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 43
+column = 31
+old = """y0 < 0"""
+new = """y0 <= 0"""
+reason = """Equivalent: at y0 == 0 the clamp assigns 0. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 44
+column = 9
+old = """x1 > n"""
+new = """x1 >= n"""
+reason = """Equivalent: at x1 == n the clamp assigns n. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 44
+column = 31
+old = """y1 > n"""
+new = """y1 >= n"""
+reason = """Equivalent: at y1 == n the clamp assigns n. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 45
+column = 8
+old = """x0 >= x1"""
+new = """x0 > x1"""
+reason = """Equivalent: at x0 == x1 every row memset is 0 bytes, so nothing is written. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmmsamurai/gmc_mask.hpp"
+line = 45
+column = 20
+old = """y0 >= y1"""
+new = """y0 > y1"""
+reason = """Equivalent: at y0 == y1 the row loop runs zero times. Probe: gmc_map_box_to_patch over 23 positions (incl. +-inf, NaN, +-1e308, int-range edges) x 12 extents x 7 geometries (incl. sq and patch_n 0 and negative) x 5 margins, plus gmc_mask_box_to_mean over every box in -2..n+2 for n 1, 2, 4; 45488848 output bytes bit-identical to the unmutated build (sha256 228a426883c75955)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 25
+column = 66
+old = """0"""
+new = """1"""
+reason = """Equivalent: every element of kCoco80 is a const char *, so sizeof(kCoco80[1]) == sizeof(kCoco80[0]). Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 39
+column = 11
+old = """ua > 0.f"""
+new = """ua >= 0.f"""
+reason = """Equivalent over nms-iou-threshold's 0..1 range: ua == 0 needs both areas to underflow, so inter is 0 too and 0/0 = NaN fails > threshold exactly as 0 does. Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 55
+column = 18
+old = """256"""
+new = """257"""
+reason = """Equivalent: reserve() changes capacity only, never contents. Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 58
+column = 20
+old = """1"""
+new = """2"""
+reason = """Equivalent: best is only tested by best < 0 or overwritten with k >= 0, so -1 and -2 behave the same. Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 66
+column = 32
+old = """0 * N"""
+new = """0 / N"""
+reason = """Equivalent: 0 / N is 0 whenever the loop runs, since the loop needs N > 0. Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmminfer/yolo_parser.cpp"
+line = 94
+column = 29
+old = """1"""
+new = """2"""
+reason = """Equivalent: removed is only read as a truth value. Probe: coco_label(-5..90) plus 3000 random heads (N 0..400, C 0..80, scale 1, 0.5, 0, -1, 2, IoU thresholds 0..1, sub-denormal boxes) into a 0xAB-filled output; 73743637 output bytes bit-identical to the unmutated build (sha256 366b711cf4f4b315)."""
+
+[[waiver]]
+file = "gst/nvmmsecondaryinfer/secondary_cache.hpp"
+line = 41
+column = 33
+old = """0"""
+new = """1"""
+reason = """Equivalent: an Entry is only created by store(), which assigns last_infer before any read. Probe: 400 runs of 400 random store/lookup/due/expire/reset/size operations, default and random params; 345674 output bytes bit-identical to the unmutated build (sha256 bc2a3290017493b3)."""
+
+[[waiver]]
+file = "gst/nvmmsecondaryinfer/secondary_cache.hpp"
+line = 42
+column = 33
+old = """0"""
+new = """1"""
+reason = """Equivalent: an Entry is only created by store(), which assigns last_seen before any read. Probe: 400 runs of 400 random store/lookup/due/expire/reset/size operations, default and random params; 345674 output bytes bit-identical to the unmutated build (sha256 bc2a3290017493b3)."""
+

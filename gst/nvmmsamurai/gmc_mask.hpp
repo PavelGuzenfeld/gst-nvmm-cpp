@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 
 namespace nvmm {
 
@@ -12,22 +13,22 @@ struct GmcMaskBox {
 };
 
 /// Box in frame px; the patch is an n x n downscale of a sq x sq crop centered in
-/// the frame, and margin 1.25 inflates the box 25%. A non-finite box returns
-/// overlaps=false: it would otherwise reach a double->int cast, which is UB.
+/// the frame, and margin 1.25 inflates the box 25%. A box that is non-finite or past
+/// int range returns overlaps=false: it would otherwise reach a double->int cast, which is UB.
 inline GmcMaskBox gmc_map_box_to_patch(double left, double top, double width, double height,
                                        int frame_w, int frame_h, int sq, int patch_n,
                                        double margin = 1.25)
 {
     GmcMaskBox out;
-    const double sum = left + top + width + height;
-    if (!std::isfinite(sum) || width <= 0.0 || height <= 0.0 || sq <= 0 || patch_n <= 0)
+    if (width <= 0.0 || height <= 0.0 || sq <= 0 || patch_n <= 0)
         return out;
     const double s2p = (double)patch_n / sq;
     const double cx = (left + width  * 0.5 - (frame_w - sq) / 2.0) * s2p;
     const double cy = (top  + height * 0.5 - (frame_h - sq) / 2.0) * s2p;
     const double hw = width  * 0.5 * margin * s2p;
     const double hh = height * 0.5 * margin * s2p;
-    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(hw) || !std::isfinite(hh))
+    const double int_max = (double)std::numeric_limits<int>::max();
+    if (!(std::fabs(cx) + std::fabs(hw) <= int_max) || !(std::fabs(cy) + std::fabs(hh) <= int_max))
         return out;
     out.x0 = (int)(cx - hw); out.y0 = (int)(cy - hh);
     out.x1 = (int)(cx + hw); out.y1 = (int)(cy + hh);
