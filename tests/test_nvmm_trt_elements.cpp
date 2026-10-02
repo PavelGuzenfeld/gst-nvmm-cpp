@@ -230,6 +230,20 @@ TEST(nvmminfer_rejects_a_transposed_head_with_more_channels_than_proposals) {
                           "[1, 4+classes, proposals]"));
 }
 
+TEST(nvmminfer_rejects_a_head_with_box_channels_but_no_class_channel) {
+    auto eng = engine_with(Dims4{1, 3, 32, 32}, {Dims3{1, 4, 8}});
+    ASSERT_EQ(infer_start_error("nvmminfer", eng->path.c_str()),
+              std::string("output \"output0\" is 1x4x8, expected channels-first "
+                          "[1, 4+classes, proposals]"));
+}
+
+TEST(nvmminfer_rejects_a_square_head_with_as_many_channels_as_proposals) {
+    auto eng = engine_with(Dims4{1, 3, 32, 32}, {Dims3{1, 8, 8}});
+    ASSERT_EQ(infer_start_error("nvmminfer", eng->path.c_str()),
+              std::string("output \"output0\" is 1x8x8, expected channels-first "
+                          "[1, 4+classes, proposals]"));
+}
+
 Nv12Painter red_left_blue_right()
 {
     return [](int x, int) { return x < 32 ? kRed : kBlue; };
