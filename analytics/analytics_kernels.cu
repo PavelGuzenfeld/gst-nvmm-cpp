@@ -121,8 +121,11 @@ struct LowTextureMotionCuda::Impl {
     float *d_out = nullptr;
     cudaError_t err = cudaSuccess;
 
+    /// Also clears the runtime's last-error slot, or the cudaGetLastError() that ends
+    /// run_device would report this failure again on the next, healthy call.
     bool ok(cudaError_t e) {
         if (e != cudaSuccess && err == cudaSuccess) err = e;
+        if (e != cudaSuccess) cudaGetLastError();
         return e == cudaSuccess;
     }
 
