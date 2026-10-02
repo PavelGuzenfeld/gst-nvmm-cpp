@@ -172,6 +172,7 @@ gst_nvmm_detgate_transform_ip(GstBaseTransform *bt, GstBuffer *buf)
                 self->announced = TRUE;
             }
         } else if (keep == -2 && self->gate && self->gate->synth_seed(scx, scy, sw, sh)) {
+            if (!det->objects) det->objects = g_new0(NvmmDetObject, 1);
             NvmmDetObject &o = det->objects[0];
             o.left = scx - sw / 2.f; o.top = scy - sh / 2.f; o.width = sw; o.height = sh;
             o.class_id = self->target_class; o.confidence = 0.90f; o.tracker_id = 0;
