@@ -78,8 +78,8 @@ constexpr double kSigmoidBound = 1e-5;
 /// skips one rounding of at most 2^-22, so the result moves by a few of those.
 constexpr double kBilinearBound = 1e-6;
 /// Two 256-term float sums of |terms| <= 14.3 differ by <= 2*gamma_255*14.3 = 4.4e-4
-/// (Higham); __sinf/__cosf add <= 2^-21.19 per tap on |x| <= pi (cond pos 45 keeps
-/// x <= 3), times sum|w| <= 10.3.
+/// (Higham); __sinf/__cosf (2^-21.41 abs on |x| <= pi; cond pos 45 keeps x <= 3) and
+/// powf (4 ulp) add under 2e-5 more over sum|w| <= 10.3.
 constexpr double kAssemblePosBound = 5e-4;
 
 struct ConstsFile {
