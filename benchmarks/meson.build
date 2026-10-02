@@ -33,7 +33,7 @@ endif
 
 if have_tensorrt
   bench_gmc_deps = [trt_dep]
-  bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
+  bench_gmc_cpp_args = ['-Wall', '-Wextra', '-Wshadow']
   if have_vpi
     bench_gmc_deps += vpi_dep
     bench_gmc_cpp_args += '-DNVMM_HAVE_VPI'

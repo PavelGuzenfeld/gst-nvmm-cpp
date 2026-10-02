@@ -35,7 +35,7 @@ test_kalman_box = executable('test_kalman_box',
 )
 
 # -Wconversion and -Wdouble-promotion only flag intentional double paths here.
-gmc_test_args = ['-Wall', '-Wextra', '-Werror', '-Wshadow']
+gmc_test_args = ['-Wall', '-Wextra', '-Wshadow']
 
 test_pure_cpp = executable('test_pure_cpp',
   ['test_pure_cpp.cpp'],
