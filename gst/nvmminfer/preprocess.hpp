@@ -4,6 +4,7 @@
 #include <string>
 
 #include <cuda_runtime.h>
+#include <npp.h>
 #include <nvbufsurface.h>
 #include <nvbufsurftransform.h>
 
@@ -28,6 +29,7 @@ private:
     bool color_rgb_ = true;
     float scale_ = 1.f / 255.f;
     cudaStream_t stream_ = nullptr;
+    NppStreamContext npp_ctx_{};
 
     LetterboxInfo lb_{};
     NvBufSurfTransformRect dst_rect_{};

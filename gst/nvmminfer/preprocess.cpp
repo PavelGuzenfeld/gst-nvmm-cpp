@@ -68,11 +68,16 @@ bool Preprocessor::configure(int net_w, int net_h, int frame_w, int frame_h,
     dst_rect_.top = (uint32_t)pad_y; dst_rect_.left = (uint32_t)pad_x;
     dst_rect_.width = (uint32_t)new_w; dst_rect_.height = (uint32_t)new_h;
 
-    nppSetStream(stream);
+    const NppStatus st = nppGetStreamContext(&npp_ctx_);
+    if (st != NPP_SUCCESS) {
+        err = "nppGetStreamContext failed: " + std::to_string((int)st);
+        return false;
+    }
+    npp_ctx_.hStream = stream;
 
     const Npp8u pad[4] = {114, 114, 114, 255};
     const NppiSize full = {net_w, net_h};
-    if (nppiSet_8u_C4R(pad, rgba_lin_, net_w * 4, full) != NPP_SUCCESS) {
+    if (nppiSet_8u_C4R_Ctx(pad, rgba_lin_, net_w * 4, full, npp_ctx_) != NPP_SUCCESS) {
         err = "nppiSet (pad fill) failed";
         return false;
     }
@@ -123,23 +128,24 @@ bool Preprocessor::run(NvBufSurface *src, float *d_input, LetterboxInfo &lb,
     const NppiSize roi = {W, net_h_};
     Npp8u *planes4[4] = {planes_, planes_ + (size_t)W * net_h_,
                          planes_ + 2 * (size_t)W * net_h_, planes_ + 3 * (size_t)W * net_h_};
-    if (nppiCopy_8u_C4P4R(rgba_lin_, W * 4, planes4, W, roi) != NPP_SUCCESS) {
+    if (nppiCopy_8u_C4P4R_Ctx(rgba_lin_, W * 4, planes4, W, roi, npp_ctx_) != NPP_SUCCESS) {
         err = "nppiCopy_8u_C4P4R failed";
         return false;
     }
 
     const int map[3] = {color_rgb_ ? 0 : 2, 1, color_rgb_ ? 2 : 0};
     for (int c = 0; c < 3; c++) {
-        if (nppiConvert_8u32f_C1R(planes4[map[c]], W,
-                                  d_input + (size_t)c * W * net_h_,
-                                  W * (int)sizeof(float), roi) != NPP_SUCCESS) {
+        if (nppiConvert_8u32f_C1R_Ctx(planes4[map[c]], W,
+                                      d_input + (size_t)c * W * net_h_,
+                                      W * (int)sizeof(float), roi, npp_ctx_) != NPP_SUCCESS) {
             err = "nppiConvert_8u32f_C1R failed";
             return false;
         }
     }
 
     const NppiSize all = {W, 3 * net_h_};
-    if (nppiMulC_32f_C1IR((Npp32f)scale_, d_input, W * (int)sizeof(float), all) != NPP_SUCCESS) {
+    if (nppiMulC_32f_C1IR_Ctx((Npp32f)scale_, d_input, W * (int)sizeof(float), all,
+                              npp_ctx_) != NPP_SUCCESS) {
         err = "nppiMulC_32f_C1IR failed";
         return false;
     }
