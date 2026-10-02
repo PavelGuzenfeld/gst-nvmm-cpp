@@ -58,11 +58,9 @@ constexpr float kStaticLeft = 60.f, kStaticTop = 100.f;
 constexpr int kDlt = 5, kAmin = 6;
 constexpr int kFirstConfirmedFrame = 2 * kDlt + kAmin - 1;
 constexpr int kFrames = kFirstConfirmedFrame + 8;
-/// 24 px over dlt 2: above rmin 12 and the motion-blob residual of 16, below the dist 45 gate.
 constexpr int kFastDlt = 2, kFastStep = 12;
 constexpr int kFastFirstConfirmedFrame = 2 * kFastDlt + kAmin - 1;
 constexpr int kFastFrames = 11;
-/// XFeat keypoints sit on a stride-8 grid, so a blob edge can fall one cell off the mover.
 constexpr float kKeypointStridePx = 8.f;
 
 uint32_t hash2(uint32_t x, uint32_t y, uint32_t salt)
@@ -129,8 +127,6 @@ GstBuffer *with_dets(GstBuffer *buf, const std::vector<NvmmDetObject> &dets,
     return buf;
 }
 
-/// The static det goes first and scores higher, so neither "first wins" nor
-/// "most confident wins" can pass for the motion gate.
 GstBuffer *frame_with_two_dets(int frame)
 {
     return with_dets(nvmm_nv12_buffer(kW, kH, scene(frame)),
@@ -151,8 +147,6 @@ void fast_gate(GstElement *gate)
     g_object_set(gate, "dlt", kFastDlt, NULL);
 }
 
-/// A red suite stays red, so the first failure ends the run instead of spending a minute of
-/// engine runs on it; the mutation gate pays that minute for every mutant it kills.
 void stop_if_already_red()
 {
     if (tests_failed == 0) return;

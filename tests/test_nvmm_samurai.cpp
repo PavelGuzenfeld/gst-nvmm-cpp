@@ -98,11 +98,8 @@ Nv12Painter nested_squares_at(int frame)
 
 constexpr int kPanX = 8, kPanY = 4;
 constexpr int kPanFrames = 6;
-/// FFT sub-pixel peak jitter measured at about 0.1 px per frame; six frames stay under 1 px.
 constexpr float kFftJitterPx = 1.f;
-/// One 8-bit code step in normalised units: 1/255 over the smallest std, 0.224.
 constexpr float kColourConversionTol = 0.02f;
-/// BT.601 limited-range VIC output for Y=128: 1.164 * (128 - 16) = 130.
 constexpr float kGreyRgbCode = 130.f;
 
 Nv12Painter panned_textured_square_at(int frame)
@@ -129,8 +126,6 @@ void on_square(GstElement *e)
     g_object_set(e, "seed-roi", roi_of(kX0, kY0, kSide, kSide).c_str(), NULL);
 }
 
-/// A red suite stays red, so the first failure ends the run instead of spending a minute of
-/// engine runs on it; the mutation gate pays that minute for every mutant it kills.
 void stop_if_already_red()
 {
     if (tests_failed == 0) return;
