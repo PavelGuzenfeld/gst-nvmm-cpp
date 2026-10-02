@@ -56,3 +56,7 @@ reason = "tracker glue around TensorRT engines and CUDA kernels; no estimation o
 [[model_exclude]]
 path = "gst/nvmmdetgate/detgate.hpp"
 reason = "detection gating by motion and confidence thresholds; no estimation state, dt or physical units"
+
+[[model_exclude]]
+path = "analytics/dual_homography.hpp"
+reason = "pixel-correspondence RANSAC plane selection; no estimation or filter state, no dt, no physical units"

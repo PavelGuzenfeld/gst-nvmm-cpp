@@ -189,6 +189,13 @@ the mock build `nvmm_surface` uses the mock NvBufSurface and stays TSan-clean, s
 skip is a no-op there. On the merged tree under TSan on Orin,
 `gst_meta_and_allocator` hangs at process exit; main does the same.
 
+`./scripts/run-sanitizers.sh cuda` builds with `analytics_cuda` and runs the
+`analytics_kernels` and `samurai_kernels` probes under `compute-sanitizer
+--tool memcheck`. It runs on a Jetson whose user is in the `debug` group. On
+Orin (JP6.2) both probes are clean, and it fails each of the seven off-by-one
+bounds-guard mutants in `analytics_kernels.cu` (#111). Racecheck is not run:
+the kernels use no shared memory.
+
 ## Benchmark results
 
 1000 iterations each. VIC transform includes hardware sync.

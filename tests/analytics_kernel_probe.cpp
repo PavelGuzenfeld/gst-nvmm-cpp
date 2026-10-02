@@ -24,9 +24,13 @@ nvmm::img::Image<uint8_t> make_scene(int w, int h, unsigned seed) {
         for (int x = 0; x < w; x++) f.at(y, x) = scene::clamp_u8(110.f + rng.gauss(3.f));
     for (int y = h / 8; y < h / 3; y++)
         for (int x = w / 8; x < w / 3; x++) f.at(y, x) = (uint8_t)rng.uniform(0, 256);
-    for (int i = 0; i < 60; i++)
-        scene::fill_circle(f, rng.uniform(8, w - 8), rng.uniform(8, h - 8),
-                           rng.uniform(2, 6), (uint8_t)rng.uniform(60, 200));
+    for (int i = 0; i < 60; i++) {
+        const uint8_t shade = (uint8_t)rng.uniform(60, 200);
+        const int radius = rng.uniform(2, 6);
+        const int cy = rng.uniform(8, h - 8);
+        const int cx = rng.uniform(8, w - 8);
+        scene::fill_circle(f, cx, cy, radius, shade);
+    }
     return f;
 }
 

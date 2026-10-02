@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "detail/features.hpp"
@@ -35,7 +36,7 @@ struct DualHomographyParams {
     /// Max displacement, pixels.
     int    search_radius = 32;
     float  zncc_min = 0.6f;
-    /// The central 60% of H2's consensus must span this fraction of the frame in x or y:
+    /// The shortest half of H2's consensus along x or y must span this fraction of the frame:
     /// a compact cluster is usually the independent mover, which H2 must not absorb.
     float  min_plane_extent = 0.15f;
 };
@@ -54,6 +55,17 @@ inline OrbParams make_orb_params(const DualHomographyParams &p)
     op.nfeatures = p.features;
     op.fast_thresh = p.fast_thresh;
     return op;
+}
+
+/// H2's consensus is a mover cluster of 13-16 points plus up to 9 strays, so the mover holds at
+/// least 59% of it: a window over half the sorted consensus lands inside the cluster.
+constexpr double plane_core_fraction = 0.5;
+
+inline float shortest_window(const std::vector<float> &sorted, size_t span)
+{
+    float t = std::numeric_limits<float>::infinity();
+    for (size_t j = 0; j + span < sorted.size(); j++) t = std::min(t, sorted[j + span] - sorted[j]);
+    return t;
 }
 
 /// H1 = dominant plane; H2 = plane re-fit on H1's RANSAC outliers (parallax).
@@ -80,9 +92,9 @@ inline void two_planes(const std::vector<Pt> &p1, const std::vector<Pt> &p2,
             if (keep) {
                 std::sort(xs.begin(), xs.end());
                 std::sort(ys.begin(), ys.end());
-                const size_t i0 = (xs.size() - 1) / 5, i1 = (xs.size() - 1) * 4 / 5;
-                keep = xs[i1] - xs[i0] >= p.min_plane_extent * (float)fw ||
-                       ys[i1] - ys[i0] >= p.min_plane_extent * (float)fh;
+                const size_t span = (size_t)((double)(xs.size() - 1) * plane_core_fraction);
+                keep = shortest_window(xs, span) >= p.min_plane_extent * (float)fw ||
+                       shortest_window(ys, span) >= p.min_plane_extent * (float)fh;
             }
             pl2.ok = keep;
         }
