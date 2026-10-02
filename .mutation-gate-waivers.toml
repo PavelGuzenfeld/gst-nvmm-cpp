@@ -389,7 +389,7 @@ line = 117
 column = 12
 old = """0"""
 new = """1"""
-reason = "Equivalent: run_device rejects w <= 1 before scratch(), so the first scratch() call always sees nw != 1 and allocates either way. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: run_device rejects w <= 1 before scratch(), so the first scratch() call always sees nw != 1 and allocates either way. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -397,7 +397,7 @@ line = 137
 column = 16
 old = """0"""
 new = """1"""
-reason = "Equivalent: release() is followed by a return false or by an allocation that sets w and h, and run_device never asks scratch() for a 1x1 frame. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: release() is followed by a return false or by an allocation that sets w and h, and run_device never asks scratch() for a 1x1 frame. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -405,7 +405,7 @@ line = 184
 column = 30
 old = """impl_->d_cur != nullptr"""
 new = """impl_->d_cur == nullptr"""
-reason = "Equivalent over outputs: the flag only decides whether staging buffers are kept across a run_device resize; run() reallocates them on demand, so only device memory footprint changes. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent over outputs: the flag only decides whether staging buffers are kept across a run_device resize; run() reallocates them on demand, so only device memory footprint changes. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -413,7 +413,7 @@ line = 186
 column = 19
 old = """32"""
 new = """33"""
-reason = "Equivalent: a 33-wide block with the grid still sized by 32 covers every pixel, and the x >= w guard drops the extra threads. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: a 33-wide block with the grid still sized by 32 covers every pixel, and the x >= w guard drops the extra threads. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -421,7 +421,7 @@ line = 187
 column = 34
 old = """31"""
 new = """32"""
-reason = "Equivalent: at most one extra column of blocks, whose threads all fail the x >= w guard. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: at most one extra column of blocks, whose threads all fail the x >= w guard. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -429,7 +429,7 @@ line = 205
 column = 40
 old = """0"""
 new = """1"""
-reason = "Equivalent: diff_blur == 1 is the one-tap identity kernel, so blurring scratch then zeroing the border equals writing the bordered diff directly. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: diff_blur == 1 is the one-tap identity kernel, so blurring scratch then zeroing the border equals writing the bordered diff directly. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -437,7 +437,7 @@ line = 229
 column = 8
 old = """w <= 1"""
 new = """w < 1"""
-reason = "Equivalent: run_device repeats the w <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: run_device repeats the w <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -445,7 +445,7 @@ line = 229
 column = 8
 old = """w <= 1 || h <= 1"""
 new = """w <= 1 && h <= 1"""
-reason = "Equivalent: run_device repeats both checks and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: run_device repeats both checks and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
 [[waiver]]
 file = "analytics/analytics_kernels.cu"
@@ -453,5 +453,13 @@ line = 229
 column = 18
 old = """h <= 1"""
 new = """h < 1"""
-reason = "Equivalent: run_device repeats the h <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+reason = "Equivalent: run_device repeats the h <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 128
+column = 12
+old = """e != cudaSuccess"""
+new = """e == cudaSuccess"""
+reason = "Equivalent: clearing on every success instead of on failure still clears the slot before the cudaGetLastError() that ends run_device, because every path from a failure back to that check passes a successful ok() (upload, symbol copy or allocation), and a failed launch config fails every later launch too. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 

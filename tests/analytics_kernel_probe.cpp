@@ -275,6 +275,7 @@ void run_device_rejects_degenerate_or_oversized_input() {
     cudaFree(d_in);
     cudaFree(d_out);
     ASSERT_TRUE(cudaDeviceSynchronize() == cudaSuccess);
+    ASSERT_TRUE(std::string(gpu.last_error()) == cudaGetErrorString(cudaSuccess));
 }
 
 void two_by_two_frame_matches_host() {
