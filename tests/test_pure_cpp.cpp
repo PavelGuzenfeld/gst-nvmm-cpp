@@ -6,6 +6,7 @@
 #include "vit_grid.hpp"
 #include "xfeat_motion.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -101,21 +102,93 @@ TEST(gmc_ncc_and_fft_agree_in_sign_and_value) {
     }
 }
 
+/// prev and curr sit in one buffer between filled pads, so a read past either end of
+/// either patch returns known pixels instead of being UB.
+struct PatchPair {
+    std::vector<uint8_t> buf;
+    int n;
+    PatchPair(int n_, const std::vector<uint8_t> &prev, const std::vector<uint8_t> &curr)
+        : buf((size_t)4 * n_ * n_, 200), n(n_) {
+        std::copy(prev.begin(), prev.end(), buf.begin() + (size_t)n * n);
+        std::copy(curr.begin(), curr.end(), buf.begin() + (size_t)2 * n * n);
+    }
+    nvmm::GmcShift estimate(int search) const {
+        return nvmm::estimate_shift(buf.data() + (size_t)n * n, buf.data() + (size_t)2 * n * n, n,
+                                    search);
+    }
+};
+
+PatchPair circularly_shifted_noise(int sx, int sy) {
+    constexpr int N = 16;
+    const std::vector<uint8_t> base = lcg_noise(N, N);
+    std::vector<uint8_t> curr((size_t)N * N);
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) curr[(size_t)y * N + x] = circular_at(base, N, N, x - sx, y - sy);
+    return PatchPair(N, base, curr);
+}
+
+TEST(gmc_conf_is_exactly_one_under_gain_and_offset_change) {
+    const nvmm::GmcShift s = PatchPair(2, {1, 3, 5, 7}, {3, 7, 11, 15}).estimate(0);
+    ASSERT_EQ(s.dx, 0.f);
+    ASSERT_EQ(s.dy, 0.f);
+    ASSERT_EQ(s.conf, 1.f);
+}
+
+/// Zero-mean a = {-3,-1,3,1}, b = {-3,-1,1,3}: sum ab 16, sum a2 = sum b2 = 20.
+TEST(gmc_zero_shift_correlates_every_row_and_column) {
+    const nvmm::GmcShift s = PatchPair(2, {1, 3, 5, 7}, {6, 8, 12, 10}).estimate(0);
+    ASSERT_EQ(s.conf, (float)(16.0 / 20.0));
+}
+
+/// A circular shift keeps the patch mean, so the overlap at the true shift is identical.
+TEST(gmc_finds_shift_at_the_positive_search_limit) {
+    const nvmm::GmcShift s = circularly_shifted_noise(3, 3).estimate(3);
+    ASSERT_EQ(s.dx, 3.f);
+    ASSERT_EQ(s.dy, 3.f);
+    ASSERT_EQ(s.conf, 1.f);
+}
+
+TEST(gmc_finds_a_one_pixel_shift) {
+    const nvmm::GmcShift s = circularly_shifted_noise(1, 1).estimate(3);
+    ASSERT_EQ(s.dx, 1.f);
+    ASSERT_EQ(s.dy, 1.f);
+    ASSERT_EQ(s.conf, 1.f);
+}
+
+TEST(gmc_finds_shift_at_the_negative_search_limit) {
+    const nvmm::GmcShift s = circularly_shifted_noise(-3, -3).estimate(3);
+    ASSERT_EQ(s.dx, -3.f);
+    ASSERT_EQ(s.dy, -3.f);
+    ASSERT_EQ(s.conf, 1.f);
+}
+
+/// One lit pixel in 16 has zero-mean energy 15/16, below 1.
+TEST(gmc_faint_texture_below_unit_energy_still_correlates) {
+    std::vector<uint8_t> p(16, 0);
+    p[5] = 1;
+    ASSERT_EQ(PatchPair(4, p, p).estimate(0).conf, 1.f);
+}
+
 using nvmm::gmc_map_box_to_patch;
 using nvmm::gmc_mask_box_to_mean;
+using nvmm::GmcMaskBox;
+
+bool is_rejected(const GmcMaskBox &b) {
+    return !b.overlaps && b.x0 == 0 && b.y0 == 0 && b.x1 == 0 && b.y1 == 0;
+}
 
 /// A diverged Kalman state hands the mapper NaN/Inf; its isfinite guard is what
 /// keeps the double->int cast from being UB.
 TEST(gmc_mask_non_finite_or_degenerate_box_never_overlaps) {
     constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
     constexpr double kInf = std::numeric_limits<double>::infinity();
-    ASSERT_TRUE(!gmc_map_box_to_patch(kNaN, 0, 10, 10, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, kInf, 10, 10, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, 0, kNaN, 10, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, 0, 10, kInf, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, 0, 0, 10, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, 0, 10, -5, 1920, 1080, 512, 128).overlaps);
-    ASSERT_TRUE(!gmc_map_box_to_patch(0, 0, 10, 10, 1920, 1080, 0, 128).overlaps);
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(kNaN, 0, 10, 10, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, kInf, 10, 10, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, 0, kNaN, 10, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, 0, 10, kInf, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, 0, 0, 10, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, 0, 10, -5, 1920, 1080, 512, 128)));
+    ASSERT_TRUE(is_rejected(gmc_map_box_to_patch(0, 0, 10, 10, 1920, 1080, 0, 128)));
     ASSERT_TRUE(!gmc_map_box_to_patch(-10000, -10000, 10, 10, 1920, 1080, 1080, 128).overlaps);
 }
 
@@ -148,6 +221,84 @@ TEST(gmc_mask_fills_region_with_patch_mean_only) {
     ASSERT_TRUE(patch == unchanged);
     gmc_mask_box_to_mean(patch.data(), N, 1000, 1000, 2000, 2000);
     ASSERT_TRUE(patch == unchanged);
+}
+
+GmcMaskBox map_unscaled(double left, double top, double width, double height) {
+    return gmc_map_box_to_patch(left, top, width, height, 128, 128, 128, 128, 1.0);
+}
+
+/// 1920x1080 frame, 1024 crop, 128 patch: crop origin (448, 28), scale 1/8.
+TEST(gmc_mask_maps_offcenter_box_to_exact_patch_coords) {
+    const GmcMaskBox mb = gmc_map_box_to_patch(1000, 300, 64, 128, 1920, 1080, 1024, 128, 2.0);
+    ASSERT_TRUE(mb.overlaps);
+    ASSERT_EQ(mb.x0, 65);
+    ASSERT_EQ(mb.x1, 81);
+    ASSERT_EQ(mb.y0, 26);
+    ASSERT_EQ(mb.y1, 58);
+}
+
+TEST(gmc_mask_default_margin_inflates_the_box_by_25_percent) {
+    const GmcMaskBox mb = gmc_map_box_to_patch(1000, 300, 64, 128, 1920, 1080, 1024, 128);
+    ASSERT_EQ(mb.x1 - mb.x0, 10);
+    ASSERT_EQ(mb.y1 - mb.y0, 20);
+}
+
+TEST(gmc_mask_zero_area_box_inside_the_patch_never_overlaps) {
+    ASSERT_TRUE(is_rejected(map_unscaled(64, 60, 0, 10)));
+    ASSERT_TRUE(is_rejected(map_unscaled(60, 64, 10, 0)));
+}
+
+TEST(gmc_mask_one_pixel_box_inside_the_patch_overlaps) {
+    ASSERT_TRUE(map_unscaled(64, 64, 1, 1).overlaps);
+}
+
+TEST(gmc_mask_box_touching_the_patch_from_outside_does_not_overlap) {
+    ASSERT_TRUE(!map_unscaled(-10, 10, 10, 10).overlaps);
+    ASSERT_TRUE(!map_unscaled(10, -10, 10, 10).overlaps);
+    ASSERT_TRUE(!map_unscaled(128, 10, 10, 10).overlaps);
+    ASSERT_TRUE(!map_unscaled(10, 128, 10, 10).overlaps);
+}
+
+TEST(gmc_mask_box_covering_only_patch_column_or_row_zero_overlaps) {
+    ASSERT_TRUE(map_unscaled(-10, 10, 11, 10).overlaps);
+    ASSERT_TRUE(map_unscaled(10, -10, 10, 11).overlaps);
+}
+
+TEST(gmc_mask_box_edge_at_int_max_still_maps) {
+    const GmcMaskBox mb = map_unscaled(2147483637.0, 2147483637.0, 10, 10);
+    ASSERT_TRUE(!mb.overlaps);
+    ASSERT_EQ(mb.x1, std::numeric_limits<int>::max());
+    ASSERT_EQ(mb.y1, std::numeric_limits<int>::max());
+}
+
+/// The double->int cast of a value past INT_MAX is UB, so the box must be rejected first.
+TEST(gmc_mask_box_edge_one_past_int_max_is_rejected) {
+    ASSERT_TRUE(is_rejected(map_unscaled(2147483638.0, 0, 10, 10)));
+    ASSERT_TRUE(is_rejected(map_unscaled(0, 2147483638.0, 10, 10)));
+}
+
+TEST(gmc_mask_box_with_negative_origin_masks_from_column_and_row_zero) {
+    std::vector<uint8_t> patch(16, 0);
+    patch[15] = 160;
+    gmc_mask_box_to_mean(patch.data(), 4, -2, -2, 2, 2);
+    const std::vector<uint8_t> want = {10, 10, 0, 0, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 160};
+    ASSERT_TRUE(patch == want);
+}
+
+TEST(gmc_mask_box_inverted_only_in_x_masks_nothing) {
+    std::vector<uint8_t> patch(256, 7);
+    patch[0] = 255;
+    const std::vector<uint8_t> before = patch;
+    gmc_mask_box_to_mean(patch.data(), 16, 10, 4, 4, 10);
+    ASSERT_TRUE(patch == before);
+}
+
+/// 255 over 16 pixels is 15.94; the integer mean truncates to 15.
+TEST(gmc_mask_value_is_the_truncated_mean_of_every_pixel) {
+    std::vector<uint8_t> patch(16, 0);
+    patch[0] = 255;
+    gmc_mask_box_to_mean(patch.data(), 4, 2, 2, 4, 4);
+    ASSERT_EQ(patch[10], 15);
 }
 
 constexpr int kViewW = 1920, kViewH = 1080, kCrop = 512;
@@ -185,6 +336,8 @@ TEST(samurai_view_matches_python_golden_and_stays_in_frame) {
 
 TEST(samurai_view_clamps_oversized_crop) {
     nvmm::SamuraiView v = nvmm::get_view_around_bbox(100, 100, 10, 10, 4096, kViewW, kViewH);
+    ASSERT_EQ(v.x, 0.f);
+    ASSERT_EQ(v.y, 0.f);
     ASSERT_NEAR(v.width, (float)kViewW, 1e-4);
     ASSERT_NEAR(v.height, (float)kViewH, 1e-4);
 }

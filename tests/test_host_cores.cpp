@@ -107,6 +107,137 @@ TEST(truncation_flag) {
     ASSERT_TRUE(trunc);
 }
 
+namespace {
+uint32_t parse_one_frame(const std::vector<float> &o, const YoloParams &p,
+                         NvmmDetObject *out) {
+    LetterboxInfo lb{1.f, 0.f, 0.f, 640, 640};
+    return nvmm::yolo_parse(o.data(), p, lb, out, nullptr);
+}
+
+YoloParams params_with_iou(float iou_threshold) {
+    YoloParams p;
+    p.iou_threshold = iou_threshold;
+    return p;
+}
+}
+
+TEST(coco_label_maps_class_zero_to_person) {
+    ASSERT_TRUE(std::strcmp(nvmm::coco_label(0), "person") == 0);
+}
+
+TEST(coco_label_outside_the_80_classes_is_empty) {
+    ASSERT_TRUE(std::strcmp(nvmm::coco_label(-1), "") == 0);
+    ASSERT_TRUE(std::strcmp(nvmm::coco_label(80), "") == 0);
+}
+
+TEST(zero_letterbox_scale_falls_back_to_identity_mapping) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 200, 5, 0.9f);
+    YoloParams p;
+    LetterboxInfo lb{0.f, 0.f, 0.f, 640, 640};
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(nvmm::yolo_parse(o.data(), p, lb, out, nullptr), 1u);
+    ASSERT_EQ(out[0].left, 270.f);
+    ASSERT_EQ(out[0].top, 220.f);
+    ASSERT_EQ(out[0].width, 100.f);
+    ASSERT_EQ(out[0].height, 200.f);
+}
+
+/// One proposal, one class: floats 0..4 are the head, float 5 sits past it.
+TEST(parser_ignores_floats_past_the_head) {
+    std::vector<float> o = {10.f, 10.f, 4.f, 4.f, 0.2f, 0.9f};
+    YoloParams p;
+    p.num_classes = 1;
+    p.num_proposals = 1;
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, p, out), 0u);
+}
+
+TEST(default_params_decode_the_80_class_coco_head) {
+    std::vector<float> o((size_t)(4 + C + 1) * N, 0.f);
+    set_prop(o, 0, 320, 320, 100, 100, 0, 0.f);
+    o[(size_t)(4 + C) * N] = 0.9f;
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 0u);
+}
+
+TEST(class_zero_proposal_is_detected_as_person) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 100, 0, 0.9f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 1u);
+    ASSERT_EQ(out[0].class_id, 0);
+    ASSERT_TRUE(std::strcmp(out[0].label, "person") == 0);
+}
+
+/// argmax keeps the first maximum, as torch.max does in the reference decode.
+TEST(equal_class_scores_resolve_to_the_lower_class_id) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 100, 3, 0.5f);
+    set_prop(o, 0, 320, 320, 100, 100, 7, 0.5f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 1u);
+    ASSERT_EQ(out[0].class_id, 3);
+}
+
+TEST(box_clamped_to_zero_width_or_height_is_dropped) {
+    auto o = blank();
+    set_prop(o, 0, -50, 320, 20, 20, 5, 0.9f);
+    set_prop(o, 1, 320, -50, 20, 20, 5, 0.9f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 0u);
+}
+
+/// [0,4]x[0,2] and [2,6]x[0,2]: intersection 4, union 8 + 8 - 4, IoU 1/3.
+TEST(nms_iou_divides_by_the_union_of_both_areas) {
+    auto o = blank();
+    set_prop(o, 0, 2, 1, 4, 2, 5, 0.9f);
+    set_prop(o, 1, 4, 1, 4, 2, 5, 0.8f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, params_with_iou(0.5f), out), 2u);
+}
+
+/// [0,4]x[0,4] and [0,4]x[0,2]: intersection 8, union 16, IoU exactly 0.5.
+TEST(nms_keeps_box_whose_iou_equals_the_threshold) {
+    auto o = blank();
+    set_prop(o, 0, 2, 2, 4, 4, 5, 0.9f);
+    set_prop(o, 1, 2, 1, 4, 2, 5, 0.8f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    ASSERT_EQ(parse_one_frame(o, params_with_iou(0.5f), out), 2u);
+}
+
+/// shm_protocol.h: tracker_id is 0 when no tracker ran.
+TEST(parser_emits_objects_with_tracker_id_zero) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 100, 5, 0.9f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    out[0].tracker_id = 77;
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 1u);
+    ASSERT_EQ(out[0].tracker_id, (uint64_t)0);
+}
+
+/// Det objects are copied verbatim into shared memory, so stale bytes must not ride along.
+TEST(parser_zero_fills_the_label_past_its_terminator) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 100, 0, 0.9f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    std::memset(out, 0xAB, sizeof out);
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 1u);
+    for (size_t i = std::strlen("person"); i < NVMM_META_LABEL_LEN; i++)
+        ASSERT_EQ(out[0].label[i], '\0');
+}
+
+TEST(parser_writes_no_byte_past_the_kept_objects) {
+    auto o = blank();
+    set_prop(o, 0, 320, 320, 100, 100, 0, 0.9f);
+    NvmmDetObject out[NVMM_META_MAX_OBJECTS];
+    std::memset(out, 0xAB, sizeof out);
+    ASSERT_EQ(parse_one_frame(o, YoloParams{}, out), 1u);
+    const unsigned char *next = reinterpret_cast<const unsigned char *>(&out[1]);
+    for (size_t i = 0; i < sizeof(NvmmDetObject); i++)
+        ASSERT_EQ(next[i], 0xABu);
+}
+
 using nvmm::Tracker;
 using nvmm::TrackerParams;
 
@@ -353,6 +484,37 @@ TEST(store_overwrites) {
     ASSERT_EQ(r->class_id, 4);
     ASSERT_TRUE(strcmp(r->label, "dog") == 0);
     ASSERT_TRUE(!c.due(1, 19));
+}
+
+/// Same convention as nvmmtracker max-age: a track survives max_age frames unseen.
+TEST(track_unseen_for_exactly_max_age_frames_is_kept) {
+    SecondaryCache c({10, 20});
+    c.store(1, result(0, 0.5f, "a"), 0);
+    c.expire(20);
+    ASSERT_EQ(c.size(), (size_t)1);
+}
+
+/// docs/elements/nvmmsecondaryinfer.md: infer-interval defaults to 10.
+TEST(default_cache_reinfers_a_track_every_10_frames) {
+    SecondaryCache c;
+    c.store(1, result(0, 0.5f, "a"), 0);
+    ASSERT_TRUE(!c.due(1, 9));
+    ASSERT_TRUE(c.due(1, 10));
+}
+
+/// docs/elements/nvmmsecondaryinfer.md: max-track-age defaults to 60.
+TEST(default_cache_keeps_an_unseen_track_for_60_frames) {
+    SecondaryCache c;
+    c.store(1, result(0, 0.5f, "a"), 0);
+    c.expire(60);
+    ASSERT_EQ(c.size(), (size_t)1);
+    c.expire(61);
+    ASSERT_EQ(c.size(), (size_t)0);
+}
+
+/// nvmm_class_meta.h: class_id is -1 when the classifier skipped the object.
+TEST(default_class_result_is_the_classifier_skipped_sentinel) {
+    ASSERT_EQ(ClassResult{}.class_id, -1);
 }
 
 int main() {
