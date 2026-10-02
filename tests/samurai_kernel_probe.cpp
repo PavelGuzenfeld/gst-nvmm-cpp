@@ -302,6 +302,19 @@ static bool transpose_covers_one_past_two_blocks(cudaStream_t s)
     return got == ref;
 }
 
+/// One column maps thread idx to out[idx], so a thread at idx == n lands on the tail.
+static bool transpose_single_column_leaves_tail(cudaStream_t s)
+{
+    std::vector<float> in(kN + 1);
+    for (int i = 0; i <= kN; i++) in[i] = (float)i;
+    float *di = dev(in), *dout = dev_sentinel(kN + 1);
+    nvmm::k_transpose(di, dout, kN, 1, s); cudaStreamSynchronize(s);
+    std::vector<float> got = host(dout, kN + 1), ref = in;
+    ref[kN] = kSentinel;
+    cudaFree(di); cudaFree(dout);
+    return got == ref;
+}
+
 static bool add_per_channel_covers_one_past_two_blocks(cudaStream_t s)
 {
     std::vector<float> in(kN), bias(kRows);
@@ -437,10 +450,10 @@ static bool gmc_window_reads_pitched_rows_exactly(cudaStream_t s)
 /// puts |R| exactly on the 1e-12f cutoff, which must zero like PhaseCorrelator's m > eps.
 static bool gmc_cross_power_normalises_and_zeroes_at_cutoff(cudaStream_t s)
 {
-    const int n2 = 257;
-    const float a_cases[4][2] = {{2.f, 1.f}, {0.f, 0.f}, {1e-12f, 0.f}, {1.f, 2.f}};
-    const float b_cases[4][2] = {{2.f, -1.f}, {1.f, 2.f}, {1.f, 0.f}, {2.f, 1.f}};
-    const float r_cases[4][2] = {{3.f / 5.f, 4.f / 5.f}, {0.f, 0.f}, {0.f, 0.f}, {4.f / 5.f, 3.f / 5.f}};
+    const int n2 = 300;
+    const float a_cases[4][2] = {{2.f, 1.f}, {0.f, 0.f}, {1e-12f, 0.f}, {2.f, 1.f}};
+    const float b_cases[4][2] = {{2.f, -1.f}, {1.f, 2.f}, {1.f, 0.f}, {1.f, 2.f}};
+    const float r_cases[4][2] = {{3.f / 5.f, 4.f / 5.f}, {0.f, 0.f}, {0.f, 0.f}, {4.f / 5.f, -3.f / 5.f}};
     std::vector<float> a(2 * (n2 + 1), kSentinel), b(2 * (n2 + 1), kSentinel),
         ref(2 * (n2 + 1), kSentinel);
     for (int i = 0; i < n2; i++)
@@ -572,6 +585,7 @@ int main()
     expect("mask_box_of_empty_mask_is_invalid", mask_box_of_empty_mask_is_invalid());
     expect("mlp3_relu_clamps_hidden_layers_only", mlp3_relu_clamps_hidden_layers_only());
     expect("transpose_covers_one_past_two_blocks", transpose_covers_one_past_two_blocks(s));
+    expect("transpose_single_column_leaves_tail", transpose_single_column_leaves_tail(s));
     expect("add_per_channel_covers_one_past_two_blocks", add_per_channel_covers_one_past_two_blocks(s));
     expect("sigmoid_writes_each_element_once", sigmoid_writes_each_element_once(s));
     expect("threshold_zero_maps_to_lo", threshold_zero_maps_to_lo(s));
