@@ -32,7 +32,7 @@ NvBufSurface *create_rgba(int w, int h, std::string &err) {
 }
 
 /// Per-call _Ctx stream instead of nppSetStream: the global NPP stream is
-/// process-wide and nvmminfer sets it to its own stream.
+/// process-wide, so a stream set there outlives the element that set it.
 bool RoiPreprocessor::configure(int net_w, int net_h, bool color_rgb, float scale,
                                 const float *offsets, const float *std_values,
                                 cudaStream_t stream, std::string &err) {

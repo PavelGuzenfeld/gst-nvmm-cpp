@@ -1,6 +1,5 @@
 #include <gst/gst.h>
 #include <gst/check/gstharness.h>
-#include <npp.h>
 
 #include <cmath>
 #include <cstring>
@@ -80,9 +79,6 @@ GstElement *make(const char *factory)
     return e;
 }
 
-/// Resets the NPP stream before teardown: Preprocessor leaves the process-wide NPP
-/// stream on its own, which stop() destroys, and the next nvmminfer to configure
-/// crashes in nppSetStream (#117). Delete the reset with that fix.
 std::vector<GstBuffer *> run(GstElement *e, int w, int h, std::vector<GstBuffer *> in)
 {
     GstHarness *hn = gst_harness_new_with_element(e, "sink", "src");
@@ -94,7 +90,6 @@ std::vector<GstBuffer *> run(GstElement *e, int w, int h, std::vector<GstBuffer 
         if (gst_harness_push(hn, b) != GST_FLOW_OK) throw std::runtime_error("push failed");
         out.push_back(gst_harness_pull(hn));
     }
-    nppSetStream(nullptr);
     gst_harness_teardown(hn);
     gst_object_unref(e);
     return out;
@@ -105,6 +100,26 @@ void unref_all(std::vector<GstBuffer *> &v) { for (GstBuffer *b : v) gst_buffer_
 GstNvmmDetMeta *dets_of(GstBuffer *b) { return gst_buffer_get_nvmm_det_meta(b); }
 
 float scaled(uint8_t v, double scale) { return (float)v * (float)scale; }
+
+TEST(second_nvmminfer_in_one_process_infers_after_the_first_stops) {
+    auto eng = detector_engine();
+    const Rgba red = vic_rgba_at(solid(kRed), 64, 32, 0, 0);
+    for (int instance = 0; instance < 3; instance++) {
+        GstElement *e = make("nvmminfer");
+        g_object_set(e, "engine-file", eng->path.c_str(), "conf-threshold", 0.5, NULL);
+        auto out = run(e, 64, 32, {nvmm_nv12_buffer(64, 32, solid(kRed))});
+        GstNvmmDetMeta *m = dets_of(out[0]);
+        ASSERT_NOT_NULL(m);
+        ASSERT_EQ(m->num_objects, 1u);
+        const NvmmDetObject &o = m->objects[0];
+        ASSERT_EQ(o.left, 24.f);
+        ASSERT_EQ(o.top, 12.f);
+        ASSERT_EQ(o.width, 16.f);
+        ASSERT_EQ(o.height, 8.f);
+        ASSERT_EQ(o.confidence, scaled(red[0], 1.0 / 255.0));
+        unref_all(out);
+    }
+}
 
 TEST(red_frame_yields_one_person_box_mapped_back_through_the_letterbox) {
     auto eng = detector_engine();
