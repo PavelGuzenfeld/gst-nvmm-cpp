@@ -33,6 +33,7 @@ exclude_paths = [
     "gst/nvmmofa/",
     "gst/nvmmdrawdet/",
     "gst/nvmmdetgate/",
+    "gst/common/xfeat_matcher.",
     "gst/nvmminfer/gstnvmminfer.",
     "gst/nvmminfer/preprocess.",
     "gst/nvmminfer/trt_engine.",
@@ -55,6 +56,10 @@ reason = "tracker glue around TensorRT engines and CUDA kernels; no estimation o
 
 [[model_exclude]]
 path = "gst/nvmmdetgate/detgate.hpp"
+reason = "detection gating by motion and confidence thresholds; no estimation state, dt or physical units"
+
+[[model_exclude]]
+path = "gst/nvmmdetgate/gstnvmmdetgate.cpp"
 reason = "detection gating by motion and confidence thresholds; no estimation state, dt or physical units"
 
 [[model_exclude]]
