@@ -171,9 +171,7 @@ if have_vpi and have_nvbufsurface
   )
   test('nvmm_ofa', test_ofa, protocol : 'exitcode', is_parallel : false,
     suite : ['plugin', 'nvidia_hwlib'],
-    # VPI OFA segfaults under perturbed malloc with no project code involved (#118).
-    env : ['MALLOC_PERTURB_=0',
-           'GST_PLUGIN_PATH=' + gst_build_dir / 'nvmmofa' + ':' + gst_build_dir / 'nvmmalloc'])
+    env : ['GST_PLUGIN_PATH=' + gst_build_dir / 'nvmmofa' + ':' + gst_build_dir / 'nvmmalloc'])
 endif
 
 if have_tensorrt and have_nvbufsurface
