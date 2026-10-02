@@ -130,6 +130,14 @@ TEST(roi_offsets_and_std_normalise_each_channel_as_x_minus_offset_over_std) {
     }), 0);
 }
 
+TEST(roi_std_without_offsets_still_divides_each_channel) {
+    const Rgba red = vic_rgba_at(red_left_blue_right(), 64, 32, 0, 0);
+    const float sd[3] = {2.f, 4.f, 8.f};
+    NetInput in(16, 16);
+    ASSERT_EQ(roi_run(in, 8, 8, 16, 16, nullptr, sd), std::string());
+    ASSERT_EQ(mismatches(in, [&](int c, int, int) { return (float)red[c] / sd[c]; }), 0);
+}
+
 TEST(roi_std_value_of_zero_is_rejected_at_configure) {
     const float sd[3] = {1.f, 0.f, 1.f};
     NetInput in(16, 16);

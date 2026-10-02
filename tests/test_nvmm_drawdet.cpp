@@ -75,7 +75,7 @@ struct Drawn {
 
 int pixels_off_expectation(const Drawn &d, const Box &b, const Rgba &color, int from_row = 0)
 {
-    const Rgba bg = d.at(kW - 1, kH - 1);
+    static const Rgba bg = vic_rgba_at(solid(kBlack), kW, kH, 0, 0);
     int wrong = 0;
     for (int y = from_row; y < kH; y++)
         for (int x = 0; x < kW; x++)
@@ -87,7 +87,6 @@ TEST(det_box_border_is_class_colour_exactly_thickness_px_and_nothing_else_change
     GstBuffer *buf = nvmm_nv12_buffer(kW, kH, solid(kBlack));
     add_dets(buf, kW, kH, {det(10, 8, 20, 12, 0)});
     Drawn d(buf);
-    ASSERT_TRUE(d.at(kW - 1, kH - 1) != kClass0);
     ASSERT_EQ(pixels_off_expectation(d, Box{10, 8, 20, 12, 2}, kClass0), 0);
 }
 
@@ -112,6 +111,40 @@ TEST(draw_det_false_leaves_the_frame_free_of_det_boxes) {
     add_dets(buf, kW, kH, {det(10, 8, 20, 12, 0)});
     Drawn d(buf, false, false);
     ASSERT_EQ(pixels_off_expectation(d, Box{0, 0, 0, 0, 0}, kClass0), 0);
+}
+
+TEST(det_box_crossing_the_frame_corner_is_clipped_not_wrapped_into_other_rows) {
+    GstBuffer *buf = nvmm_nv12_buffer(kW, kH, solid(kBlack));
+    add_dets(buf, kW, kH, {det(-6, -4, 20, 12, 0), det(50, 56, 20, 12, 0)});
+    Drawn d(buf);
+    const Box a{-6, -4, 20, 12, 2}, b{50, 56, 20, 12, 2};
+    static const Rgba bg = vic_rgba_at(solid(kBlack), kW, kH, 0, 0);
+    int wrong = 0;
+    for (int y = 0; y < kH; y++)
+        for (int x = 0; x < kW; x++)
+            if (d.at(x, y) != (on_border(a, x, y) || on_border(b, x, y) ? kClass0 : bg)) wrong++;
+    ASSERT_EQ(wrong, 0);
+}
+
+TEST(drawdet_defaults_draw_everything_at_three_px_with_a_540_font_divisor) {
+    GstElement *e = gst_element_factory_make("nvmmdrawdet", nullptr);
+    ASSERT_NOT_NULL(e);
+    gint thickness = 0, div = 0;
+    gboolean labels = FALSE, track = FALSE, dets = FALSE;
+    gdouble smoothing = 0;
+    g_object_get(e, "thickness", &thickness, "draw-labels", &labels, "draw-track", &track,
+                 "draw-det", &dets, "fps-smoothing", &smoothing, "font-scale-divisor", &div, NULL);
+    ASSERT_EQ(thickness, 3);
+    ASSERT_EQ(labels, TRUE);
+    ASSERT_EQ(track, TRUE);
+    ASSERT_EQ(dets, TRUE);
+    ASSERT_EQ(smoothing, 0.9);
+    ASSERT_EQ(div, 540);
+    g_object_set(e, "fps-smoothing", 0.5, "font-scale-divisor", 270, NULL);
+    g_object_get(e, "fps-smoothing", &smoothing, "font-scale-divisor", &div, NULL);
+    ASSERT_EQ(smoothing, 0.5);
+    ASSERT_EQ(div, 270);
+    gst_object_unref(e);
 }
 
 /// Rows above 30 hold the HUD and the track label; the box itself starts at row 30.

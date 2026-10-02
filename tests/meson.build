@@ -166,7 +166,8 @@ gstcheck_dep = dependency('gstreamer-check-1.0',
 if have_vpi and have_nvbufsurface
   test_ofa = executable('test_nvmm_ofa', 'test_nvmm_ofa.cpp',
     include_directories : element_test_inc,
-    dependencies : [gstnvmmalloc_dep, gstcheck_dep, gst_video_dep, nvbufsurftransform_dep],
+    dependencies : [gstnvmmalloc_dep, gstcheck_dep, gst_video_dep, nvbufsurftransform_dep,
+                    vpi_dep],
   )
   test('nvmm_ofa', test_ofa, protocol : 'exitcode', is_parallel : false,
     suite : ['plugin', 'nvidia_hwlib'],

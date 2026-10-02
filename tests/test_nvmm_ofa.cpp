@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <vpi/algo/OpticalFlowDense.h>
+
 #include "nvmm_optical_flow_meta.h"
 #include "nvmm_frame.h"
 #include "test_harness.h"
@@ -75,6 +77,24 @@ TEST(silent_flowstats_prints_only_the_summary) {
                                "avg mean magnitude 5.00 px\n"));
 }
 
+TEST(flowstats_summary_without_any_flow_frame_reports_zero_average) {
+    const std::string out = flowstats_output(true, {gst_buffer_new_allocate(nullptr, 16, nullptr)});
+    ASSERT_EQ(out, std::string("[nvmmflowstats] summary: 1 frames, 0 with flow, "
+                               "avg mean magnitude 0.00 px\n"));
+}
+
+TEST(flowstats_is_verbose_by_default_and_reads_back_silent) {
+    GstElement *e = gst_element_factory_make("nvmmflowstats", nullptr);
+    ASSERT_NOT_NULL(e);
+    gboolean silent = TRUE;
+    g_object_get(e, "silent", &silent, NULL);
+    ASSERT_EQ(silent, FALSE);
+    g_object_set(e, "silent", TRUE, NULL);
+    g_object_get(e, "silent", &silent, NULL);
+    ASSERT_EQ(silent, TRUE);
+    gst_object_unref(e);
+}
+
 uint8_t texture(int x, int y)
 {
     uint32_t v = (uint32_t)(x / 4) * 2654435761u ^ (uint32_t)(y / 4) * 40503u;
@@ -109,6 +129,16 @@ struct OfaRun {
     }
     ~OfaRun() { for (GstBuffer *b : out) gst_buffer_unref(b); }
 };
+
+TEST(ofa_defaults_to_a_four_pixel_grid_at_medium_quality) {
+    GstElement *e = gst_element_factory_make("nvmmofa", nullptr);
+    ASSERT_NOT_NULL(e);
+    gint grid = 0, quality = 0;
+    g_object_get(e, "grid-size", &grid, "quality", &quality, NULL);
+    ASSERT_EQ(grid, 4);
+    ASSERT_EQ(quality, (gint)VPI_OPTICAL_FLOW_QUALITY_MEDIUM);
+    gst_object_unref(e);
+}
 
 TEST(first_ofa_frame_has_no_predecessor_and_carries_no_flow_meta) {
     OfaRun r(128, 128, 4, {0});
