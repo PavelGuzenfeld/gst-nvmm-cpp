@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Usage: run-sanitizers.sh [asan|tsan|both], in the dev container; tsan needs --privileged for setarch -R (ASLR vs TSan shadow).
+# Usage: run-sanitizers.sh [asan|tsan|cuda|both], in the dev container (cuda: on a Jetson whose user is in the debug group); tsan needs --privileged for setarch -R (ASLR vs TSan shadow).
 # asan: LD_PRELOAD for the unsanitized plugin scanner, GLib shutdown leaks ignored; pure_cpp is the unpreloaded leak lane.
 # tsan skips plugin (the scanner cannot load TSan .so files) and nvidia_hwlib (closed NVIDIA libs double-lock and OOM).
 set -eu
 
 MODE="${1:-both}"
+CUDA_PROBE_TESTS=(analytics_kernels samurai_kernels)
+PROBES_PROVOKE_API_ERRORS_ON_PURPOSE="--report-api-errors no"
 TSAN_TIMEOUT_MULTIPLIER=3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -56,9 +58,24 @@ run_tsan() {
         --wrapper "setarch $(uname -m) -R"
 }
 
+run_compute_sanitizer() {
+    echo "=== compute-sanitizer (CUDA probes) ==="
+    rm -rf builddir-cuda
+    meson setup builddir-cuda \
+        -Dbuildtype=debug \
+        -Dwerror=false \
+        -Danalytics_cuda=enabled
+    meson compile -C builddir-cuda analytics_kernel_probe samurai_kernel_probe
+
+    meson test -C builddir-cuda --print-errorlogs --no-rebuild \
+        --wrapper "compute-sanitizer --tool memcheck $PROBES_PROVOKE_API_ERRORS_ON_PURPOSE --error-exitcode 1" \
+        "${CUDA_PROBE_TESTS[@]}"
+}
+
 case "$MODE" in
     asan)  run_asan_ubsan ;;
     tsan)  run_tsan ;;
+    cuda)  run_compute_sanitizer ;;
     both)  run_asan_ubsan; run_tsan ;;
     *)     echo "unknown mode: $MODE"; exit 2 ;;
 esac
