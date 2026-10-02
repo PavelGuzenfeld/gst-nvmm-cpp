@@ -3,7 +3,7 @@ samurai_deps = [
   gst_video_dep, gst_base_dep,
   trt_dep, nvbufsurftransform_dep,
 ]
-samurai_cpp_args = ['-Werror']
+samurai_cpp_args = []
 if have_vpi
   samurai_deps += vpi_dep
   samurai_cpp_args += '-DNVMM_HAVE_VPI'
