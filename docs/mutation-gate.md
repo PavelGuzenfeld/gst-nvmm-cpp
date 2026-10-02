@@ -129,7 +129,7 @@ on-device run (JetPack 6.2, L4T R36.4.3):
 | `analytics_kernels.cu` | 248 | 188 | 60 |
 
 `samurai_seed_math.hpp` is the before/after: 0 of 70 killed in the dev image, 45
-on-device. The table's survivors are tracked in #91. The element sources (`gstnvmm*.cpp`, `samurai_tracker.cpp`,
+on-device. #91 added tests for these; its PR lists the mutants still open. The element sources (`gstnvmm*.cpp`, `samurai_tracker.cpp`,
 `preprocess.cpp`, `trt_engine.cpp`, `roi_preprocess.cpp`, `detgate.hpp`) are
 linked by no test target on any build, so a run there measures that absence. They
 stay excluded until a test drives them (#86).
