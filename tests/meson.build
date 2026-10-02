@@ -157,3 +157,53 @@ if have_analytics_cuda
   test('analytics_kernels', analytics_kernel_probe, protocol : 'exitcode',
     suite : 'nvidia_hwlib')
 endif
+
+element_test_inc = [config_inc, common_inc, include_directories('../gst/nvmmalloc')]
+gst_build_dir = meson.current_build_dir() / '..' / 'gst'
+gstcheck_dep = dependency('gstreamer-check-1.0',
+  required : (have_vpi or have_tensorrt) and have_nvbufsurface)
+
+if have_vpi and have_nvbufsurface
+  test_ofa = executable('test_nvmm_ofa', 'test_nvmm_ofa.cpp',
+    include_directories : element_test_inc,
+    dependencies : [gstnvmmalloc_dep, gstcheck_dep, gst_video_dep, nvbufsurftransform_dep],
+  )
+  test('nvmm_ofa', test_ofa, protocol : 'exitcode', is_parallel : false,
+    suite : ['plugin', 'nvidia_hwlib'],
+    env : ['MALLOC_PERTURB_=0',
+           'GST_PLUGIN_PATH=' + gst_build_dir / 'nvmmofa' + ':' + gst_build_dir / 'nvmmalloc'])
+endif
+
+if have_tensorrt and have_nvbufsurface
+  element_test_deps = [gstnvmmalloc_dep, gstcheck_dep, gst_video_dep, trt_dep,
+                       nvbufsurftransform_dep]
+
+  test_drawdet = executable('test_nvmm_drawdet', 'test_nvmm_drawdet.cpp',
+    include_directories : element_test_inc,
+    dependencies : element_test_deps,
+  )
+  test('nvmm_drawdet', test_drawdet, protocol : 'exitcode', is_parallel : false,
+    suite : ['plugin', 'nvidia_hwlib'],
+    env : ['GST_PLUGIN_PATH=' + gst_build_dir / 'nvmmdrawdet' + ':' + gst_build_dir / 'nvmmalloc'])
+
+  test_preprocess = executable('test_nvmm_preprocess',
+    ['test_nvmm_preprocess.cpp', '../gst/nvmminfer/preprocess.cpp',
+     '../gst/nvmmsecondaryinfer/roi_preprocess.cpp'],
+    include_directories : element_test_inc + [include_directories('../gst/nvmminfer'),
+                                               include_directories('../gst/nvmmsecondaryinfer')],
+    dependencies : element_test_deps,
+  )
+  test('nvmm_preprocess', test_preprocess, protocol : 'exitcode', suite : 'nvidia_hwlib')
+
+  test_trt_elements = executable('test_nvmm_trt_elements', 'test_nvmm_trt_elements.cpp',
+    include_directories : element_test_inc,
+    dependencies : element_test_deps,
+  )
+  trt_plugin_path = gst_build_dir / 'nvmmalloc'
+  foreach p : ['nvmminfer', 'nvmmsecondaryinfer', 'nvmmdetgate', 'nvmmsamurai']
+    trt_plugin_path += ':' + gst_build_dir / p
+  endforeach
+  test('nvmm_trt_elements', test_trt_elements, protocol : 'exitcode', is_parallel : false,
+    suite : ['plugin', 'nvidia_hwlib'], timeout : 120,
+    env : ['GST_PLUGIN_PATH=' + trt_plugin_path])
+endif
