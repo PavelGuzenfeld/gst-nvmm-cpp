@@ -127,24 +127,23 @@ on-device run (JetPack 6.2, L4T R36.4.3):
 | `samurai_consts.hpp` | 36 | 12 | 24 |
 | `samurai_kernels.cu` | 134 | 93 | 41 |
 | `analytics_kernels.cu` | 248 | 188 | 60 |
-| `gstnvmmflowstats.cpp` | 26 | 20 | 6 |
-| `gstnvmmofa.cpp` | 57 | 43 | 14 |
-| `gstnvmmdrawdet.cpp` | 210 | 81 | 129 |
+| `gstnvmmflowstats.cpp` | 26 | 22 | 4 |
+| `gstnvmmofa.cpp` | 57 | 45 | 12 |
+| `gstnvmmdrawdet.cpp` | 210 | 101 | 109 |
 | `gstnvmminfer.cpp` | 119 | 67 | 52 |
 | `preprocess.cpp` | 102 | 84 | 18 |
 | `preprocess.hpp` | 2 | 1 | 1 |
 | `trt_engine.cpp` | 37 | 18 | 19 |
 | `trt_engine.hpp` | 2 | 0 | 2 |
 | `gstnvmmsecondaryinfer.cpp` | 141 | 79 | 62 |
-| `roi_preprocess.cpp` | 121 | 93 | 28 |
+| `roi_preprocess.cpp` | 121 | 94 | 27 |
 | `roi_preprocess.hpp` | 2 | 0 | 2 |
 
 `samurai_seed_math.hpp` is the before/after: 0 of 70 killed in the dev image, 45
-on-device. #91 added tests for these; its PR lists the mutants still open. The element rows (from `gstnvmmflowstats.cpp` down) are the first run of the #86
+on-device. #91 added tests for these; its PR lists the mutants still open. The element rows (from `gstnvmmflowstats.cpp` down) are the on-device run of the #86
 element tests (`nvmm_ofa`, `nvmm_drawdet`, `nvmm_preprocess`, `nvmm_trt_elements`),
-each mutant running only the test executables that link its file. A partial rerun
-after the follow-up tests reached `gstnvmmflowstats.cpp` 22/26 and `gstnvmmofa.cpp`
-45/57; `gstnvmmdrawdet.cpp` and `roi_preprocess.cpp` were not rerun. These files
+each mutant running only the test executables that link its file; the
+`gstnvmminfer.cpp` row predates its two head-shape tests. These files
 stay in `exclude_paths` because the x86 lane cannot build them, not for want of a
 test. `gstnvmmdetgate.cpp`, `detgate.hpp`, `gstnvmmsamurai.cpp` and
 `samurai_tracker.cpp` are reached only on their no-engine paths: the rest needs
