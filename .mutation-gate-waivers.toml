@@ -238,3 +238,220 @@ old = """0"""
 new = """1"""
 reason = """Equivalent: an Entry is only created by store(), which assigns last_seen before any read. Probe: 400 runs of 400 random store/lookup/due/expire/reset/size operations, default and random params; 345674 output bytes bit-identical to the unmutated build (sha256 bc2a3290017493b3)."""
 
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_consts.hpp"
+line = 26
+column = 25
+old = """0"""
+new = """1"""
+reason = "Equivalent: magic is read before it is compared, and a failed read returns before the initial value is looked at. Rebuilt with the mutant on JetPack 6.2: loader results (ok, err, shapes, data bits) over every truncation of a 4-tensor file, a bad magic, an overlong count and a missing file are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_consts.hpp"
+line = 31
+column = 28
+old = """0"""
+new = """1"""
+reason = "Equivalent: nlen is overwritten by the read, and a failed read returns before it is used. Rebuilt with the mutant on JetPack 6.2: loader results (ok, err, shapes, data bits) over every truncation of a 4-tensor file, a bad magic, an overlong count and a missing file are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_consts.hpp"
+line = 33
+column = 37
+old = """0"""
+new = """1"""
+reason = "Equivalent: the fill char is overwritten by the fread of nlen bytes, or the string is empty. Rebuilt with the mutant on JetPack 6.2: loader results (ok, err, shapes, data bits) over every truncation of a 4-tensor file, a bad magic, an overlong count and a missing file are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_consts.hpp"
+line = 35
+column = 28
+old = """0"""
+new = """1"""
+reason = "Equivalent: ndim is overwritten by the read, and a failed read returns before it is used. Rebuilt with the mutant on JetPack 6.2: loader results (ok, err, shapes, data bits) over every truncation of a 4-tensor file, a bad magic, an overlong count and a missing file are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_consts.hpp"
+line = 41
+column = 31
+old = """0"""
+new = """1"""
+reason = "Equivalent: dim is overwritten by the read, and a failed read returns before it is used. Rebuilt with the mutant on JetPack 6.2: loader results (ok, err, shapes, data bits) over every truncation of a 4-tensor file, a bad magic, an overlong count and a missing file are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 21
+column = 12
+old = """fy < 0.f"""
+new = """fy <= 0.f"""
+reason = "Equivalent: at fy == 0 the clamp writes the +0 that fy already holds; (oy + 0.5) * sy - 0.5 cannot round to -0. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 22
+column = 40
+old = """1"""
+new = """2"""
+reason = "Equivalent: y0 <= hi - 1 always, and at y0 == hi - 2 both forms pick hi - 1, so y1 is unchanged. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 26
+column = 16
+old = """fx < 0.f"""
+new = """fx <= 0.f"""
+reason = "Equivalent: at fx == 0 the clamp writes the +0 that fx already holds; (ox + 0.5) * sx - 0.5 cannot round to -0. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 27
+column = 44
+old = """1"""
+new = """2"""
+reason = "Equivalent: x0 <= wi - 1 always, and at x0 == wi - 2 both forms pick wi - 1, so x1 is unchanged. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 41
+column = 36
+old = """1"""
+new = """2"""
+reason = "Equivalent: xmax starts at -2 instead of -1; both are below every column index and both fail xmax < 0 only when a pixel was found. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 45
+column = 20
+old = """x < xmin"""
+new = """x <= xmin"""
+reason = "Equivalent: on equality the update assigns the value xmin already holds. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 46
+column = 20
+old = """x > xmax"""
+new = """x >= xmax"""
+reason = "Equivalent: on equality the update assigns the value xmax already holds. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 47
+column = 20
+old = """y < ymin"""
+new = """y <= ymin"""
+reason = "Equivalent: on equality the update assigns the value ymin already holds. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_seed_math.hpp"
+line = 48
+column = 20
+old = """y > ymax"""
+new = """y >= ymax"""
+reason = "Equivalent: on equality the update assigns the value ymax already holds. Rebuilt with the mutant on JetPack 6.2: host dumps of bilinear_upsample (up, down, identity and 1-row sizes), 40 random mask_to_box cases with values on the threshold, and mlp3_relu are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_kernels.cu"
+line = 8
+column = 21
+old = """256"""
+new = """257"""
+reason = "Equivalent: grid() divides by the same kBlk, so every index below n still gets a thread and the idx guard drops the rest. Rebuilt with the mutant on JetPack 6.2: device dumps of every samurai kernel at n in {1, 255, 256, 257, 511, 512, 513, 1024, 1025}, 9 bilinear sizes, 5 window sizes and tok in {1, 4, 9, 1024}, sentinel tails included, are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_kernels.cu"
+line = 9
+column = 33
+old = """n + kBlk - 1"""
+new = """n + kBlk + 1"""
+reason = "Equivalent: at most one extra block, whose threads all fail the idx guard. Rebuilt with the mutant on JetPack 6.2: device dumps of every samurai kernel at n in {1, 255, 256, 257, 511, 512, 513, 1024, 1025}, 9 bilinear sizes, 5 window sizes and tok in {1, 4, 9, 1024}, sentinel tails included, are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_kernels.cu"
+line = 50
+column = 24
+old = """1"""
+new = """2"""
+reason = "Equivalent: y0 <= hi - 1 always, and at y0 == hi - 2 both forms pick hi - 1, so y1 is unchanged. Rebuilt with the mutant on JetPack 6.2: device dumps of every samurai kernel at n in {1, 255, 256, 257, 511, 512, 513, 1024, 1025}, 9 bilinear sizes, 5 window sizes and tok in {1, 4, 9, 1024}, sentinel tails included, are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "gst/nvmmsamurai/samurai_kernels.cu"
+line = 51
+column = 24
+old = """1"""
+new = """2"""
+reason = "Equivalent: x0 <= wi - 1 always, and at x0 == wi - 2 both forms pick wi - 1, so x1 is unchanged. Rebuilt with the mutant on JetPack 6.2: device dumps of every samurai kernel at n in {1, 255, 256, 257, 511, 512, 513, 1024, 1025}, 9 bilinear sizes, 5 window sizes and tok in {1, 4, 9, 1024}, sentinel tails included, are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 117
+column = 12
+old = """0"""
+new = """1"""
+reason = "Equivalent: run_device rejects w <= 1 before scratch(), so the first scratch() call always sees nw != 1 and allocates either way. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 137
+column = 16
+old = """0"""
+new = """1"""
+reason = "Equivalent: release() is followed by a return false or by an allocation that sets w and h, and run_device never asks scratch() for a 1x1 frame. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 184
+column = 30
+old = """impl_->d_cur != nullptr"""
+new = """impl_->d_cur == nullptr"""
+reason = "Equivalent over outputs: the flag only decides whether staging buffers are kept across a run_device resize; run() reallocates them on demand, so only device memory footprint changes. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 186
+column = 19
+old = """32"""
+new = """33"""
+reason = "Equivalent: a 33-wide block with the grid still sized by 32 covers every pixel, and the x >= w guard drops the extra threads. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 187
+column = 34
+old = """31"""
+new = """32"""
+reason = "Equivalent: at most one extra column of blocks, whose threads all fail the x >= w guard. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 205
+column = 40
+old = """0"""
+new = """1"""
+reason = "Equivalent: diff_blur == 1 is the one-tap identity kernel, so blurring scratch then zeroing the border equals writing the bordered diff directly. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 229
+column = 8
+old = """w <= 1"""
+new = """w < 1"""
+reason = "Equivalent: run_device repeats the w <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 229
+column = 8
+old = """w <= 1 || h <= 1"""
+new = """w <= 1 && h <= 1"""
+reason = "Equivalent: run_device repeats both checks and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
+[[waiver]]
+file = "analytics/analytics_kernels.cu"
+line = 229
+column = 18
+old = """h <= 1"""
+new = """h < 1"""
+reason = "Equivalent: run_device repeats the h <= 1 check and returns false before any write to out. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames and an allocation failure are byte-identical to the unmutated build."
+
