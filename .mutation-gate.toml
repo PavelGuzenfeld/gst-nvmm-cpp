@@ -42,3 +42,11 @@ exclude_paths = [
     "gst/nvmmsamurai/samurai_tracker.",
     "analytics/analytics_kernels.cu",
 ]
+
+[[model_exclude]]
+path = "gst/nvmmsamurai/samurai_tracker.cpp"
+reason = "tracker glue around TensorRT engines and CUDA kernels; no estimation or filter state of its own"
+
+[[model_exclude]]
+path = "gst/nvmmdetgate/detgate.hpp"
+reason = "detection gating by motion and confidence thresholds; no estimation state, dt or physical units"
