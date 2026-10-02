@@ -5,6 +5,7 @@
 set -eu
 
 MODE="${1:-both}"
+TSAN_TIMEOUT_MULTIPLIER=3
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -49,6 +50,7 @@ run_tsan() {
     TSAN_OPTIONS="halt_on_error=1:abort_on_error=1:second_deadlock_stack=1:suppressions=$ROOT/scripts/tsan.supp" \
     G_SLICE=always-malloc \
     meson test -C builddir-tsan --print-errorlogs \
+        --timeout-multiplier "$TSAN_TIMEOUT_MULTIPLIER" \
         --no-suite plugin \
         --no-suite nvidia_hwlib \
         --wrapper "setarch $(uname -m) -R"
