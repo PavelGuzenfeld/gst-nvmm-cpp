@@ -82,7 +82,7 @@ GstElement *make(const char *factory)
 
 /// Resets the NPP stream before teardown: Preprocessor leaves the process-wide NPP
 /// stream on its own, which stop() destroys, and the next nvmminfer to configure
-/// crashes in nppSetStream. Delete the reset with that fix.
+/// crashes in nppSetStream (#117). Delete the reset with that fix.
 std::vector<GstBuffer *> run(GstElement *e, int w, int h, std::vector<GstBuffer *> in)
 {
     GstHarness *hn = gst_harness_new_with_element(e, "sink", "src");

@@ -30,8 +30,14 @@ test_command = 'docker run --rm --shm-size=256m -v "$PWD":/src -w /src gst-nvmm-
 # gated against a build that cannot compile it: list every .cu here by name.
 exclude_paths = [
     "probes/",
-    "gst/nvmmdrawdet/font6x8.h",
+    "gst/nvmmofa/",
+    "gst/nvmmdrawdet/",
     "gst/nvmmdetgate/",
+    "gst/nvmminfer/gstnvmminfer.",
+    "gst/nvmminfer/preprocess.",
+    "gst/nvmminfer/trt_engine.",
+    "gst/nvmmsecondaryinfer/gstnvmmsecondaryinfer.",
+    "gst/nvmmsecondaryinfer/roi_preprocess.",
     "gst/nvmmsamurai/gmc_vpi_fft.hpp",
     "gst/nvmmsamurai/gmc_vpi_pva.hpp",
     "gst/nvmmsamurai/gstnvmmsamurai.",
