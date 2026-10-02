@@ -48,3 +48,7 @@ exclude_paths = [
     "gst/nvmmsamurai/samurai_tracker.",
     "analytics/analytics_kernels.cu",
 ]
+
+[[model_exclude]]
+path = "analytics/dual_homography.hpp"
+reason = "pixel-correspondence RANSAC plane selection; no estimation or filter state, no dt, no physical units"

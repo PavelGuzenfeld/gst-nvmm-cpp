@@ -141,6 +141,89 @@ TEST(textureless_input_returns_empty) {
     ASSERT_TRUE(res.empty());
 }
 
+using nvmm::motion::detail::Plane;
+using nvmm::motion::detail::Pt;
+
+constexpr int plane_frame = 256;
+constexpr float mover_dx = 30.f;
+
+struct Correspondences {
+    std::vector<Pt> cur, ref;
+    void add(float x, float y, float dx, float dy) {
+        cur.push_back(Pt{x, y});
+        ref.push_back(Pt{x + dx, y + dy});
+    }
+};
+
+Correspondences dominant_pan() {
+    Correspondences c;
+    for (int j = 0; j < 8; j++)
+        for (int i = 0; i < 8; i++) c.add(16.f + 30.f * i, 16.f + 30.f * j, 6.f, 4.f);
+    return c;
+}
+
+void fit_two_planes(const Correspondences &c, const nvmm::motion::DualHomographyParams &p,
+                    Plane &pl1, Plane &pl2) {
+    nvmm::motion::detail::two_planes(c.cur, c.ref, p, plane_frame, plane_frame, pl1, pl2);
+}
+
+TEST(mover_cluster_with_stray_inliers_sharing_h2_is_rejected) {
+    Correspondences c = dominant_pan();
+    for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++) c.add(100.f + 3.f * i, 100.f + 3.f * j, mover_dx, 0.f);
+    const Pt strays[] = {{20.f, 200.f}, {160.f, 30.f}, {175.f, 220.f}, {190.f, 150.f},
+                         {205.f, 60.f}, {220.f, 180.f}, {240.f, 40.f}};
+    for (const Pt &s : strays) c.add(s.x, s.y, mover_dx, 0.f);
+    Plane pl1, pl2;
+    fit_two_planes(c, nvmm::motion::DualHomographyParams{}, pl1, pl2);
+    ASSERT_TRUE(pl1.ok);
+    ASSERT_TRUE(!pl2.ok);
+}
+
+Plane parallax_grid_plane(float step_x, float step_y) {
+    Correspondences c = dominant_pan();
+    for (int j = 0; j < 5; j++)
+        for (int i = 0; i < 5; i++) c.add(40.f + step_x * i, 40.f + step_y * j, mover_dx, 0.f);
+    nvmm::motion::DualHomographyParams p;
+    p.min_plane_extent = 0.25f;
+    Plane pl1, pl2;
+    fit_two_planes(c, p, pl1, pl2);
+    ASSERT_TRUE(pl1.ok);
+    return pl2;
+}
+
+TEST(parallax_plane_whose_shortest_half_spans_exactly_the_extent_in_x_is_kept) {
+    ASSERT_TRUE(parallax_grid_plane(32.f, 4.f).ok);
+}
+
+TEST(parallax_plane_whose_shortest_half_spans_exactly_the_extent_in_y_is_kept) {
+    ASSERT_TRUE(parallax_grid_plane(4.f, 32.f).ok);
+}
+
+TEST(parallax_plane_whose_shortest_half_falls_short_of_the_extent_is_rejected) {
+    ASSERT_TRUE(!parallax_grid_plane(31.f, 31.f).ok);
+}
+
+Plane corner_cluster_plus_spread_strays(int cluster, int strays) {
+    Correspondences c = dominant_pan();
+    for (int i = 0; i < cluster; i++)
+        c.add(20.f + 3.f * (i % 4), 20.f + 3.f * (i / 4), mover_dx, 0.f);
+    for (int i = 0; i < strays; i++)
+        c.add(100.f + 14.f * i, 100.f + (float)((i * 37) % 120), mover_dx, 0.f);
+    Plane pl1, pl2;
+    fit_two_planes(c, nvmm::motion::DualHomographyParams{}, pl1, pl2);
+    ASSERT_TRUE(pl1.ok);
+    return pl2;
+}
+
+TEST(mover_cluster_holding_eleven_of_twenty_one_consensus_points_is_rejected) {
+    ASSERT_TRUE(!corner_cluster_plus_spread_strays(11, 10).ok);
+}
+
+TEST(plane_whose_cluster_holds_ten_of_twenty_one_consensus_points_is_kept) {
+    ASSERT_TRUE(corner_cluster_plus_spread_strays(10, 11).ok);
+}
+
 constexpr int lone_corner_w = 64, lone_corner_h = 48, patch_radius = 15;
 
 std::vector<nvmm::motion::detail::OrbFeature> orb_on_lone_bright_pixel(int x, int y) {
