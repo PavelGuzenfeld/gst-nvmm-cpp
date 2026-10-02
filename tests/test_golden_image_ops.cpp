@@ -13,9 +13,13 @@ nvmm::img::Image<uint8_t> random_frame(int w, int h, unsigned seed) {
     nvmm::img::Image<uint8_t> f(w, h);
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) f.at(y, x) = (uint8_t)rng.uniform(0, 256);
-    for (int i = 0; i < 20; i++)
-        scene::fill_circle(f, rng.uniform(10, w - 10), rng.uniform(10, h - 10),
-                           rng.uniform(3, 9), (uint8_t)rng.uniform(0, 256));
+    for (int i = 0; i < 20; i++) {
+        const uint8_t shade = (uint8_t)rng.uniform(0, 256);
+        const int radius = rng.uniform(3, 9);
+        const int cy = rng.uniform(10, h - 10);
+        const int cx = rng.uniform(10, w - 10);
+        scene::fill_circle(f, cx, cy, radius, shade);
+    }
     return f;
 }
 
