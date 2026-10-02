@@ -207,3 +207,16 @@ if have_tensorrt and have_nvbufsurface
     suite : ['plugin', 'nvidia_hwlib'], timeout : 120,
     env : ['GST_PLUGIN_PATH=' + trt_plugin_path])
 endif
+
+if have_tensorrt and have_nvbufsurface
+  engine_backed_test_deps = [gstnvmmalloc_dep, gstcheck_dep, gst_video_dep, nvbufsurftransform_dep]
+  foreach t : [['detgate', 'nvmmdetgate'], ['samurai', 'nvmmsamurai']]
+    exe = executable('test_nvmm_' + t[0], 'test_nvmm_' + t[0] + '.cpp',
+      include_directories : element_test_inc,
+      dependencies : engine_backed_test_deps,
+    )
+    test('nvmm_' + t[0], exe, protocol : 'exitcode', is_parallel : false,
+      suite : ['plugin', 'nvidia_hwlib'], timeout : 180,
+      env : ['GST_PLUGIN_PATH=' + gst_build_dir / t[1] + ':' + gst_build_dir / 'nvmmalloc'])
+  endforeach
+endif

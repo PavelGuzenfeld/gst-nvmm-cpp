@@ -885,3 +885,7 @@ old = """e != cudaSuccess"""
 new = """e == cudaSuccess"""
 reason = "Equivalent: clearing on every success instead of on failure still clears the slot before the cudaGetLastError() that ends run_device, because every path from a failure back to that check passes a successful ok() (upload, symbol copy or allocation), and a failed launch config fails every later launch too. Rebuilt with the mutant on JetPack 6.2: run() and run_device() outputs, return values and last_error() over 8 frame sizes on and off the 32x8 grid, 3 scenes, 9 parameter sets, fresh and reused instances, 1- and 0-pixel frames, an allocation failure, three upload failures and a launch-grid failure, each followed by a healthy call, are byte-identical to the unmutated build."
 
+[[waiver]]
+file = "tools/xfeat/export_onnx.py"
+uncovered = true
+reason = """Runs only inside the pinned torch export container, never under the C++ suite. It checks itself (ORT against torch per output, wrapper matches against stock LightGlue), and tests/test_nvmm_detgate.cpp consumes the engines it produces."""
