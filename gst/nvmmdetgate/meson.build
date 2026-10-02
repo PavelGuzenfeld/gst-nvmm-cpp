@@ -15,7 +15,6 @@ gstnvmmdetgate = library('gstnvmmdetgate',
     gst_base_dep,
     trt_dep, nvbufsurftransform_dep,
   ],
-  cpp_args : ['-Werror'],
   install : true,
   install_dir : get_option('libdir') / 'gstreamer-1.0',
 )
