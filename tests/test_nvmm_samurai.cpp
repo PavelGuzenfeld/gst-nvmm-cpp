@@ -20,6 +20,15 @@ namespace {
 
 constexpr int kSkipExitCode = 77;
 
+guint warnings_logged = 0;
+
+void count_warning(GstDebugCategory *category, GstDebugLevel level, const gchar *, const gchar *, gint,
+                   GObject *, GstDebugMessage *, gpointer)
+{
+    if (level <= GST_LEVEL_WARNING && std::strcmp(gst_debug_category_get_name(category), "nvmmsamurai") == 0)
+        warnings_logged++;
+}
+
 /// The engines come from tools/build_test_engines.sh; without them there is nothing to drive.
 struct EngineDirOrSkip {
     std::string dir;
@@ -36,6 +45,8 @@ struct EngineDirOrSkip {
             std::exit(kSkipExitCode);
         }
         gst_init(nullptr, nullptr);
+        gst_debug_add_log_function(count_warning, nullptr, nullptr);
+        gst_debug_set_threshold_for_name("nvmmsamurai", GST_LEVEL_WARNING);
     }
 } engines;
 
@@ -118,10 +129,20 @@ void on_square(GstElement *e)
     g_object_set(e, "seed-roi", roi_of(kX0, kY0, kSide, kSide).c_str(), NULL);
 }
 
+/// A red suite stays red, so the first failure ends the run instead of spending a minute of
+/// engine runs on it; the mutation gate pays that minute for every mutant it kills.
+void stop_if_already_red()
+{
+    if (tests_failed == 0) return;
+    std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
+    std::exit(1);
+}
+
 class TrackerRig {
 public:
     explicit TrackerRig(const Configure &configure)
     {
+        stop_if_already_red();
         element_ = gst_element_factory_make("nvmmsamurai", nullptr);
         ASSERT_NOT_NULL(element_);
         const std::string consts = engines.dir + "/samurai_consts.bin";
@@ -190,7 +211,82 @@ void assert_box_on(const GstNvmmTrackMeta &m, int left, int top, int side)
     ASSERT_NEAR(m.height, side, kEdgeTolPx);
 }
 
+const char *default_backend_nick(GstElement *e, gint *instance_value)
+{
+    GParamSpecEnum *p = G_PARAM_SPEC_ENUM(g_object_class_find_property(G_OBJECT_GET_CLASS(e), "gmc-backend"));
+    g_object_get(e, "gmc-backend", instance_value, NULL);
+    return g_enum_get_value(p->enum_class, p->default_value)->value_nick;
+}
+
+TEST(a_fresh_tracker_has_the_documented_property_defaults) {
+    GstElement *e = gst_element_factory_make("nvmmsamurai", nullptr);
+    ASSERT_NOT_NULL(e);
+    gint crop, max_kf, stable_threshold, target_class;
+    gdouble kf_weight, iou, kf_min_area, seed_conf;
+    gboolean prefer_center, gmc;
+    guint seed_delay;
+    gchar *roi = nullptr, *engine_dir = nullptr, *consts = nullptr;
+    g_object_get(e, "crop-size", &crop, "max-kf", &max_kf, "kf-score-weight", &kf_weight,
+                 "stable-frames-threshold", &stable_threshold, "iou-threshold", &iou,
+                 "kf-min-area", &kf_min_area, "target-class", &target_class, "seed-conf", &seed_conf,
+                 "seed-prefer-center", &prefer_center, "seed-roi", &roi, "seed-delay", &seed_delay,
+                 "gmc", &gmc, "engine-dir", &engine_dir, "consts-file", &consts, NULL);
+    ASSERT_EQ(crop, 512);
+    ASSERT_EQ(max_kf, 2);
+    ASSERT_EQ(kf_weight, 0.25);
+    ASSERT_EQ(stable_threshold, 10);
+    ASSERT_EQ(iou, 0.5);
+    ASSERT_EQ(kf_min_area, 25.0);
+    ASSERT_EQ(target_class, 0);
+    ASSERT_EQ(seed_conf, 0.25);
+    ASSERT_EQ(prefer_center, FALSE);
+    ASSERT_TRUE(roi == nullptr);
+    ASSERT_EQ(seed_delay, 0u);
+    ASSERT_EQ(gmc, FALSE);
+    ASSERT_TRUE(engine_dir == nullptr);
+    ASSERT_TRUE(consts == nullptr);
+    gint backend_value = -1;
+    const char *nick = default_backend_nick(e, &backend_value);
+    ASSERT_EQ(std::string(nick), std::string("ncc"));
+    GParamSpecEnum *backend = G_PARAM_SPEC_ENUM(g_object_class_find_property(G_OBJECT_GET_CLASS(e), "gmc-backend"));
+    ASSERT_EQ(backend_value, backend->default_value);
+    gst_object_unref(e);
+}
+
+struct IntSpec { const char *name; gint min, max, def; };
+struct DoubleSpec { const char *name; gdouble min, max, def; };
+
+TEST(property_ranges_and_defaults_match_the_documented_table) {
+    GstElement *e = gst_element_factory_make("nvmmsamurai", nullptr);
+    ASSERT_NOT_NULL(e);
+    GObjectClass *k = G_OBJECT_GET_CLASS(e);
+    const IntSpec ints[] = {{"crop-size", 64, 2048, 512}, {"max-kf", 0, 30, 2},
+                            {"stable-frames-threshold", 0, 1000, 10}, {"target-class", 0, 1000, 0}};
+    for (const IntSpec &s : ints) {
+        GParamSpecInt *p = G_PARAM_SPEC_INT(g_object_class_find_property(k, s.name));
+        ASSERT_NOT_NULL(p);
+        ASSERT_EQ(p->minimum, s.min);
+        ASSERT_EQ(p->maximum, s.max);
+        ASSERT_EQ(p->default_value, s.def);
+    }
+    const DoubleSpec doubles[] = {{"kf-score-weight", 0, 1, 0.25}, {"iou-threshold", 0, 1, 0.5},
+                                  {"kf-min-area", 0, 1e8, 25}, {"seed-conf", 0, 1, 0.25}};
+    for (const DoubleSpec &s : doubles) {
+        GParamSpecDouble *p = G_PARAM_SPEC_DOUBLE(g_object_class_find_property(k, s.name));
+        ASSERT_NOT_NULL(p);
+        ASSERT_EQ(p->minimum, s.min);
+        ASSERT_EQ(p->maximum, s.max);
+        ASSERT_EQ(p->default_value, s.def);
+    }
+    GParamSpecUInt *delay = G_PARAM_SPEC_UINT(g_object_class_find_property(k, "seed-delay"));
+    ASSERT_EQ(delay->minimum, 0u);
+    ASSERT_EQ(delay->maximum, 100000u);
+    ASSERT_EQ(delay->default_value, 0u);
+    gst_object_unref(e);
+}
+
 TEST(track_box_follows_a_square_moving_six_right_three_down_per_frame) {
+    const guint warnings_before = warnings_logged;
     const auto t = track_square(0);
     for (int f = 0; f < kFrames; f++) {
         const GstNvmmTrackMeta &m = t[f];
@@ -204,6 +300,7 @@ TEST(track_box_follows_a_square_moving_six_right_three_down_per_frame) {
         ASSERT_EQ(m.stable_frames, (guint32)(f + 2));
         assert_box_on_square(m, f);
     }
+    ASSERT_EQ(warnings_logged, warnings_before);
 }
 
 /// Default max-kf=2: two Kalman-only frames, then one model frame, starting on the seed frame.
@@ -269,6 +366,7 @@ std::vector<GstNvmmTrackMeta> track_with_dets(const Configure &configure,
 }
 
 TEST(a_detection_in_a_quarter_by_eighth_infer_space_seeds_the_scaled_box) {
+    const guint warnings_before = warnings_logged;
     constexpr guint32 kInferW = kW / 2, kInferH = kH / 4;
     const auto t = track_with_dets(no_roi_max_kf_zero,
                                    {det_box(kX0 / 2.f, kY0 / 4.f, kSide / 2.f, kSide / 4.f, 0.9f)},
@@ -277,44 +375,57 @@ TEST(a_detection_in_a_quarter_by_eighth_infer_space_seeds_the_scaled_box) {
         ASSERT_TRUE(m.valid);
         assert_box_on(m, kX0, kY0, kSide);
     }
+    ASSERT_EQ(warnings_logged, warnings_before);
 }
 
-constexpr int kDecoyX = 100, kDecoyY = 100;
-constexpr int kNearCenterX = 400, kNearCenterY = 230;
+constexpr int kCenterLeft = kW / 2 - kSide / 2, kCenterTop = kH / 2 - kSide / 2;
+constexpr int kRing = 90;
 
-Nv12Painter decoy_and_near_center_squares()
+struct Spot { int left, top; float conf; };
+
+const Spot kCenter{kCenterLeft, kCenterTop, 0.5f};
+const Spot kRight{kCenterLeft + kRing, kCenterTop, 0.6f};
+const Spot kLeft{kCenterLeft - kRing, kCenterTop, 0.7f};
+const Spot kBelow{kCenterLeft, kCenterTop + kRing, 0.9f};
+const Spot kAbove{kCenterLeft, kCenterTop - kRing, 0.9f};
+
+Nv12Painter squares_at(const std::vector<Spot> &spots)
 {
-    return [](int x, int y) {
-        const bool decoy = x >= kDecoyX && x < kDecoyX + kSide && y >= kDecoyY && y < kDecoyY + kSide;
-        const bool near_center = x >= kNearCenterX && x < kNearCenterX + kSide &&
-                                 y >= kNearCenterY && y < kNearCenterY + kSide;
-        return decoy ? kRed : near_center ? kBlue : kGrey;
+    return [spots](int x, int y) {
+        for (const Spot &s : spots)
+            if (x >= s.left && x < s.left + kSide && y >= s.top && y < s.top + kSide) return kRed;
+        return kGrey;
     };
 }
 
-std::vector<GstNvmmTrackMeta> seed_between_two_squares(const Configure &configure)
+GstNvmmTrackMeta seed_among(const std::vector<Spot> &spots, const Configure &configure)
 {
-    const std::vector<NvmmDetObject> dets = {
-        det_box(kDecoyX, kDecoyY, kSide, kSide, 0.9f),
-        det_box(kNearCenterX, kNearCenterY, kSide, kSide, 0.5f),
-    };
-    return track(configure, 2, [&](int) {
-        return with_dets(nvmm_nv12_buffer(kW, kH, decoy_and_near_center_squares()), dets);
-    });
+    std::vector<NvmmDetObject> dets;
+    for (const Spot &s : spots) dets.push_back(det_box(s.left, s.top, kSide, kSide, s.conf));
+    return track(configure, 1, [&](int) {
+        return with_dets(nvmm_nv12_buffer(kW, kH, squares_at(spots)), dets);
+    })[0];
 }
 
-TEST(seed_takes_the_most_confident_detection_by_default) {
-    const auto t = seed_between_two_squares(no_roi_max_kf_zero);
-    assert_box_on(t[0], kDecoyX, kDecoyY, kSide);
+void prefer_center(GstElement *e)
+{
+    no_roi_max_kf_zero(e);
+    g_object_set(e, "seed-prefer-center", TRUE, NULL);
 }
 
-TEST(seed_prefer_center_takes_the_detection_nearest_the_frame_center) {
-    const Configure center = [](GstElement *e) {
-        no_roi_max_kf_zero(e);
-        g_object_set(e, "seed-prefer-center", TRUE, NULL);
-    };
-    const auto t = seed_between_two_squares(center);
-    assert_box_on(t[0], kNearCenterX, kNearCenterY, kSide);
+TEST(seed_takes_the_most_confident_detection_and_the_first_of_two_equals) {
+    const GstNvmmTrackMeta m = seed_among({kCenter, kRight, kLeft, kBelow, kAbove}, no_roi_max_kf_zero);
+    assert_box_on(m, kBelow.left, kBelow.top, kSide);
+}
+
+TEST(seed_prefer_center_takes_the_detection_whose_centre_is_nearest_the_frame_centre) {
+    const GstNvmmTrackMeta m = seed_among({kRight, kLeft, kBelow, kAbove, kCenter}, prefer_center);
+    assert_box_on(m, kCenter.left, kCenter.top, kSide);
+}
+
+TEST(seed_prefer_center_keeps_the_first_of_two_equally_central_detections) {
+    const GstNvmmTrackMeta m = seed_among({kRight, kLeft}, prefer_center);
+    assert_box_on(m, kRight.left, kRight.top, kSide);
 }
 
 TEST(a_detection_below_seed_conf_never_seeds) {
@@ -405,6 +516,7 @@ bool delivered_upstream(GstHarness *h, const char *name)
 }
 
 TEST(nvmm_reseed_moves_the_track_to_the_box_on_the_next_frame) {
+    const guint warnings_before = warnings_logged;
     constexpr int kEmptyX = 500, kEmptyY = 50;
     const Configure on_empty = [](GstElement *e) {
         g_object_set(e, "seed-roi", roi_of(kEmptyX, kEmptyY, kSide, kSide).c_str(), "max-kf", 0, NULL);
@@ -420,6 +532,7 @@ TEST(nvmm_reseed_moves_the_track_to_the_box_on_the_next_frame) {
     const GstNvmmTrackMeta after = rig.push(nvmm_nv12_buffer(kW, kH, square_at(0)));
     ASSERT_TRUE(after.valid);
     assert_box_on(after, kX0, kY0, kSide);
+    ASSERT_EQ(warnings_logged, warnings_before);
 }
 
 TEST(nvmm_reseed_is_consumed_and_other_upstream_events_are_forwarded) {
@@ -428,13 +541,6 @@ TEST(nvmm_reseed_is_consumed_and_other_upstream_events_are_forwarded) {
     ASSERT_TRUE(!delivered_upstream(rig.harness(), "nvmm-reseed"));
     ASSERT_TRUE(gst_harness_push_upstream_event(rig.harness(), upstream_event("nvmm-other")));
     ASSERT_TRUE(delivered_upstream(rig.harness(), "nvmm-other"));
-}
-
-const char *default_backend_nick(GstElement *e, gint *instance_value)
-{
-    GParamSpecEnum *p = G_PARAM_SPEC_ENUM(g_object_class_find_property(G_OBJECT_GET_CLASS(e), "gmc-backend"));
-    g_object_get(e, "gmc-backend", instance_value, NULL);
-    return g_enum_get_value(p->enum_class, p->default_value)->value_nick;
 }
 
 Configure kalman_only_pan(bool gmc, const char *backend)
@@ -636,71 +742,90 @@ TEST(the_dumped_crop_carries_red_green_blue_planes_normalised_for_sam2) {
     }
 }
 
-TEST(a_fresh_tracker_has_the_documented_property_defaults) {
+std::string start_error_with_engine_dir(const char *engine_dir)
+{
     GstElement *e = gst_element_factory_make("nvmmsamurai", nullptr);
     ASSERT_NOT_NULL(e);
-    gint crop, max_kf, stable_threshold, target_class;
-    gdouble kf_weight, iou, kf_min_area, seed_conf;
-    gboolean prefer_center, gmc;
-    guint seed_delay;
-    gchar *roi = nullptr, *engine_dir = nullptr, *consts = nullptr;
-    g_object_get(e, "crop-size", &crop, "max-kf", &max_kf, "kf-score-weight", &kf_weight,
-                 "stable-frames-threshold", &stable_threshold, "iou-threshold", &iou,
-                 "kf-min-area", &kf_min_area, "target-class", &target_class, "seed-conf", &seed_conf,
-                 "seed-prefer-center", &prefer_center, "seed-roi", &roi, "seed-delay", &seed_delay,
-                 "gmc", &gmc, "engine-dir", &engine_dir, "consts-file", &consts, NULL);
-    ASSERT_EQ(crop, 512);
-    ASSERT_EQ(max_kf, 2);
-    ASSERT_EQ(kf_weight, 0.25);
-    ASSERT_EQ(stable_threshold, 10);
-    ASSERT_EQ(iou, 0.5);
-    ASSERT_EQ(kf_min_area, 25.0);
-    ASSERT_EQ(target_class, 0);
-    ASSERT_EQ(seed_conf, 0.25);
-    ASSERT_EQ(prefer_center, FALSE);
-    ASSERT_TRUE(roi == nullptr);
-    ASSERT_EQ(seed_delay, 0u);
-    ASSERT_EQ(gmc, FALSE);
-    ASSERT_TRUE(engine_dir == nullptr);
-    ASSERT_TRUE(consts == nullptr);
-    gint backend_value = -1;
-    const char *nick = default_backend_nick(e, &backend_value);
-    ASSERT_EQ(std::string(nick), std::string("ncc"));
-    GParamSpecEnum *backend = G_PARAM_SPEC_ENUM(g_object_class_find_property(G_OBJECT_GET_CLASS(e), "gmc-backend"));
-    ASSERT_EQ(backend_value, backend->default_value);
+    if (engine_dir) g_object_set(e, "engine-dir", engine_dir, NULL);
+    const std::string error = start_failure(e);
     gst_object_unref(e);
+    return error;
 }
 
-struct IntSpec { const char *name; gint min, max, def; };
-struct DoubleSpec { const char *name; gdouble min, max, def; };
+TEST(a_tracker_without_engine_dir_refuses_to_start_naming_the_property) {
+    ASSERT_TRUE(start_error_with_engine_dir(nullptr).find("engine-dir") != std::string::npos);
+}
 
-TEST(property_ranges_and_defaults_match_the_documented_table) {
+TEST(a_tracker_with_an_empty_engine_dir_refuses_to_start_naming_the_property) {
+    ASSERT_TRUE(start_error_with_engine_dir("").find("engine-dir") != std::string::npos);
+}
+
+bool sink_template_accepts(const char *caps_str)
+{
     GstElement *e = gst_element_factory_make("nvmmsamurai", nullptr);
     ASSERT_NOT_NULL(e);
-    GObjectClass *k = G_OBJECT_GET_CLASS(e);
-    const IntSpec ints[] = {{"crop-size", 64, 2048, 512}, {"max-kf", 0, 30, 2},
-                            {"stable-frames-threshold", 0, 1000, 10}, {"target-class", 0, 1000, 0}};
-    for (const IntSpec &s : ints) {
-        GParamSpecInt *p = G_PARAM_SPEC_INT(g_object_class_find_property(k, s.name));
-        ASSERT_NOT_NULL(p);
-        ASSERT_EQ(p->minimum, s.min);
-        ASSERT_EQ(p->maximum, s.max);
-        ASSERT_EQ(p->default_value, s.def);
-    }
-    const DoubleSpec doubles[] = {{"kf-score-weight", 0, 1, 0.25}, {"iou-threshold", 0, 1, 0.5},
-                                  {"kf-min-area", 0, 1e8, 25}, {"seed-conf", 0, 1, 0.25}};
-    for (const DoubleSpec &s : doubles) {
-        GParamSpecDouble *p = G_PARAM_SPEC_DOUBLE(g_object_class_find_property(k, s.name));
-        ASSERT_NOT_NULL(p);
-        ASSERT_EQ(p->minimum, s.min);
-        ASSERT_EQ(p->maximum, s.max);
-        ASSERT_EQ(p->default_value, s.def);
-    }
-    GParamSpecUInt *delay = G_PARAM_SPEC_UINT(g_object_class_find_property(k, "seed-delay"));
-    ASSERT_EQ(delay->minimum, 0u);
-    ASSERT_EQ(delay->maximum, 100000u);
-    ASSERT_EQ(delay->default_value, 0u);
+    GstPad *sink = gst_element_get_static_pad(e, "sink");
+    GstCaps *offered = gst_caps_from_string(caps_str);
+    GstCaps *accepted = gst_pad_get_pad_template_caps(sink);
+    const bool ok = gst_caps_can_intersect(offered, accepted);
+    gst_caps_unref(offered);
+    gst_caps_unref(accepted);
+    gst_object_unref(sink);
     gst_object_unref(e);
+    return ok;
+}
+
+TEST(the_sink_template_accepts_a_one_pixel_nvmm_frame) {
+    ASSERT_TRUE(sink_template_accepts("video/x-raw(memory:NVMM),format=NV12,width=1,height=1,framerate=30/1"));
+}
+
+TEST(a_buffer_the_allocator_did_not_make_is_tracked_through_its_surface) {
+    const Configure configure = [](GstElement *e) {
+        on_square(e);
+        no_roi_max_kf_zero(e);
+    };
+    const auto t = track(configure, 2, [](int) {
+        return wrapped_surface_buffer(pitch_nv12(kW, kH, square_at(0)));
+    });
+    for (const auto &m : t) {
+        ASSERT_TRUE(m.valid);
+        assert_box_on(m, kX0, kY0, kSide);
+    }
+}
+
+TEST(a_reseed_restarts_the_kalman_only_cadence_from_the_frame_it_lands_on) {
+    TrackerRig rig(on_square);
+    std::vector<bool> kalman_only;
+    const auto push = [&] { kalman_only.push_back(rig.push(nvmm_nv12_buffer(kW, kH, square_at(0))).is_kf_only); };
+    for (int f = 0; f < 4; f++) push();
+    const auto fill = [](GstStructure *s) {
+        gst_structure_set(s, "x", G_TYPE_DOUBLE, (double)kX0, "y", G_TYPE_DOUBLE, (double)kY0,
+                          "w", G_TYPE_DOUBLE, (double)kSide, "h", G_TYPE_DOUBLE, (double)kSide, NULL);
+    };
+    ASSERT_TRUE(gst_harness_push_upstream_event(rig.harness(), upstream_event("nvmm-reseed", fill)));
+    for (int f = 4; f < 7; f++) push();
+    const std::vector<bool> expected = {true, true, false, true, true, true, false};
+    ASSERT_TRUE(kalman_only == expected);
+}
+
+constexpr int kCornerX0 = 640, kCornerY0 = 400;
+
+TEST(a_target_in_the_lower_right_is_seeded_and_tracked_through_the_cropped_view) {
+    const Configure configure = [](GstElement *e) {
+        g_object_set(e, "seed-roi", roi_of(kCornerX0, kCornerY0, kSide, kSide).c_str(), "max-kf", 0, NULL);
+    };
+    const auto at = [](int f) { return std::make_pair(kCornerX0 - kStepX * f / 2, kCornerY0 - kStepY * f / 2); };
+    const auto t = track(configure, 9, [&](int f) {
+        const auto corner = at(f);
+        return nvmm_nv12_buffer(kW, kH, [corner](int x, int y) {
+            return (x >= corner.first && x < corner.first + kSide && y >= corner.second &&
+                    y < corner.second + kSide) ? kRed : kGrey;
+        });
+    });
+    for (int f = 0; f < 9; f++) {
+        ASSERT_NEAR(t[f].left, at(f).first, kEdgeTolPx);
+        ASSERT_NEAR(t[f].top, at(f).second, kEdgeTolPx);
+    }
 }
 
 }

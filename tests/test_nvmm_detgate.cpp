@@ -20,6 +20,15 @@ namespace {
 
 constexpr int kSkipExitCode = 77;
 
+guint warnings_logged = 0;
+
+void count_warning(GstDebugCategory *category, GstDebugLevel level, const gchar *, const gchar *, gint,
+                   GObject *, GstDebugMessage *, gpointer)
+{
+    if (level <= GST_LEVEL_WARNING && std::strcmp(gst_debug_category_get_name(category), "nvmmdetgate") == 0)
+        warnings_logged++;
+}
+
 /// The engines come from tools/build_test_engines.sh; without them there is nothing to drive.
 struct EngineDirOrSkip {
     std::string dir;
@@ -34,6 +43,8 @@ struct EngineDirOrSkip {
             std::exit(kSkipExitCode);
         }
         gst_init(nullptr, nullptr);
+        gst_debug_add_log_function(count_warning, nullptr, nullptr);
+        gst_debug_set_threshold_for_name("nvmmdetgate", GST_LEVEL_WARNING);
     }
 } engines;
 
@@ -140,10 +151,20 @@ void fast_gate(GstElement *gate)
     g_object_set(gate, "dlt", kFastDlt, NULL);
 }
 
+/// A red suite stays red, so the first failure ends the run instead of spending a minute of
+/// engine runs on it; the mutation gate pays that minute for every mutant it kills.
+void stop_if_already_red()
+{
+    if (tests_failed == 0) return;
+    std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
+    std::exit(1);
+}
+
 class GateRig {
 public:
     explicit GateRig(const Configure &configure)
     {
+        stop_if_already_red();
         gate_ = gst_element_factory_make("nvmmdetgate", nullptr);
         ASSERT_NOT_NULL(gate_);
         g_object_set(gate_, "engine-dir", engines.dir.c_str(), NULL);
@@ -556,15 +577,15 @@ TEST(reset_unlatches_the_gate_and_drops_its_tracks) {
 
 TEST(a_motion_blob_confirms_with_its_exact_bounding_box_once) {
     DetGate g(blob_cfg(1));
-    const auto m = cluster({{100.f, 40.f}, {110.f, 40.f}, {100.f, 50.f}, {120.f, 60.f}});
+    const auto m = cluster({{90.f, 30.f}, {110.f, 40.f}, {100.f, 50.f}, {120.f, 60.f}});
     ASSERT_EQ(feed(g, m, {}), kSynthConfirm);
     ASSERT_TRUE(g.locked());
     float cx = 0, cy = 0, w = 0, h = 0;
     ASSERT_TRUE(g.synth_seed(cx, cy, w, h));
-    ASSERT_EQ(cx, 110.f);
-    ASSERT_EQ(cy, 50.f);
-    ASSERT_EQ(w, 20.f);
-    ASSERT_EQ(h, 20.f);
+    ASSERT_EQ(cx, 105.f);
+    ASSERT_EQ(cy, 45.f);
+    ASSERT_EQ(w, 30.f);
+    ASSERT_EQ(h, 30.f);
     ASSERT_TRUE(!g.synth_seed(cx, cy, w, h));
 }
 
@@ -662,6 +683,80 @@ TEST(no_motion_blob_is_seeded_unless_seed_on_motion_is_on) {
     for (int f = 0; f < 4; f++) ASSERT_EQ(feed(g, m, {}), -1);
 }
 
+TEST(a_detection_with_source_index_zero_confirms_and_latches) {
+    DetGate g(unit_cfg(1, 1));
+    ASSERT_EQ(feed_det(g, 100.f, 100.f, 0), 0);
+    ASSERT_TRUE(g.locked());
+}
+
+TEST(a_locked_gate_returns_source_index_zero_for_its_matched_detection) {
+    DetGate g(unit_cfg(1, 1));
+    lock_on(g, 100.f, 100.f, 0);
+    ASSERT_EQ(feed(g, {}, {unit_det(105.f, 100.f, 0.9f, 0)}), 0);
+}
+
+TEST(the_most_confident_detection_claims_the_existing_track_first) {
+    DetGate g(unit_cfg(2, 2));
+    ASSERT_EQ(feed(g, moving_at(100.f, 100.f), {unit_det(100.f, 100.f, 0.5f, 3)}), -1);
+    const std::vector<MotionSample> both = cluster({{100.f, 100.f}, {120.f, 100.f}});
+    ASSERT_EQ(feed(g, both, {unit_det(100.f, 100.f, 0.4f, 5), unit_det(120.f, 100.f, 0.9f, 7)}), 7);
+}
+
+TEST(two_equally_supported_equally_confident_detections_keep_the_first_listed) {
+    DetGate g(unit_cfg(1, 1));
+    const std::vector<MotionSample> both = cluster({{100.f, 100.f}, {300.f, 300.f}});
+    ASSERT_EQ(feed(g, both, {unit_det(100.f, 100.f, 0.9f, 3), unit_det(300.f, 300.f, 0.9f, 5)}), 3);
+}
+
+TEST(a_later_track_with_more_confidence_but_less_support_does_not_replace_the_leader) {
+    DetGate g(unit_cfg(3, 2));
+    const std::vector<MotionSample> both = cluster({{100.f, 100.f}, {300.f, 300.f}});
+    ASSERT_EQ(feed(g, moving_at(100.f, 100.f), {unit_det(100.f, 100.f, 0.9f, 3), unit_det(300.f, 300.f, 0.5f, 5)}), -1);
+    ASSERT_EQ(feed(g, both, {unit_det(100.f, 100.f, 0.9f, 3), unit_det(300.f, 300.f, 0.5f, 5)}), -1);
+    ASSERT_EQ(feed(g, both, {unit_det(100.f, 100.f, 0.9f, 3), unit_det(300.f, 300.f, 0.95f, 5)}), 3);
+}
+
+TEST(border_fraction_zero_accepts_a_centre_outside_the_frame) {
+    ASSERT_TRUE(confirms_at(-5.f, 50.f, 0.f, 200, 100));
+}
+
+TEST(a_one_pixel_high_frame_still_applies_the_border) {
+    ASSERT_TRUE(!confirms_at(100.f, 0.f, 0.25f, 200, 1));
+}
+
+TEST(a_motion_seeded_lock_survives_maxlost_missing_frames) {
+    DetGate g(blob_cfg(1));
+    ASSERT_EQ(feed(g, cluster({{100.f, 40.f}, {110.f, 40.f}, {100.f, 50.f}, {120.f, 60.f}}), {}), kSynthConfirm);
+    ASSERT_EQ(feed(g, {}, {}), -1);
+    ASSERT_EQ(feed(g, {}, {}), -1);
+    ASSERT_TRUE(g.locked());
+    ASSERT_EQ(feed(g, {}, {unit_det(110.f, 50.f, 0.9f, 4)}), 4);
+}
+
+TEST(of_two_equally_large_clusters_the_first_listed_becomes_the_blob) {
+    DetGate g(blob_cfg(1));
+    const auto m = cluster({{50.f, 50.f}, {60.f, 50.f}, {50.f, 60.f}, {60.f, 60.f},
+                            {300.f, 300.f}, {310.f, 300.f}, {300.f, 310.f}, {310.f, 310.f}});
+    ASSERT_EQ(feed(g, m, {}), kSynthConfirm);
+    float cx, cy, w, h;
+    ASSERT_TRUE(g.synth_seed(cx, cy, w, h));
+    ASSERT_EQ(cx, 55.f);
+    ASSERT_EQ(cy, 55.f);
+}
+
+TEST(a_single_moving_point_is_a_blob_when_motion_minpts_is_one) {
+    GateCfg c = blob_cfg(1);
+    c.motion_minpts = 1;
+    DetGate g(c);
+    ASSERT_EQ(feed(g, cluster({{100.f, 40.f}}), {}), kSynthConfirm);
+    float cx, cy, w, h;
+    ASSERT_TRUE(g.synth_seed(cx, cy, w, h));
+    ASSERT_EQ(cx, 100.f);
+    ASSERT_EQ(cy, 40.f);
+    ASSERT_EQ(w, 0.f);
+    ASSERT_EQ(h, 0.f);
+}
+
 TEST(a_motion_blob_competes_with_a_yolo_detection_at_confsky) {
     const auto blob = cluster({{100.f, 40.f}, {110.f, 40.f}, {100.f, 50.f}, {120.f, 60.f}});
     std::vector<MotionSample> both = blob;
@@ -682,7 +777,104 @@ TEST(a_motion_blob_is_ranked_at_the_configured_confsky) {
     ASSERT_EQ(feed(g, both, {unit_det(300.f, 300.f, 0.7f, 5)}), kSynthConfirm);
 }
 
+TEST(a_fresh_gate_has_the_documented_property_defaults) {
+    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
+    ASSERT_NOT_NULL(g);
+    gint target_class, ds, dlt, amin, ksup, maxlost, motion_silent;
+    gdouble min_conf, rmin, rminsky, confsky, dist, border, motion_rmin;
+    gboolean enabled, seed_on_motion;
+    gchar *engine_dir = nullptr;
+    g_object_get(g, "engine-dir", &engine_dir, "target-class", &target_class, "min-conf", &min_conf,
+                 "ds", &ds, "dlt", &dlt, "rmin", &rmin, "rminsky", &rminsky, "confsky", &confsky,
+                 "dist", &dist, "amin", &amin, "ksup", &ksup, "maxlost", &maxlost,
+                 "border-frac", &border, "enabled", &enabled, "seed-on-motion", &seed_on_motion,
+                 "motion-silent", &motion_silent, "motion-rmin", &motion_rmin, NULL);
+    ASSERT_TRUE(engine_dir == nullptr);
+    ASSERT_EQ(target_class, 0);
+    ASSERT_EQ(min_conf, 0.25);
+    ASSERT_EQ(ds, 2);
+    ASSERT_EQ(dlt, 5);
+    ASSERT_EQ(rmin, 12.0);
+    ASSERT_EQ(rminsky, 8.0);
+    ASSERT_EQ(confsky, 0.55);
+    ASSERT_EQ(dist, 45.0);
+    ASSERT_EQ(amin, 6);
+    ASSERT_EQ(ksup, 4);
+    ASSERT_EQ(maxlost, 2);
+    ASSERT_EQ(border, 0.02);
+    ASSERT_EQ(enabled, TRUE);
+    ASSERT_EQ(seed_on_motion, FALSE);
+    ASSERT_EQ(motion_silent, 12);
+    ASSERT_EQ(motion_rmin, 16.0);
+    gst_object_unref(g);
+}
+
+struct IntSpec { const char *name; gint min, max, def; };
+struct DoubleSpec { const char *name; gdouble min, max, def; };
+
+TEST(int_properties_advertise_the_documented_range_and_default) {
+    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
+    ASSERT_NOT_NULL(g);
+    const IntSpec specs[] = {
+        {"target-class", 0, 9999, 0}, {"ds", 1, 8, 2}, {"dlt", 1, 30, 5}, {"amin", 1, 1000, 6},
+        {"ksup", 1, 1000, 4}, {"maxlost", 0, 1000, 2}, {"motion-silent", 1, 1000, 12},
+    };
+    for (const IntSpec &s : specs) {
+        GParamSpecInt *p = G_PARAM_SPEC_INT(g_object_class_find_property(G_OBJECT_GET_CLASS(g), s.name));
+        ASSERT_NOT_NULL(p);
+        ASSERT_EQ(p->minimum, s.min);
+        ASSERT_EQ(p->maximum, s.max);
+        ASSERT_EQ(p->default_value, s.def);
+    }
+    gst_object_unref(g);
+}
+
+TEST(double_properties_advertise_the_documented_range_and_default) {
+    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
+    ASSERT_NOT_NULL(g);
+    const DoubleSpec specs[] = {
+        {"min-conf", 0, 1, 0.25}, {"rmin", 0, 255, 12}, {"rminsky", 0, 255, 8},
+        {"confsky", 0, 1, 0.55}, {"dist", 1, 1000, 45}, {"border-frac", 0, 0.4, 0.02},
+        {"motion-rmin", 0, 255, 16},
+    };
+    for (const DoubleSpec &s : specs) {
+        GParamSpecDouble *p = G_PARAM_SPEC_DOUBLE(g_object_class_find_property(G_OBJECT_GET_CLASS(g), s.name));
+        ASSERT_NOT_NULL(p);
+        ASSERT_EQ(p->minimum, s.min);
+        ASSERT_EQ(p->maximum, s.max);
+        ASSERT_EQ(p->default_value, s.def);
+    }
+    gst_object_unref(g);
+}
+
+TEST(boolean_properties_advertise_the_documented_defaults) {
+    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
+    ASSERT_NOT_NULL(g);
+    GObjectClass *k = G_OBJECT_GET_CLASS(g);
+    ASSERT_EQ(G_PARAM_SPEC_BOOLEAN(g_object_class_find_property(k, "enabled"))->default_value, TRUE);
+    ASSERT_EQ(G_PARAM_SPEC_BOOLEAN(g_object_class_find_property(k, "seed-on-motion"))->default_value, FALSE);
+    gst_object_unref(g);
+}
+
+TEST(a_gate_without_an_engine_dir_passes_every_detection_through) {
+    GstElement *gate = gst_element_factory_make("nvmmdetgate", nullptr);
+    ASSERT_NOT_NULL(gate);
+    GstHarness *h = gst_harness_new_with_element(gate, "sink", "src");
+    gst_harness_set_src_caps_str(h, "video/x-raw(memory:NVMM),format=NV12,width=480,"
+                                    "height=270,framerate=30/1");
+    GstBuffer *buf = with_dets(nvmm_nv12_buffer(kW, kH, scene(0)), {fast_mover_det(0), fast_mover_det(1)});
+    ASSERT_EQ(gst_harness_push(h, buf), GST_FLOW_OK);
+    GstBuffer *out = gst_harness_pull(h);
+    const GstNvmmDetMeta *m = gst_buffer_get_nvmm_det_meta(out);
+    ASSERT_NOT_NULL(m);
+    ASSERT_EQ(m->num_objects, 2u);
+    gst_buffer_unref(out);
+    gst_harness_teardown(h);
+    gst_object_unref(gate);
+}
+
 TEST(only_the_detection_on_the_independently_moving_patch_passes_the_gate) {
+    const guint warnings_before = warnings_logged;
     GateRig rig([](GstElement *) {});
     for (int f = 0; f < kFrames; f++) {
         const auto kept = rig.push(frame_with_two_dets(f));
@@ -699,6 +891,7 @@ TEST(only_the_detection_on_the_independently_moving_patch_passes_the_gate) {
         ASSERT_EQ(kept[0].height, want.height);
         ASSERT_EQ(kept[0].confidence, want.confidence);
     }
+    ASSERT_EQ(warnings_logged, warnings_before);
 }
 
 TEST(dlt_two_confirms_at_frame_nine_while_the_default_dlt_has_not_yet_gated) {
@@ -880,85 +1073,6 @@ TEST(nvmm_reset_before_the_first_frame_is_harmless) {
     for (int f = 0; f < kFastFrames && first < 0; f++)
         if (!rig.push(fast_frame(f, {fast_mover_det(f)})).empty()) first = f;
     ASSERT_EQ(first, kFastFirstConfirmedFrame);
-}
-
-TEST(a_fresh_gate_has_the_documented_property_defaults) {
-    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
-    ASSERT_NOT_NULL(g);
-    gint target_class, ds, dlt, amin, ksup, maxlost, motion_silent;
-    gdouble min_conf, rmin, rminsky, confsky, dist, border, motion_rmin;
-    gboolean enabled, seed_on_motion;
-    gchar *engine_dir = nullptr;
-    g_object_get(g, "engine-dir", &engine_dir, "target-class", &target_class, "min-conf", &min_conf,
-                 "ds", &ds, "dlt", &dlt, "rmin", &rmin, "rminsky", &rminsky, "confsky", &confsky,
-                 "dist", &dist, "amin", &amin, "ksup", &ksup, "maxlost", &maxlost,
-                 "border-frac", &border, "enabled", &enabled, "seed-on-motion", &seed_on_motion,
-                 "motion-silent", &motion_silent, "motion-rmin", &motion_rmin, NULL);
-    ASSERT_TRUE(engine_dir == nullptr);
-    ASSERT_EQ(target_class, 0);
-    ASSERT_EQ(min_conf, 0.25);
-    ASSERT_EQ(ds, 2);
-    ASSERT_EQ(dlt, 5);
-    ASSERT_EQ(rmin, 12.0);
-    ASSERT_EQ(rminsky, 8.0);
-    ASSERT_EQ(confsky, 0.55);
-    ASSERT_EQ(dist, 45.0);
-    ASSERT_EQ(amin, 6);
-    ASSERT_EQ(ksup, 4);
-    ASSERT_EQ(maxlost, 2);
-    ASSERT_EQ(border, 0.02);
-    ASSERT_EQ(enabled, TRUE);
-    ASSERT_EQ(seed_on_motion, FALSE);
-    ASSERT_EQ(motion_silent, 12);
-    ASSERT_EQ(motion_rmin, 16.0);
-    gst_object_unref(g);
-}
-
-struct IntSpec { const char *name; gint min, max, def; };
-struct DoubleSpec { const char *name; gdouble min, max, def; };
-
-TEST(int_properties_advertise_the_documented_range_and_default) {
-    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
-    ASSERT_NOT_NULL(g);
-    const IntSpec specs[] = {
-        {"target-class", 0, 9999, 0}, {"ds", 1, 8, 2}, {"dlt", 1, 30, 5}, {"amin", 1, 1000, 6},
-        {"ksup", 1, 1000, 4}, {"maxlost", 0, 1000, 2}, {"motion-silent", 1, 1000, 12},
-    };
-    for (const IntSpec &s : specs) {
-        GParamSpecInt *p = G_PARAM_SPEC_INT(g_object_class_find_property(G_OBJECT_GET_CLASS(g), s.name));
-        ASSERT_NOT_NULL(p);
-        ASSERT_EQ(p->minimum, s.min);
-        ASSERT_EQ(p->maximum, s.max);
-        ASSERT_EQ(p->default_value, s.def);
-    }
-    gst_object_unref(g);
-}
-
-TEST(double_properties_advertise_the_documented_range_and_default) {
-    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
-    ASSERT_NOT_NULL(g);
-    const DoubleSpec specs[] = {
-        {"min-conf", 0, 1, 0.25}, {"rmin", 0, 255, 12}, {"rminsky", 0, 255, 8},
-        {"confsky", 0, 1, 0.55}, {"dist", 1, 1000, 45}, {"border-frac", 0, 0.4, 0.02},
-        {"motion-rmin", 0, 255, 16},
-    };
-    for (const DoubleSpec &s : specs) {
-        GParamSpecDouble *p = G_PARAM_SPEC_DOUBLE(g_object_class_find_property(G_OBJECT_GET_CLASS(g), s.name));
-        ASSERT_NOT_NULL(p);
-        ASSERT_EQ(p->minimum, s.min);
-        ASSERT_EQ(p->maximum, s.max);
-        ASSERT_EQ(p->default_value, s.def);
-    }
-    gst_object_unref(g);
-}
-
-TEST(boolean_properties_advertise_the_documented_defaults) {
-    GstElement *g = gst_element_factory_make("nvmmdetgate", nullptr);
-    ASSERT_NOT_NULL(g);
-    GObjectClass *k = G_OBJECT_GET_CLASS(g);
-    ASSERT_EQ(G_PARAM_SPEC_BOOLEAN(g_object_class_find_property(k, "enabled"))->default_value, TRUE);
-    ASSERT_EQ(G_PARAM_SPEC_BOOLEAN(g_object_class_find_property(k, "seed-on-motion"))->default_value, FALSE);
-    gst_object_unref(g);
 }
 
 }
