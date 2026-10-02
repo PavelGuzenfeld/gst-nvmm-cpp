@@ -239,6 +239,429 @@ new = """1"""
 reason = """Equivalent: an Entry is only created by store(), which assigns last_seen before any read. Probe: 400 runs of 400 random store/lookup/due/expire/reset/size operations, default and random params; 345674 output bytes bit-identical to the unmutated build (sha256 bc2a3290017493b3)."""
 
 [[waiver]]
+file = "analytics/detail/features.hpp"
+line = 16
+column = 12
+old = """0"""
+new = """1"""
+reason = "Corner is only ever built with all three fields given, so the default x is never read. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 29
+column = 8
+old = """w <= 2 * m"""
+new = """w < 2 * m"""
+reason = "The early return is a shortcut: for w <= 2m the x scan [m, w-m) is already empty, so no score or corner is produced either way. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 29
+column = 8
+old = """w <= 2 * m || h <= 2 * m"""
+new = """w <= 2 * m && h <= 2 * m"""
+reason = "The early return is a shortcut: when either side is <= 2m the corresponding scan range [m, side-m) is empty, so nothing is produced either way. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 29
+column = 13
+old = """2 * m"""
+new = """2 / m"""
+reason = "The early return is a shortcut: for w <= 2m the x scan [m, w-m) is already empty, so dropping the check produces nothing different. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 29
+column = 22
+old = """h <= 2 * m"""
+new = """h < 2 * m"""
+reason = "The early return is a shortcut: for h <= 2m the y scan [m, h-m) is already empty. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 29
+column = 27
+old = """2 * m"""
+new = """2 / m"""
+reason = "The early return is a shortcut: for h <= 2m the y scan [m, h-m) is already empty. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 41
+column = 33
+old = """0"""
+new = """1"""
+reason = "The compass pretest only has to be necessary for a 9-arc; every 9 contiguous circle pixels include index 1 or 8, so testing p[off[1]] in place of p[off[0]] still never rejects a real corner and has_run9 decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 42
+column = 33
+old = """4"""
+new = """5"""
+reason = "The compass pretest only has to be necessary for a 9-arc; every 9 contiguous circle pixels include index 5 or 12, so the swap never rejects a real corner and has_run9 decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 43
+column = 31
+old = """(d0 > t || d8 > t) && (d4 > t || d12 > t)"""
+new = """(d0 > t || d8 > t) || (d4 > t || d12 > t)"""
+reason = "Loosens the bright pretest; it gates only work, and the accept test is may_b && has_run9(bright) where has_run9 already implies the original may_b. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 43
+column = 32
+old = """d0 > t"""
+new = """d0 >= t"""
+reason = "Loosens the bright pretest; has_run9 over the strict bright mask still decides, and it implies the original pretest. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 43
+column = 42
+old = """d8 > t"""
+new = """d8 >= t"""
+reason = "Loosens the bright pretest; has_run9 over the strict bright mask still decides, and it implies the original pretest. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 43
+column = 54
+old = """d4 > t"""
+new = """d4 >= t"""
+reason = "Loosens the bright pretest; has_run9 over the strict bright mask still decides, and it implies the original pretest. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 43
+column = 64
+old = """d12 > t"""
+new = """d12 >= t"""
+reason = "Loosens the bright pretest; has_run9 over the strict bright mask still decides, and it implies the original pretest. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 31
+old = """(d0 < -t || d8 < -t) && (d4 < -t || d12 < -t)"""
+new = """(d0 < -t || d8 < -t) || (d4 < -t || d12 < -t)"""
+reason = "Loosens the dark pretest; has_run9 over the strict dark mask still decides, and it implies the original pretest. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 32
+old = """d0 < -t"""
+new = """d0 <= -t"""
+reason = "Loosens the dark pretest; has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 37
+old = """-t"""
+new = """t"""
+reason = "Loosens the dark pretest (d < t contains d < -t); has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 43
+old = """d8 < -t"""
+new = """d8 <= -t"""
+reason = "Loosens the dark pretest; has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 48
+old = """-t"""
+new = """t"""
+reason = "Loosens the dark pretest (d < t contains d < -t); has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 56
+old = """d4 < -t"""
+new = """d4 <= -t"""
+reason = "Loosens the dark pretest; has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 61
+old = """-t"""
+new = """t"""
+reason = "Loosens the dark pretest (d < t contains d < -t); has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 67
+old = """d12 < -t"""
+new = """d12 <= -t"""
+reason = "Loosens the dark pretest; has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 44
+column = 73
+old = """-t"""
+new = """t"""
+reason = "Loosens the dark pretest (d < t contains d < -t); has_run9 over the strict dark mask still decides. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 53
+column = 30
+old = """d < 0"""
+new = """d <= 0"""
+reason = "|d| for d = 0 is 0 either way. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 53
+column = 34
+old = """0"""
+new = """1"""
+reason = "d < 1 differs from d < 0 only at d = 0, where -d and d are both 0. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 54
+column = 20
+old = """a > t"""
+new = """a >= t"""
+reason = "At a == t the added term a - t is 0, so the score is unchanged. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 67
+column = 20
+old = """y < h - m"""
+new = """y <= h - m"""
+reason = "Row h-m is in the margin band and never scored, so its zero score is skipped by the s <= 0 check. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 69
+column = 24
+old = """x < w - m"""
+new = """x <= w - m"""
+reason = "Column w-m is in the margin band and never scored, so its zero score is skipped by the s <= 0 check. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 69
+column = 28
+old = """w - m"""
+new = """w + m"""
+reason = "Columns past w-m are margin band or, past w, the next row's left margin band; all hold score 0 and are skipped, and every read stays inside the score image. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 71
+column = 16
+old = """s <= 0.f"""
+new = """s < 0.f"""
+reason = "Scores are never negative, so a zero-score pixel always meets s <= s0[x + 1] and is dropped anyway. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 80
+column = 8
+old = """(int)out.size() > max_corners"""
+new = """(int)out.size() >= max_corners"""
+reason = "When the size equals max_corners the resize is a no-op. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 112
+column = 8
+old = """ca < 1e-6"""
+new = """ca <= 1e-6"""
+reason = "ca is n*saa - sa^2 over n for integer pixels: exactly 0 for a flat patch, otherwise at least 1/n (>= 1/121), so no value lies near 1e-6. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 112
+column = 16
+old = """6"""
+new = """7"""
+reason = "ca and cb are exactly 0 for a flat patch and at least 1/n otherwise, so 1e-6 and 1e-7 split them identically. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 112
+column = 21
+old = """cb < 1e-6"""
+new = """cb <= 1e-6"""
+reason = "cb is exactly 0 for a flat patch and at least 1/n otherwise, so the boundary value never occurs. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 125
+column = 22
+old = """0"""
+new = """1"""
+reason = "best_dx is read only once best_sad >= 0, and the candidate that sets best_sad sets best_dx too. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 126
+column = 25
+old = """1"""
+new = """2"""
+reason = "best_sad starts as a sentinel tested only for sign; -2 and -1 are both negative. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 139
+column = 31
+old = """d < 0"""
+new = """d <= 0"""
+reason = "|d| for d = 0 is 0 either way. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 139
+column = 35
+old = """0"""
+new = """1"""
+reason = "d < 1 differs from d < 0 only at d = 0, where -d and d are both 0. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 159
+column = 17
+old = """0"""
+new = """1"""
+reason = "The refinement window always contains the coarse best, a legal candidate with zncc >= -1 > best_z's -2 start, so zx is always assigned before use. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 195
+column = 44
+old = """src.height - 1"""
+new = """src.height + 1"""
+reason = "fy = (y + 0.5) * H / dh - 0.5 < H - 0.5 for every y < dh, so floor(fy) <= H - 1 and the upper clamp on y0 never binds. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 202
+column = 48
+old = """src.width - 1"""
+new = """src.width + 1"""
+reason = "fx = (x + 0.5) * W / dw - 0.5 < W - 0.5 for every x < dw, so floor(fx) <= W - 1 and the upper clamp on x0 never binds. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 223
+column = 18
+old = """256 * 4"""
+new = """256 / 4"""
+reason = "reserve() is a capacity hint; the loop below still fills 1024 entries. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 223
+column = 18
+old = """256"""
+new = """257"""
+reason = "reserve() is a capacity hint; the loop below still fills 1024 entries. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 234
+column = 15
+old = """v.size() < (size_t)256 * 4"""
+new = """v.size() <= (size_t)256 * 4"""
+reason = "Appends one more pair after the 1024th entry; readers index only pairs 0..255, which are unchanged. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 234
+column = 34
+old = """256"""
+new = """257"""
+reason = "Appends one more pair after the 1024th entry; readers index only pairs 0..255, which are unchanged. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 260
+column = 8
+old = """norm < 1e-6f"""
+new = """norm <= 1e-6f"""
+reason = "The moments are integers, so norm is 0 or at least 1. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 288
+column = 16
+old = """lw <= 2 * margin"""
+new = """lw < 2 * margin"""
+reason = "The break is a shortcut: a level no wider than 2 * margin gets no corners from fast_corners, whose own guard is the same predicate, and every later level is smaller still. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 288
+column = 16
+old = """lw <= 2 * margin || lh <= 2 * margin"""
+new = """lw <= 2 * margin && lh <= 2 * margin"""
+reason = "The break is a shortcut: a level with either side <= 2 * margin gets no corners from fast_corners, and every later level is smaller. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 288
+column = 22
+old = """2 * margin"""
+new = """2 / margin"""
+reason = "The break is a shortcut: levels no wider than 2 * margin get no corners from fast_corners, whose guard is the same predicate. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 288
+column = 36
+old = """lh <= 2 * margin"""
+new = """lh < 2 * margin"""
+reason = "The break is a shortcut: a level no taller than 2 * margin gets no corners from fast_corners. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 288
+column = 42
+old = """2 * margin"""
+new = """2 / margin"""
+reason = "The break is a shortcut: levels no taller than 2 * margin get no corners from fast_corners. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 333
+column = 17
+old = """257"""
+new = """258"""
+reason = "Both sentinels are overwritten by the first two candidates, and orb_match returns early unless there are at least two; a 256-bit distance is at most 256. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 337
+column = 21
+old = """d < d2"""
+new = """d <= d2"""
+reason = "At d == d2 the assignment stores the value d2 already holds. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+
+[[waiver]]
+file = "analytics/detail/features.hpp"
+line = 32
+column = 42
+old = """(std::ptrdiff_t)CY[i] * im.stride + CX[i]"""
+new = """(std::ptrdiff_t)CY[i] * im.stride - CX[i]"""
+reason = "Mirrors the circle left-right; contiguous arcs stay contiguous and the compass points map onto each other, so the segment test and SAD score are mirror-invariant. Probe: plain and ASan+UBSan builds of a public-surface probe (fast_corners, orb_detect, orb_match, small_motion_matches, zncc_at, resize_bilinear, orb_orientation, brief_pattern, independent_motion_residual over 12 frames) print output byte-identical to the unmutated header."
+[[waiver]]
 file = "gst/nvmmsamurai/samurai_consts.hpp"
 line = 26
 column = 25
