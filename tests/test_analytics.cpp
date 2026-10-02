@@ -850,6 +850,26 @@ TEST(resize_up_repeats_the_last_row_and_column) {
     ASSERT_EQ(dst.at(3, 3), src.at(1, 1));
 }
 
+TEST(resize_up_pins_the_edge_pixels_to_the_first_and_last_source_pixel) {
+    Image<uint8_t> src(2, 1);
+    src.at(0, 0) = 10;
+    src.at(0, 1) = 200;
+    const Image<uint8_t> dst = det::resize_bilinear(src.view(), 4, 2);
+    const uint8_t expected[4] = {10, 58, 153, 200};
+    for (int y = 0; y < 2; y++)
+        for (int x = 0; x < 4; x++) ASSERT_EQ(dst.at(y, x), expected[x]);
+}
+
+TEST(resize_up_pins_the_top_and_bottom_edge_pixels_to_the_first_and_last_source_row) {
+    Image<uint8_t> src(1, 2);
+    src.at(0, 0) = 10;
+    src.at(1, 0) = 200;
+    const Image<uint8_t> dst = det::resize_bilinear(src.view(), 2, 4);
+    const uint8_t expected[4] = {10, 58, 153, 200};
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 2; x++) ASSERT_EQ(dst.at(y, x), expected[y]);
+}
+
 det::SmallMotionParams small_search() {
     det::SmallMotionParams p;
     p.search_radius = 6;

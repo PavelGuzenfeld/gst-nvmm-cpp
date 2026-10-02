@@ -191,14 +191,14 @@ inline img::Image<uint8_t> resize_bilinear(img::View<const uint8_t> src, int dw,
     img::Image<uint8_t> dst(dw, dh);
     const float sx = (float)src.width / dw, sy = (float)src.height / dh;
     for (int y = 0; y < dh; y++) {
-        const float fy = ((float)y + 0.5f) * sy - 0.5f;
+        const float fy = std::max(0.f, ((float)y + 0.5f) * sy - 0.5f);
         const int y0 = std::max(0, std::min(src.height - 1, (int)std::floor(fy)));
         const int y1 = std::min(src.height - 1, y0 + 1);
         const float wy = fy - (float)y0;
         const uint8_t *r0 = src.row(y0), *r1 = src.row(y1);
         uint8_t *d = dst.row(y);
         for (int x = 0; x < dw; x++) {
-            const float fx = ((float)x + 0.5f) * sx - 0.5f;
+            const float fx = std::max(0.f, ((float)x + 0.5f) * sx - 0.5f);
             const int x0 = std::max(0, std::min(src.width - 1, (int)std::floor(fx)));
             const int x1 = std::min(src.width - 1, x0 + 1);
             const float wx = fx - (float)x0;
