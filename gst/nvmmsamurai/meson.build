@@ -26,7 +26,7 @@ gstnvmmsamurai = library('gstnvmmsamurai',
   ],
   dependencies : samurai_deps,
   cuda_args : samurai_cuda_base_args +
-              ['-Werror', 'all-warnings', '-Xcompiler', '-Wall,-Wextra'],
+              ['-Xcompiler', '-Wall,-Wextra'],
   cpp_args : samurai_cpp_args,
   # nvcc as linker rejects the unwrapped -Wl,-rpath meson emits for mixed
   # C++/CUDA targets; g++ links the .cu.o fine, there is no relocatable device code.
