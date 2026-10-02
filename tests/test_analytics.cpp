@@ -248,7 +248,9 @@ TEST(trims_uniform_bars_keeps_dark_textured_content) {
     scene::Rng rng(7);
     for (int i = 0; i < 120; i++) {
         const int x = rng.uniform(42, 158), y = rng.uniform(4, 196);
-        scene::fill_circle(f, x, y, rng.uniform(2, 4), (uint8_t)rng.uniform(10, 60));
+        const uint8_t shade = (uint8_t)rng.uniform(10, 60);
+        const int radius = rng.uniform(2, 4);
+        scene::fill_circle(f, x, y, radius, shade);
     }
     scene::gaussian_blur_u8(f, 3);
 
