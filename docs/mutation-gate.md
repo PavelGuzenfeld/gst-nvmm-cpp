@@ -138,6 +138,10 @@ on-device run (JetPack 6.2, L4T R36.4.3):
 | `gstnvmmsecondaryinfer.cpp` | 141 | 79 | 62 |
 | `roi_preprocess.cpp` | 121 | 94 | 27 |
 | `roi_preprocess.hpp` | 2 | 0 | 2 |
+| `gstnvmmdetgate.cpp` | 90 | 73 | 17 |
+| `detgate.hpp` | 120 | 107 | 13 |
+| `gstnvmmsamurai.cpp` | 92 | 87 | 5 |
+| `samurai_tracker.cpp` | 492 | 331 | 161 |
 
 `samurai_seed_math.hpp` is the before/after: 0 of 70 killed in the dev image, 45
 on-device. #91 added tests for these; its PR lists the mutants still open. The element rows (from `gstnvmmflowstats.cpp` down) are the on-device run of the #86
@@ -145,9 +149,10 @@ element tests (`nvmm_ofa`, `nvmm_drawdet`, `nvmm_preprocess`, `nvmm_trt_elements
 each mutant running only the test executables that link its file; the
 `gstnvmminfer.cpp` row predates its two head-shape tests. These files
 stay in `exclude_paths` because the x86 lane cannot build them, not for want of a
-test. `gstnvmmdetgate.cpp`, `detgate.hpp`, `gstnvmmsamurai.cpp` and
-`samurai_tracker.cpp` are reached only on their no-engine paths: the rest needs
-XFeat/LightGlue or SAM2 engines.
+test. The last four rows are the on-device run after #133, at 11476e7, with the
+test engines: before it `gstnvmmdetgate.cpp`, `detgate.hpp`, `gstnvmmsamurai.cpp`
+and `samurai_tracker.cpp` killed 35/88, 30/120, 25/92 and 262/492. Each mutant ran
+only `nvmm_detgate` or `nvmm_samurai` plus `pure_cpp_headers`.
 
 `analytics/` headers are reached only through the component tests
 (`-Danalytics=enabled`). The OpenCV golden oracle (`-Danalytics_golden`) does not
