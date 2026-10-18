@@ -28,6 +28,12 @@ theme:
     - content.code.copy
     - search.suggest
 
+extra:
+  social:
+    - icon: fontawesome/solid/globe
+      link: https://pavelguzenfeld.com/open-source/#gst-nvmm-cpp
+      name: Portfolio
+
 markdown_extensions:
   - admonition
   - tables
